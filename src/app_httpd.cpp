@@ -20,6 +20,7 @@
 #include "sdkconfig.h"
 #include "camera_index.h"
 #include "board_config.h"
+#include "WiFi.h"
 
 #if defined(ARDUINO_ARCH_ESP32) && defined(CONFIG_ARDUHAL_ESP_LOG)
 #include "esp32-hal-log.h"
@@ -671,6 +672,28 @@ void startCameraServer() {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.max_uri_handlers = 16;
 
+  // Get and display IP address information
+  String ip_address = "Not Connected";
+  String mode = "Unknown";
+  
+  if (WiFi.getMode() == WIFI_STA) {
+    if (WiFi.status() == WL_CONNECTED) {
+      ip_address = WiFi.localIP().toString();
+      mode = "Station";
+    } else {
+      ip_address = "Connecting...";
+      mode = "Station (Connecting)";
+    }
+  } else if (WiFi.getMode() == WIFI_AP) {
+    ip_address = WiFi.softAPIP().toString();
+    mode = "Access Point";
+  } else if (WiFi.getMode() == WIFI_AP_STA) {
+    String sta_ip = WiFi.localIP().toString();
+    String ap_ip = WiFi.softAPIP().toString();
+    ip_address = "STA: " + sta_ip + " | AP: " + ap_ip;
+    mode = "AP+STA";
+  }
+
   httpd_uri_t index_uri = {
     .uri = "/",
     .method = HTTP_GET,
@@ -816,7 +839,7 @@ void startCameraServer() {
 
   ra_filter_init(&ra_filter, 20);
 
-  log_i("Starting web server on port: '%d'", config.server_port);
+  log_i("Starting web server on port: '%d' (Mode: %s, IP: %s)", config.server_port, mode.c_str(), ip_address.c_str());
   if (httpd_start(&camera_httpd, &config) == ESP_OK) {
     httpd_register_uri_handler(camera_httpd, &index_uri);
     httpd_register_uri_handler(camera_httpd, &cmd_uri);
@@ -833,7 +856,7 @@ void startCameraServer() {
 
   config.server_port += 1;
   config.ctrl_port += 1;
-  log_i("Starting stream server on port: '%d'", config.server_port);
+  log_i("Starting stream server on port: '%d' (Mode: %s, IP: %s)", config.server_port, mode.c_str(), ip_address.c_str());
   if (httpd_start(&stream_httpd, &config) == ESP_OK) {
     httpd_register_uri_handler(stream_httpd, &stream_uri);
   }

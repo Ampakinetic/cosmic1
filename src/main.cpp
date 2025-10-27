@@ -20,6 +20,13 @@ void setup() {
   Serial.setDebugOutput(true);
   Serial.println();
 
+  // WiFi debugging
+  Serial.println("=== ESP32-S3 Camera Starting ===");
+  Serial.printf("Camera Model: ESP32S3_EYE\n");
+  Serial.printf("WiFi SSID: %s\n", WIFI_SSID);
+  Serial.printf("Board: ESP32-S3 DevKitC-1\n");
+  Serial.println("=================================");
+
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -80,6 +87,8 @@ void setup() {
     return;
   }
 
+  Serial.println("Camera initialized successfully");
+
   sensor_t *s = esp_camera_sensor_get();
   // initial sensors are flipped vertically and colors are a bit saturated
   if (s->id.PID == OV3660_PID) {
@@ -106,22 +115,78 @@ void setup() {
   setupLedFlash();
 #endif
 
+  // Enhanced WiFi connection with debugging
+  Serial.println("=== Starting WiFi Connection ===");
+  Serial.printf("Attempting to connect to: %s\n", WIFI_SSID);
+  
+  // Set WiFi mode to station (client)
+  WiFi.mode(WIFI_STA);
+  
+  // Start WiFi connection
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  WiFi.setSleep(false);
 
   Serial.print("WiFi connecting");
-  while (WiFi.status() != WL_CONNECTED) {
+  int connectionAttempts = 0;
+  const int maxAttempts = 30; // 15 seconds timeout
+  
+  while (WiFi.status() != WL_CONNECTED && connectionAttempts < maxAttempts) {
     delay(500);
     Serial.print(".");
+    connectionAttempts++;
+    
+    // Print WiFi status for debugging
+    if (connectionAttempts % 10 == 0) { // Every 5 seconds
+      Serial.printf("\nWiFi Status: %d\n", WiFi.status());
+      
+      // Scan for networks to help debug
+      if (connectionAttempts == 10) {
+        Serial.println("\nScanning for available networks...");
+        int n = WiFi.scanNetworks();
+        Serial.printf("Found %d networks:\n", n);
+        for (int i = 0; i < n; ++i) {
+          Serial.printf("%d: %s (RSSI: %d)\n", i + 1, WiFi.SSID(i).c_str(), WiFi.RSSI(i));
+        }
+        WiFi.scanDelete();
+      }
+    }
   }
-  Serial.println("");
-  Serial.println("WiFi connected");
 
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("");
+    Serial.println("WiFi connected successfully!");
+    Serial.printf("IP address: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("Signal strength (RSSI): %d dBm\n", WiFi.RSSI());
+  } else {
+    Serial.println("");
+    Serial.println("WiFi connection failed!");
+    Serial.printf("Final status: %d\n", WiFi.status());
+    Serial.println("Possible issues:");
+    Serial.println("1. WiFi network name (SSID) is incorrect");
+    Serial.println("2. WiFi password is incorrect");
+    Serial.println("3. WiFi network is out of range");
+    Serial.println("4. WiFi network is hidden");
+    Serial.println("5. Router is not broadcasting");
+    Serial.println("Please check your WiFi credentials and network availability");
+    
+    // Create AP mode fallback for configuration
+    Serial.println("Starting Access Point mode for configuration...");
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP("ESP32-Camera-Setup", "12345678");
+    Serial.printf("AP IP address: %s\n", WiFi.softAPIP().toString().c_str());
+    Serial.print("Camera Ready! Use 'http://");
+    Serial.print(WiFi.softAPIP());
+    Serial.println("' to configure");
+  }
+
+  // Start camera server after all network setup is complete
+  Serial.println("=== Starting Camera Server ===");
   startCameraServer();
 
-  Serial.print("Camera Ready! Use 'http://");
-  Serial.print(WiFi.localIP());
-  Serial.println("' to connect");
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.print("Camera Ready! Use 'http://");
+    Serial.print(WiFi.localIP());
+    Serial.println("' to connect");
+  }
 }
 
 void loop() {
