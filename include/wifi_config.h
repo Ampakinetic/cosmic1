@@ -3,6 +3,6 @@
 
 // WiFi credentials - replace with your actual WiFi network details
 const char *WIFI_SSID = "***";
-const char *WIFI_PASSWORD = "****;
+const char *WIFI_PASSWORD = "****";
 
-#endif // WIFI_CONFIG_H 
+#endif // WIFI_CONFIG_H
