@@ -10,6 +10,7 @@ This document outlines the complete implementation plan for extending the ESP32-
 - **BMP280** pressure/temperature sensor (I2C)
 - **MAX-M10S** GPS module (UART)
 - **LoRa E32 900T30D** radio module (UART)
+- **OLED Display** (0.96" SSD1306) for debugging/status
 - Battery power system with power management
 - Status LEDs for diagnostics
 

@@ -6,10 +6,21 @@
 // ESP32-S3 Balloon Project
 // ===========================
 
+// I2C Bus Note: BMP280 and OLED share the same I2C bus (GPIO 1/2)
+// - BMP280 at address 0x76
+// - OLED at address 0x3C
+
 // BMP280 Pressure/Temperature Sensor (I2C)
 #define BMP280_SDA_PIN    1   // I2C0 SDA
 #define BMP280_SCL_PIN    2  // I2C0 SCL
 #define BMP280_ADDRESS    0x76  // Default I2C address (0x77 alternative)
+
+// OLED Display (SSD1306, 128x64, shares I2C bus with BMP280)
+#define OLED_SDA_PIN      1   // Same I2C bus as BMP280
+#define OLED_SCL_PIN      2   // Same I2C bus as BMP280
+#define OLED_ADDRESS      0x3C  // Default I2C address (0x3D alternative)
+#define OLED_WIDTH        128  // Display width
+#define OLED_HEIGHT       64   // Display height
 
 // MAX-M10S GPS Module (UART)
 #define GPS_TX_PIN        45  // GPS TX → ESP32 RX

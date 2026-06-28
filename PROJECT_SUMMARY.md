@@ -10,7 +10,8 @@ This project extends an existing ESP32-S3 camera application into a comprehensiv
 - **ESP32-S3 DevKitC-1** with camera module
 - **BMP280** pressure/temperature sensor for altitude calculation
 - **MAX-M10S** GPS module for precise positioning
-- **LoRa 900T30D** radio module for long-range communication
+- **LoRa E32 900T30D** radio module for long-range communication
+- **OLED Display** (0.96" SSD1306) for debugging and status display
 - Battery power system with intelligent power management
 - Status LEDs for system diagnostics
 
@@ -59,7 +60,8 @@ This project extends an existing ESP32-S3 camera application into a comprehensiv
 - **Camera Module** (ESP32-S3 EYE compatible)
 - **BMP280** pressure/temperature sensor
 - **MAX-M10S** GPS module with antenna
-- **LoRa 900T30D** radio module (2 units + antennas)
+- **LoRa E32 900T30D** radio module (2 units + antennas)
+- **OLED Display** 0.96" SSD1306 (optional, for debugging)
 - **3.3V Power regulator** with 1.5A+ capability
 - **LiPo battery** (2000mAh+ for balloon unit)
 - **Status LEDs** and prototyping components
@@ -68,6 +70,7 @@ This project extends an existing ESP32-S3 camera application into a comprehensiv
 - Arduino Framework for ESP32-S3
 - ESP32 Camera Library
 - Adafruit BMP280 Library
+- Adafruit SSD1306 Library (OLED display)
 - TinyGPSPlus Library
 - E32 LoRa Library (UART-based, CMT2300A chipset)
 - ArduinoJson Library

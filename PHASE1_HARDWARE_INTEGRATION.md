@@ -10,8 +10,9 @@ Integrate all new sensors and LoRa module with proper pin configuration for the 
 - ESP32-S3 DevKitC-1 board with camera module working
 - All hardware components acquired:
   - BMP280 pressure/temperature sensor
+  - OLED Display 0.96" SSD1306 (optional, for debugging)
   - MAX-M10S GPS module with antenna
-  - LoRa 900T30D radio module with antenna
+  - LoRa E32 900T30D radio module with antenna
   - Status LEDs (3x) and resistors
   - Power supply components
   - Prototyping board and wiring
@@ -85,6 +86,38 @@ SCL → GPIO 2 (with 4.7kΩ pull-up)
 - [ ] Temperature readings are reasonable (±5°C)
 - [ ] Pressure readings are reasonable (±10 hPa)
 - [ ] No I2C bus errors
+
+### Task 1.3.5: Connect OLED Display (I2C)
+**Time Estimate**: 30 minutes
+**Status**: ❌ Not Started
+
+**Connections**:
+```
+OLED (0.96" SSD1306) → ESP32-S3
+VCC               → 3.3V (or 5V, check module)
+GND               → GND
+SDA               → GPIO 1 (shared with BMP280)
+SCL               → GPIO 2 (shared with BMP280)
+```
+
+**Subtasks**:
+- [ ] Connect OLED VCC and GND
+- [ ] Connect SDA to GPIO 1 (same line as BMP280)
+- [ ] Connect SCL to GPIO 2 (same line as BMP280)
+- [ ] Test I2C communication with OLED
+- [ ] Display test pattern or debug text
+- [ ] Verify both BMP280 and OLED work on same bus
+
+**Test Code Required**:
+- I2C scanner to detect OLED at address 0x3C (or 0x3D)
+- Basic display test (Adafruit SSD1306 example)
+
+**Verification**:
+- [ ] OLED detected at I2C address 0x3C (or 0x3D)
+- [ ] Display shows test pattern or text correctly
+- [ ] OLED and BMP280 both work on same I2C bus
+- [ ] No I2C bus errors or conflicts
+- [ ] Display refresh rate is acceptable
 
 ### Task 1.4: Connect MAX-M10S GPS Module (UART)
 **Time Estimate**: 1 hour
@@ -250,7 +283,7 @@ Power Enable → GPIO 41 (to control sensor power)
 
 **Validation Checklist**:
 - [ ] Camera pins: 4,5,6,7,8,9,10,11,12,13,15,16,17,18
-- [ ] BMP280 pins: 1,2
+- [ ] BMP280 + OLED pins: 1,2 (shared I2C bus)
 - [ ] GPS pins: 42,45,46
 - [ ] LoRa pins: 14,19,20,21,48
 - [ ] LED pins: 38,39,40
@@ -298,7 +331,7 @@ Power Enable → GPIO 41 (to control sensor power)
 - [ ] Pin validation report
 
 ### Code Examples
-- [ ] I2C scanner for BMP280
+- [ ] I2C scanner for BMP280 and OLED
 - [ ] GPS NMEA parser test
 - [ ] LoRa UART communication test
 - [ ] LED control test
@@ -311,8 +344,16 @@ Power Enable → GPIO 41 (to control sensor power)
 **BMP280 Not Detected**:
 - Check I2C pull-up resistors (4.7kΩ)
 - Verify SDA/SCL connections
-- Check I2C address (0x76 vs 0x77)
+- Check I2C address (0.76 vs 0x77)
 - Ensure 3.3V power supply
+
+**OLED Not Displaying**:
+- Check I2C address (0x3C vs 0x3D)
+- Verify SDA/SCL connections (shared with BMP280)
+- Try both I2C addresses in code
+- Check VCC voltage (3.3V vs 5V)
+- Test with Adafruit SSD1306 examples
+- Ensure OLED and BMP280 have different addresses
 
 **GPS No Lock**:
 - Ensure antenna has clear sky view
@@ -338,6 +379,13 @@ Power Enable → GPIO 41 (to control sensor power)
 - Check for I2C address conflicts
 - Verify sufficient power for camera + sensors
 - Check for electrical noise
+
+**OLED Issues**:
+- Ensure OLED and BMP280 have different I2C addresses
+- Check SDA/SCL shared connections are solid
+- Verify OLED is powered (3.3V or 5V depending on module)
+- Try initializing OLED after BMP280 in code
+- Test OLED alone to isolate the issue
 
 ## Success Criteria
 

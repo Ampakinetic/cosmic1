@@ -23,8 +23,8 @@ This document provides complete pin mapping and wiring instructions for the ESP3
 | 17 | Y8 | Camera | Input | 3.3V |
 | 18 | Y7 | Camera | Input | 3.3V |
 | **New Sensor Pins** |
-| 1 | SDA | BMP280 | I2C | 3.3V |
-| 2 | SCL | BMP280 | I2C | 3.3V |
+| 1 | SDA | BMP280, OLED | I2C | 3.3V |
+| 2 | SCL | BMP280, OLED | I2C | 3.3V |
 | 14 | TX | LoRa RXD ← ESP32 TX | Output | 3.3V |
 | 19 | M0 | LoRa Mode 0 | Output | 3.3V |
 | 20 | M1 | LoRa Mode 1 | Output | 3.3V |
@@ -55,6 +55,26 @@ SCL/SCK           →    GPIO 2
 - Default I2C address: 0x76 (alternative: 0x77)
 - Maximum voltage: 3.6V
 - Operating range: -40°C to +85°C
+
+### OLED Display (SSD1306, 128x64, I2C)
+
+```
+OLED Module (0.96") →    ESP32-S3
+─────────────────────────────────────
+VCC               →    3.3V (or 5V, check module)
+GND               →    GND
+SDA               →    GPIO 1 (shared with BMP280)
+SCL               →    GPIO 2 (shared with BMP280)
+```
+
+**Important Notes**:
+- Shares I2C bus with BMP280 (same SDA/SCL pins)
+- Default I2C address: 0x3C (alternative: 0x3D)
+- Resolution: 128x64 pixels
+- Driver: SSD1306
+- Use Adafruit_SSD1306 or Wire library
+- Pull-up resistors already on BMP280 lines serve both devices
+- Perfect for debugging, status display, telemetry output
 
 ### MAX-M10S GPS Module (UART)
 
@@ -166,8 +186,9 @@ Note: Power control removed due to pin conflicts - sensors always on
 | BMP280    | 1mA               | 1mA            | 3.3V    |
 | MAX-M10S  | 30mA              | 80mA           | 3.3V    |
 | LoRa      | 20mA              | 120mA          | 3.3V    |
+| OLED      | 20mA              | 20mA           | 3.3V    |
 | LEDs      | 10mA              | 30mA           | 3.3V    |
-| **Total** | **361mA**         | **931mA**      | **3.3V** |
+| **Total** | **381mA**         | **951mA**      | **3.3V** |
 
 ### Power Supply Recommendations
 
@@ -199,6 +220,14 @@ Note: Power control removed due to pin conflicts - sensors always on
 2. Connect SDA to GPIO 1 with 4.7kΩ pull-up
 3. Connect SCL to GPIO 2 with 4.7kΩ pull-up
 4. Test I2C communication
+
+### Step 3.5: Connect OLED Display
+1. Connect VCC to 3.3V (or 5V if your module supports it)
+2. Connect GND to GND
+3. Connect SDA to GPIO 1 (same line as BMP280)
+4. Connect SCL to GPIO 2 (same line as BMP280)
+5. Test I2C communication with OLED
+6. Display test pattern or debug text
 
 ### Step 4: Connect GPS Module
 1. Connect VCC to 3.3V and GND to GND
@@ -241,6 +270,13 @@ Note: Power control removed due to pin conflicts - sensors always on
 - Check I2C pull-up resistors
 - Verify SDA/SCL connections
 - Test with I2C scanner
+
+**OLED Not Displaying**:
+- Check I2C address (0x3C or 0x3D)
+- Verify SDA/SCL connections (shared with BMP280)
+- Test with I2C scanner
+- Check VCC voltage (3.3V vs 5V)
+- Try Adafruit_SSD1306 example sketches
 
 **GPS No Fix**:
 - Ensure antenna has clear sky view
