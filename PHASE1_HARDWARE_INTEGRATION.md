@@ -95,15 +95,15 @@ SCL → GPIO 2 (with 4.7kΩ pull-up)
 MAX-M10S → ESP32-S3
 VCC → 3.3V
 GND → GND
-TX → GPIO 43 (ESP32 RX)
-RX → GPIO 44 (ESP32 TX)
+TX → GPIO 45 (ESP32 RX)
+RX → GPIO 46 (ESP32 TX)
 PPS → GPIO 42 (optional)
 ```
 
 **Subtasks**:
 - [ ] Connect GPS VCC and GND
-- [ ] Connect GPS TX to GPIO 43
-- [ ] Connect GPS RX to GPIO 44
+- [ ] Connect GPS TX to GPIO 45
+- [ ] Connect GPS RX to GPIO 46
 - [ ] Optional: Connect PPS to GPIO 42
 - [ ] Position GPS antenna for good sky view
 - [ ] Test UART communication
@@ -119,43 +119,42 @@ PPS → GPIO 42 (optional)
 - [ ] PPS signal detected (if connected)
 - [ ] Baud rate communication successful (9600)
 
-### Task 1.5: Connect LoRa Module (SPI)
+### Task 1.5: Connect LoRa Module (UART)
 **Time Estimate**: 1.5 hours
 **Status**: ❌ Not Started
 
 **Connections**:
 ```
-LoRa 900T30D → ESP32-S3
+E32 900T30D → ESP32-S3
 VCC → 3.3V
 GND → GND
-NSS/CS → GPIO 14
-SCK → GPIO 21
-MOSI → GPIO 47
-MISO → GPIO 48
-RST → GPIO 19
-DIO0 → GPIO 20
-DIO1 → GPIO 23 (optional)
+M0 → GPIO 19 (mode control)
+M1 → GPIO 20 (mode control)
+RXD → GPIO 14 (ESP32 TX)
+TXD → GPIO 48 (ESP32 RX)
+AUX → GPIO 21 (status, optional)
 ANT → 915MHz antenna
 ```
 
 **Subtasks**:
 - [ ] Connect LoRa VCC and GND
-- [ ] Connect SPI interface pins
-- [ ] Connect control pins (CS, RST, DIO0)
-- [ ] Optional: Connect DIO1
+- [ ] Connect M0 and M1 mode control pins
+- [ ] Connect UART interface (RXD/TXD)
+- [ ] Optional: Connect AUX status pin
 - [ ] Attach 915MHz antenna securely
 - [ ] Verify antenna connection
-- [ ] Test SPI communication
+- [ ] Test UART communication
 
 **Test Code Required**:
-- SPI initialization test
-- LoRa module register read/write test
-- Basic transmission test (loopback if possible)
+- UART initialization test
+- LoRa module configuration via UART
+- Basic transmission test
+- M0/M1 mode switching test
 
 **Verification**:
-- [ ] LoRa module responds to SPI commands
-- [ ] Module registers accessible
-- [ ] Antenna detected (if supported)
+- [ ] LoRa module responds to UART commands
+- [ ] Mode configuration (M0/M1) works
+- [ ] AUX pin indicates correct status
 - [ ] Basic transmission/reception works
 
 ### Task 1.6: Add Status LEDs
@@ -252,8 +251,8 @@ Power Enable → GPIO 41 (to control sensor power)
 **Validation Checklist**:
 - [ ] Camera pins: 4,5,6,7,8,9,10,11,12,13,15,16,17,18
 - [ ] BMP280 pins: 1,2
-- [ ] GPS pins: 42,43,44
-- [ ] LoRa pins: 14,19,20,21,23,47,48
+- [ ] GPS pins: 42,45,46
+- [ ] LoRa pins: 14,19,20,21,48
 - [ ] LED pins: 38,39,40
 - [ ] No conflicts detected
 - [ ] All pins within ESP32-S3 capabilities
@@ -301,7 +300,7 @@ Power Enable → GPIO 41 (to control sensor power)
 ### Code Examples
 - [ ] I2C scanner for BMP280
 - [ ] GPS NMEA parser test
-- [ ] LoRa SPI communication test
+- [ ] LoRa UART communication test
 - [ ] LED control test
 - [ ] Power management test
 
@@ -322,10 +321,11 @@ Power Enable → GPIO 41 (to control sensor power)
 - Verify UART connections (TX/RX not crossed)
 
 **LoRa Not Responding**:
-- Check SPI connections (CS, SCK, MOSI, MISO)
-- Verify antenna is connected
-- Check CS pin logic level
-- Ensure correct SPI mode (CPOL=0, CPHA=0)
+- Check UART connections (TX/RX not crossed)
+- Verify M0/M1 mode configuration
+- Check antenna is connected
+- Verify baud rate (default 9600)
+- Check AUX pin status
 
 **Power Issues**:
 - Measure actual current draw

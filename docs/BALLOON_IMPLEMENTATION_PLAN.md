@@ -9,7 +9,7 @@ This document outlines the complete implementation plan for extending the ESP32-
 - **ESP32-S3 DevKitC-1** with camera module
 - **BMP280** pressure/temperature sensor (I2C)
 - **MAX-M10S** GPS module (UART)
-- **LoRa 900T30D** radio module (SPI)
+- **LoRa E32 900T30D** radio module (UART)
 - Battery power system with power management
 - Status LEDs for diagnostics
 
@@ -28,8 +28,8 @@ This document outlines the complete implementation plan for extending the ESP32-
 
 **Tasks**:
 1. Wire BMP280 sensor to I2C pins (GPIO 1, 2)
-2. Connect MAX-M10S GPS to UART pins (GPIO 43, 44)
-3. Interface LoRa module via SPI (GPIO 14, 19-23, 47, 48)
+2. Connect MAX-M10S GPS to UART pins (GPIO 45, 46)
+3. Interface LoRa E32 module via UART (GPIO 14 TX, 48 RX, with M0/M1/AUX on 19/20/21)
 4. Add status LEDs (GPIO 38-40)
 5. Implement power regulation and protection
 6. Test each sensor individually

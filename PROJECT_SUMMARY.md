@@ -69,7 +69,7 @@ This project extends an existing ESP32-S3 camera application into a comprehensiv
 - ESP32 Camera Library
 - Adafruit BMP280 Library
 - TinyGPSPlus Library
-- LoRa Library by Sandeep Mistry
+- E32 LoRa Library (UART-based, CMT2300A chipset)
 - ArduinoJson Library
 - Web technologies (HTML5, CSS3, JavaScript, WebSocket)
 
@@ -167,8 +167,9 @@ c:/Work/Prog/Cosmic1/
 ### Pin Mapping Strategy
 - **Camera Pins**: Preserved existing camera configuration (GPIO 4-18 except 14)
 - **I2C Bus**: GPIO 1 (SDA) and 2 (SCL) for BMP280 sensor
-- **UART**: GPIO 43 (RX) and 44 (TX) for GPS communication
-- **SPI Bus**: GPIO 14 (CS), 21 (SCK), 47 (MOSI), 48 (MISO) for LoRa
+- **UART1**: GPIO 45 (RX) and 46 (TX) for GPS communication
+- **UART2**: GPIO 14 (TX) and 48 (RX) for LoRa E32 module
+- **Mode Control**: GPIO 19 (M0), 20 (M1), 21 (AUX) for LoRa
 - **Status LEDs**: GPIO 38-40 for system diagnostics
 - **No Conflicts**: All pin assignments validated against existing usage
 

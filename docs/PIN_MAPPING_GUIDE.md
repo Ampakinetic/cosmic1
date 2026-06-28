@@ -25,19 +25,17 @@ This document provides complete pin mapping and wiring instructions for the ESP3
 | **New Sensor Pins** |
 | 1 | SDA | BMP280 | I2C | 3.3V |
 | 2 | SCL | BMP280 | I2C | 3.3V |
-| 14 | CS | LoRa NSS | Output | 3.3V |
-| 19 | RST | LoRa Reset | Output | 3.3V |
-| 20 | DIO0 | LoRa IRQ | Input | 3.3V |
-| 21 | SCK | LoRa SPI | Output | 3.3V |
-| 23 | DIO1 | LoRa DIO1 | Input | 3.3V |
+| 14 | TX | LoRa RXD ← ESP32 TX | Output | 3.3V |
+| 19 | M0 | LoRa Mode 0 | Output | 3.3V |
+| 20 | M1 | LoRa Mode 1 | Output | 3.3V |
+| 21 | AUX | LoRa Status | Input | 3.3V |
 | 38 | GPS Lock LED | Status | Output | 3.3V |
 | 39 | LoRa TX LED | Status | Output | 3.3V |
 | 40 | Error LED | Status | Output | 3.3V |
 | 42 | GPS PPS | GPS | Input | 3.3V |
-| 43 | RX | GPS TX → ESP32 RX | Input | 3.3V |
-| 44 | TX | GPS RX ← ESP32 TX | Output | 3.3V |
-| 47 | MOSI | LoRa SPI | Output | 3.3V |
-| 48 | MISO | LoRa SPI | Input | 3.3V |
+| 45 | RX | GPS TX → ESP32 RX | Input | 3.3V |
+| 46 | TX | GPS RX ← ESP32 TX | Output | 3.3V |
+| 48 | RX | LoRa TXD → ESP32 RX | Input | 3.3V |
 
 ## Wiring Diagrams
 
@@ -65,8 +63,8 @@ MAX-M10S Module   →    ESP32-S3
 ─────────────────────────────────────
 VCC               →    3.3V
 GND               →    GND
-TX                →    GPIO 43 (ESP32 RX)
-RX                →    GPIO 44 (ESP32 TX)
+TX                →    GPIO 45 (ESP32 RX)
+RX                →    GPIO 46 (ESP32 TX)
 PPS (Optional)     →    GPIO 42
 ```
 
@@ -76,28 +74,29 @@ PPS (Optional)     →    GPIO 42
 - Active GPS antenna recommended
 - Cold start time: ~26 seconds
 
-### LoRa 900T30D Module (SPI)
+### LoRa E32 900T30D Module (UART)
 
 ```
-LoRa 900T30D      →    ESP32-S3
+E32 900T30D       →    ESP32-S3
 ─────────────────────────────────────
 VCC               →    3.3V
 GND               →    GND
-NSS/CS            →    GPIO 14
-SCK               →    GPIO 21
-MOSI              →    GPIO 47
-MISO              →    GPIO 48
-RST               →    GPIO 19
-DIO0              →    GPIO 20
-DIO1 (Optional)   →    GPIO 23
+M0                →    GPIO 19
+M1                →    GPIO 20
+RXD               →    GPIO 14 (ESP32 TX)
+TXD               →    GPIO 48 (ESP32 RX)
+AUX (Optional)    →    GPIO 21
 ANT               →    915MHz Antenna
 ```
 
 **Important Notes**:
 - Use proper 915MHz antenna for US/Canada
-- SPI mode: CPOL=0, CPHA=0
+- UART baud rate: 9600 (configurable: 2400-115200)
+- M0/M1 modes: 00=Normal, 01=Wake-Up, 10=Power-Saving, 11=Sleep/Config
+- AUX indicates module status/busy state
 - Maximum transmit power: 20dBm
 - Range: up to 15km line-of-sight
+- CMT2300A chipset (not Semtech SX126x)
 
 ### Status LEDs
 
@@ -120,7 +119,7 @@ Error LED          →    GPIO 40 (with 220Ω resistor)
 Power Monitor     →    ESP32-S3
 ─────────────────────────────────────
 Battery Voltage   →    GPIO 4 (ADC1_CH3, with voltage divider)
-Power Enable       →    GPIO 41 (to control sensor power)
+Note: Power control removed due to pin conflicts - sensors always on
 ```
 
 ## Complete Wiring Schematic
@@ -203,18 +202,18 @@ Power Enable       →    GPIO 41 (to control sensor power)
 
 ### Step 4: Connect GPS Module
 1. Connect VCC to 3.3V and GND to GND
-2. Connect GPS TX to GPIO 43
-3. Connect GPS RX to GPIO 44
+2. Connect GPS TX to GPIO 45
+3. Connect GPS RX to GPIO 46
 4. Optional: Connect PPS to GPIO 42
 5. Test UART communication
 
 ### Step 5: Connect LoRa Module
 1. Connect VCC to 3.3V and GND to GND
-2. Connect SPI pins (CS, SCK, MOSI, MISO)
-3. Connect RST and DIO0 pins
-4. Optional: Connect DIO1
+2. Connect UART pins (RXD→GPIO 14, TXD→GPIO 48)
+3. Connect M0, M1 mode control pins
+4. Optional: Connect AUX status pin
 5. Attach 915MHz antenna
-6. Test SPI communication
+6. Test UART communication
 
 ### Step 6: Add Status LEDs
 1. Connect LEDs with 220Ω current-limiting resistors
@@ -250,10 +249,11 @@ Power Enable       →    GPIO 41 (to control sensor power)
 - Allow time for cold start
 
 **LoRa Not Transmitting**:
-- Check SPI connections
-- Verify antenna is connected
-- Ensure correct frequency band
-- Check CS pin configuration
+- Check UART connections (TX/RX not crossed)
+- Verify M0/M1 mode configuration
+- Check antenna is connected
+- Ensure correct baud rate (default 9600)
+- Verify AUX pin status
 
 **Power Issues**:
 - Measure current draw

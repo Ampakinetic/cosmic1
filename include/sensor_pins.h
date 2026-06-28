@@ -8,27 +8,23 @@
 
 // BMP280 Pressure/Temperature Sensor (I2C)
 #define BMP280_SDA_PIN    1   // I2C0 SDA
-#define BMP280_SCL_PIN    2   // I2C0 SCL
+#define BMP280_SCL_PIN    2  // I2C0 SCL
 #define BMP280_ADDRESS    0x76  // Default I2C address (0x77 alternative)
 
 // MAX-M10S GPS Module (UART)
-#define GPS_TX_PIN        43  // GPS TX → ESP32 RX
-#define GPS_RX_PIN        44  // GPS RX → ESP32 TX
+#define GPS_TX_PIN        45  // GPS TX → ESP32 RX
+#define GPS_RX_PIN        46  // GPS RX → ESP32 TX
 #define GPS_PPS_PIN       42  // Pulse Per Second (optional)
 #define GPS_BAUD_RATE     9600
 #define GPS_UART_NUM      UART_NUM_1
 
-// LoRa Module 900T30D (SPI)
-#define LORA_CS_PIN       14  // Chip Select
-#define LORA_RST_PIN      19  // Reset
-#define LORA_IRQ_PIN      20  // DIO0 - Interrupt/Ready
-#define LORA_DIO1_PIN     23  // DIO1 - Optional advanced features
-#define LORA_SPI_NUM      SPI3_HOST  // Use SPI3
-
-// LoRa SPI Pins (ESP32-S3 specific)
-#define LORA_SCK_PIN      21  // SPI Clock
-#define LORA_MOSI_PIN     47  // Master Out Slave In
-#define LORA_MISO_PIN     48  // Master In Slave Out
+// LoRa Module E32 900T30D (UART)
+#define LORA_TX_PIN       14  // ESP32 TX → LoRa RXD
+#define LORA_RX_PIN       48  // LoRa TXD → ESP32 RX
+#define LORA_M0_PIN       19  // Mode control 0 (normal/wake/sleep/config)
+#define LORA_M1_PIN       20  // Mode control 1
+#define LORA_AUX_PIN      21  // Auxiliary/Status input (optional)
+#define LORA_UART_NUM     UART_NUM_2  // Use UART2
 
 // Status LEDs (Optional)
 #define LED_GPS_LOCK_PIN  38  // GPS Lock Status
@@ -36,8 +32,8 @@
 #define LED_ERROR_PIN     40  // Error Status
 
 // Power Management Pins (Optional)
-#define POWER_ENABLE_PIN  41  // Enable power to sensors
 #define BATTERY_SENSE_PIN 4   // Battery voltage monitoring (ADC)
+// POWER_ENABLE_PIN removed due to pin conflicts - sensors always on
 
 // ===========================
 // Sensor Configuration
@@ -69,7 +65,7 @@
 
 // Ensure no conflicts with existing camera pins
 // Camera pins used: 4,5,6,7,8,9,10,11,12,13,15,16,17,18
-// Sensor pins used: 1,2,14,19,20,21,23,38,39,40,42,43,44,47,48
+// Sensor pins used: 1,2,14,19,20,21,38,39,40,42,45,46,48
 // No conflicts detected
 
 #endif // SENSOR_PINS_H
