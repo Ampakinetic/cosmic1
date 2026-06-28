@@ -63,6 +63,24 @@ const char* testNames[] = {
 const int NUM_TESTS = 7;
 
 // ===========================
+// Function Forward Declarations
+// ===========================
+
+void runTest(int test);
+void runAllTests();
+bool testI2CScan();
+void testOLEDGraphics();
+void testOLEDText();
+bool testLoRaPins();
+bool testLoRaModes();
+bool testLoRaUART();
+void displayStartupScreen();
+void displayTestInfo(int testNum);
+void displayStatus();
+void displayError(const char* message);
+void initLoRaPins();
+
+// ===========================
 // Setup
 // ===========================
 
