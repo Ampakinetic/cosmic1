@@ -152,33 +152,42 @@ void setup() {
     Serial.begin(SERIAL_BAUD_RATE);
     delay(SETUP_DELAY_MS);
     
+    // Print welcome message immediately after serial init
     Serial.println();
     Serial.println("========================================");
     Serial.printf("Cosmic1 Balloon Firmware v%s\n", FIRMWARE_VERSION);
     Serial.printf("Build: %s\n", BUILD_DATE);
     Serial.printf("Board: ESP32-S3\n");
     Serial.println("========================================");
+    Serial.println("Starting system initialization...");
     
     // Initialize debug system
+    Serial.println("Initializing debug system...");
     if (!Debug.begin()) {
         Serial.println("FATAL: Failed to initialize debug system!");
         return;
     }
     
+    Serial.println("Debug system initialized successfully");
     SYS_INFO("System booting...");
     
     // Initialize application state
+    Serial.println("Initializing application state...");
     memset(&appState, 0, sizeof(appState));
     appState.startTime = millis();
     appState.lastLoopTime = appState.startTime;
     appState.maxLoopTime = 0;
     appState.avgLoopTime = MAIN_LOOP_INTERVAL_MS;
+    Serial.println("Application state initialized");
     
     // Initialize hardware
+    Serial.println("Initializing hardware...");
     if (!initializeHardware()) {
+        Serial.println("FATAL: Hardware initialization failed!");
         SYS_ERROR("Hardware initialization failed");
         return;
     }
+    Serial.println("Hardware initialization complete");
     
     // Initialize subsystems
     if (!initializeSubsystems()) {
@@ -456,18 +465,25 @@ bool performSystemChecks() {
 bool initializeBoard() {
     SYS_INFO("Initializing board-specific hardware...");
     
-    // Initialize I2C for sensors
-    Wire.begin(BMP280_SDA_PIN, BMP280_SCL_PIN);
-    
-    // Initialize SPI for LoRa
-    SPI.begin(LORA_SCK_PIN, LORA_MISO_PIN, LORA_MOSI_PIN, LORA_CS_PIN);
-    
+    // I2C initialization is handled by sensor_manager
+    // Do not initialize Wire here to avoid "Bus already started" warnings
+
+    // Initialize UART2 for LoRa E32 module
+    pinMode(LORA_M0_PIN, OUTPUT);
+    pinMode(LORA_M1_PIN, OUTPUT);
+    pinMode(LORA_AUX_PIN, INPUT);
+    // Set normal mode (M0=0, M1=0)
+    digitalWrite(LORA_M0_PIN, LOW);
+    digitalWrite(LORA_M1_PIN, LOW);
+    // UART2 will be initialized by LoRa communication layer
+    // Serial2.begin(LORA_BAUD_RATE, SERIAL_8N1, LORA_RX_PIN, LORA_TX_PIN);
+
     // Initialize UART for GPS
     Serial1.begin(GPS_BAUD_RATE, SERIAL_8N1, GPS_TX_PIN, GPS_RX_PIN);
     
     // Initialize power control pin
-    pinMode(POWER_ENABLE_PIN, OUTPUT);
-    digitalWrite(POWER_ENABLE_PIN, HIGH);  // Enable power to sensors
+   // pinMode(POWER_ENABLE_PIN, OUTPUT);
+   // digitalWrite(POWER_ENABLE_PIN, HIGH);  // Enable power to sensors
     
     // Initialize LED pins
     pinMode(LED_GPS_LOCK_PIN, OUTPUT);
@@ -490,7 +506,7 @@ void initializeSensorPins() {
     
     // GPS pins are handled by UART initialization in initializeBoard()
     
-    // LoRa pins are handled by SPI initialization in initializeBoard()
+    // LoRa E32 pins are handled by UART initialization in initializeBoard()
     
     // Additional sensor pin configuration if needed
     pinMode(GPS_PPS_PIN, INPUT_PULLDOWN);  // Pulse Per Second pin
@@ -512,14 +528,9 @@ bool checkHardwareStatus() {
     
     bool allGood = true;
     
-    // Check I2C bus - try to communicate with BMP280
-    Wire.beginTransmission(BMP280_ADDRESS);
-    if (Wire.endTransmission() != 0) {
-        SYS_WARNING("BMP280 sensor not found on I2C bus");
-        allGood = false;
-    } else {
-        SYS_INFO("BMP280 sensor detected");
-    }
+    // I2C check is deferred to sensor_manager initialization
+    // Cannot check I2C here as Wire is not yet initialized
+    // The sensor_manager will handle I2C device detection
     
     // Check GPS serial communication
     if (Serial1.available() > 0) {
@@ -528,11 +539,15 @@ bool checkHardwareStatus() {
         SYS_WARNING("No GPS communication detected (may need more time)");
     }
     
-    // Check LoRa module (basic SPI communication)
-    digitalWrite(LORA_CS_PIN, LOW);
-    delay(1);
-    // Try to read a register from LoRa module (simplified check)
-    digitalWrite(LORA_CS_PIN, HIGH);
+    // Check LoRa E32 module (check AUX pin state)
+    int auxState = digitalRead(LORA_AUX_PIN);
+    SYS_INFO("LoRa E32 AUX pin state: %s", auxState ? "HIGH" : "LOW");
+    // In normal mode (M0=0, M1=0), AUX should be HIGH when module is ready
+    if (auxState == HIGH) {
+        SYS_INFO("LoRa E32 module appears ready (AUX is HIGH)");
+    } else {
+        SYS_WARNING("LoRa E32 module AUX is LOW (may be busy or in sleep mode)");
+    }
     
     // Check power status
     int batteryLevel = analogRead(BATTERY_SENSE_PIN);
