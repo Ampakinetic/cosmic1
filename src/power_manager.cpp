@@ -75,12 +75,12 @@ bool PowerManager::begin() {
     analogSetAttenuation(ADC_11db);  // 11dB attenuation for higher voltage range
     
     // Initialize power control pins
-    pinMode(POWER_ENABLE_PIN, OUTPUT);
+  //  pinMode(POWER_ENABLE_PIN, OUTPUT);
     // Note: Individual power control pins not available in current hardware design
     // Using global power enable only
     
     // Enable power rails
-    digitalWrite(POWER_ENABLE_PIN, HIGH);
+   // digitalWrite(POWER_ENABLE_PIN, HIGH);
     
     // Perform initial readings
     updateBatteryVoltage();
@@ -99,7 +99,7 @@ bool PowerManager::begin() {
 
 void PowerManager::end() {
     // Disable all power rails
-    digitalWrite(POWER_ENABLE_PIN, LOW);
+   // digitalWrite(POWER_ENABLE_PIN, LOW);
 }
 
 bool PowerManager::reinitialize() {
@@ -658,12 +658,12 @@ void PowerManager::runDiagnostics() {
     bool withinLimits = isWithinLimits();
     
     // Check power rail status - individual power control not available
-    bool globalPower = (digitalRead(POWER_ENABLE_PIN) == HIGH);
+  //  bool globalPower = (digitalRead(POWER_ENABLE_PIN) == HIGH);
     
     Serial.println("=== Power Diagnostics ===");
     Serial.printf("Battery Healthy: %s\n", batteryStatus.healthy ? "Yes" : "No");
     Serial.printf("Within Limits: %s\n", withinLimits ? "Yes" : "No");
-    Serial.printf("Global Power: %s\n", globalPower ? "On" : "Off");
+  //  Serial.printf("Global Power: %s\n", globalPower ? "On" : "Off");
     Serial.printf("Camera Current: %.1f mA\n", consumption.cameraCurrent);
     Serial.printf("LoRa Current: %.1f mA\n", consumption.loraCurrent);
     Serial.printf("Sensor Current: %.1f mA\n", consumption.sensorCurrent);

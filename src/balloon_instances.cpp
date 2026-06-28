@@ -25,6 +25,7 @@ CameraManager& Camera() { return cameraManagerInstance; }
 LoRaManager& LoRaComm() { return loraManagerInstance; }
 PowerManager& PowerMgr() { return powerManagerInstance; }
 SystemState& SysState() { return systemStateInstance; }
+DebugUtils& Debug = debugUtilsInstance;
 
 // Board configuration functions are implemented in main_balloon.cpp
 // to avoid multiple definition errors

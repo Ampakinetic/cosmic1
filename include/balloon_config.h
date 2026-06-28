@@ -132,11 +132,12 @@
 #define EMERGENCY_SAVE_LAST_DATA     true        // Save final data packet
 #define EMERGENCY_CONTINUE_CAMERA    false      // Stop camera in emergency
 
+
 // ===========================
 // Debug and Development
 // ===========================
 
-#ifdef DEBUG
+#ifndef DEBUG
 #define DEBUG_SERIAL              true
 #define DEBUG_SENSORS             true
 #define DEBUG_GPS                 true

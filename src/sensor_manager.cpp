@@ -76,10 +76,19 @@ void SensorManager::end() {
 // ===========================
 
 bool SensorManager::initBMP280() {
+    // Initialize I2C bus with custom pins first
+    // The Adafruit library will try to call Wire.begin() again, 
+    // which will generate a warning but is harmless
+   // Serial.println("BMP280: init");
     Wire.begin(BMP280_SDA_PIN, BMP280_SCL_PIN);
     
-    bmp280 = new Adafruit_BMP280();
+    // Small delay for I2C bus stabilization
+    delay(100);
     
+    // Create BMP280 object - pass &Wire to use our initialized bus
+    bmp280 = new Adafruit_BMP280(&Wire);
+    
+    // Begin sensor - library may call Wire.begin() again (generates warning)
     if (!bmp280->begin(BMP280_ADDRESS)) {
         if (DEBUG_SENSORS) {
             Serial.println("BMP280: Could not find sensor at 0x76");
