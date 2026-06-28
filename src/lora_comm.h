@@ -2,11 +2,17 @@
 #define LORA_COMM_H
 
 #include <Arduino.h>
-#include <SPI.h>
-#include <LoRa.h>
+// #include <SPI.h>  // Not needed for UART-based E32
+// #include <LoRa.h>  // TODO: Replace with E32 UART library
 #include "balloon_config.h"
 #include "sensor_pins.h"
 #include "common_types.h"
+
+// TODO: Implement E32-900T30D UART-based LoRa communication
+// The current LoRaManager class is designed for SPI-based LoRa modules.
+// For E32-900T30D (UART-based), this needs to be completely rewritten.
+// For now, commenting out the SPI LoRa library to allow compilation.
+// See test_oled_lora.cpp for E32 UART testing approach.
 
 // ===========================
 // LoRa Data Structures
