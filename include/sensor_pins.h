@@ -24,7 +24,7 @@
 
 // MAX-M10S GPS Module (UART)
 #define GPS_TX_PIN        45  // GPS TX → ESP32 RX
-#define GPS_RX_PIN        46  // GPS RX → ESP32 TX
+#define GPS_RX_PIN        47  // GPS RX → ESP32 TX (changed from 46 - not exposed on DevKitC-1)
 #define GPS_PPS_PIN       42  // Pulse Per Second (optional)
 #define GPS_BAUD_RATE     9600
 #define GPS_UART_NUM      UART_NUM_1

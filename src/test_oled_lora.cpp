@@ -99,18 +99,7 @@ void setup() {
     Wire.begin(OLED_SDA_PIN, OLED_SCL_PIN);
     delay(100);
 
-    // Test I2C bus
-    if (!testI2CScan()) {
-        Serial.println("ERROR: No I2C devices found!");
-        Serial.println("Check:");
-        Serial.println("  - SDA/SCL connections (GPIO 1/2)");
-        Serial.println("  - Pull-up resistors (4.7kΩ)");
-        Serial.println("  - Power supply (3.3V)");
-        displayError("No I2C devices!");
-        while (true) { delay(1000); }
-    }
-
-    // Initialize OLED
+    // Initialize OLED FIRST (before any display operations!)
     Serial.println("Initializing OLED display...");
     if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS)) {
         Serial.println("ERROR: OLED initialization failed!");
@@ -121,13 +110,28 @@ void setup() {
             Serial.println("  - OLED power supply");
             Serial.println("  - SDA/SCL connections");
             Serial.println("  - I2C address");
-            displayError("OLED not found!");
             while (true) { delay(1000); }
         } else {
             Serial.println("SUCCESS: OLED found at 0x3D");
         }
     } else {
         Serial.println("SUCCESS: OLED found at 0x3C");
+    }
+
+    // Clear display
+    display.clearDisplay();
+    display.display();
+    delay(100);
+
+    // NOW test I2C bus (display is initialized)
+    if (!testI2CScan()) {
+        Serial.println("ERROR: No I2C devices found!");
+        Serial.println("Check:");
+        Serial.println("  - SDA/SCL connections (GPIO 1/2)");
+        Serial.println("  - Pull-up resistors (4.7kΩ)");
+        Serial.println("  - Power supply (3.3V)");
+        displayError("No I2C devices!");
+        while (true) { delay(1000); }
     }
 
     // Clear display
