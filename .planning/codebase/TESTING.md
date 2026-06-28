@@ -1,30 +1,26 @@
 # Testing Patterns
 
-**Analysis Date:** 2026-06-08
+**Analysis Date:** 2026-06-28
 
 ## Test Framework
 
 **Runner:**
-- PlatformIO Native Test Framework (Unity-based)
-- No dedicated test configuration detected (no `platformio.ini` test environment)
+- PlatformIO Native Test Framework (Unity-based, available but not configured)
+- No dedicated test environment in `platformio.ini`
 - No external test runner configured
+- Testing currently hardware-based/manual
 
 **Assertion Library:**
-- PlatformIO's built-in Unity test framework (available but not configured)
+- PlatformIO's built-in Unity test framework (available but not used)
 - No custom assertion wrappers detected
 
 **Run Commands:**
 ```bash
-# No test commands configured
+# No test commands currently configured
 # PlatformIO testing would use:
 pio test                    # Run all tests
 pio test -e esp32-s3-balloon    # Run tests for specific environment
 ```
-
-**Current Status:**
-- No test files detected in the project
-- No test configuration in `platformio.ini`
-- Testing appears to be hardware-based/manual
 
 ## Test File Organization
 
@@ -49,7 +45,15 @@ test/
 
 **Suite Organization:**
 - Not applicable (no tests present)
-- Would use Unity framework structure if implemented
+- Would use Unity framework structure if implemented:
+  ```cpp
+  void setUp(void) { }
+  void tearDown(void) { }
+  
+  void test_function_name(void) {
+      TEST_ASSERT_EQUAL(expected, actual);
+  }
+  ```
 
 **Patterns:**
 - No test setup/teardown patterns detected
@@ -80,11 +84,14 @@ test/
 
 **Test Data:**
 - No test fixtures detected
-- Hard-coded test values in some validation functions:
+- Hard-coded test values in validation functions:
   ```cpp
-  // From sensor_manager.cpp
+  // From src/sensor_manager.cpp
   if (pressure < 30000.0f || pressure > 120000.0f) {
       return false;  // Pressure range validation
+  }
+  if (temperature < -40.0f || temperature > 85.0f) {
+      return false;  // Temperature range validation
   }
   ```
 
@@ -152,7 +159,7 @@ pio test --coverage
 - Serial output indicates error conditions:
   ```cpp
   SYS_ERROR("Hardware initialization failed");
-  DEBUG_ERROR(SENSORS, "Sensor read failed");
+  SENSOR_ERROR("BMP280: Could not find sensor at 0x76");
   ```
 
 **Validation Testing:**
@@ -181,6 +188,12 @@ pio test --coverage
   #define LED_LORA_TX_PIN   39  // LoRa Transmit Status
   #define LED_ERROR_PIN     40  // Error Status
   ```
+- LED blink patterns defined in configuration:
+  ```cpp
+  #define LED_PATTERN_GPS_LOCK        1000, 1000   // Slow blink
+  #define LED_PATTERN_LORA_TX         100, 900     // Quick blink
+  #define LED_PATTERN_ERROR           200, 200     // Fast blink
+  ```
 
 **In-Field Testing:**
 - Real-world balloon flights
@@ -192,33 +205,33 @@ pio test --coverage
 - Current consumption monitoring via ADC
 - Battery voltage tracking:
   ```cpp
-  float voltage = (rawValue / 4095.0f) * 3.3f * 2.0f;  // Voltage divider
+  // From src/power_manager.cpp
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
   ```
 
 ## Debug-Enabled Testing
 
 **Conditional Compilation:**
-- Debug features controlled by preprocessor directives:
+- Debug features controlled by preprocessor directives in `balloon_config.h`:
   ```cpp
-  #ifndef DEBUG_SENSORS
-  #define DEBUG_SENSORS true
+  #ifndef DEBUG
+  #define DEBUG_SERIAL              true
+  #define DEBUG_SENSORS             true
+  #define DEBUG_GPS                 true
+  #define DEBUG_LORA                true
+  #define DEBUG_CAMERA              true
+  #define DEBUG_POWER               true
+  #define DEBUG_PACKETS             true
+  #else
+  #define DEBUG_SERIAL              false
+  #define DEBUG_SENSORS             false
+  #define DEBUG_GPS                 false
+  #define DEBUG_LORA                false
+  #define DEBUG_CAMERA              false
+  #define DEBUG_POWER               false
+  #define DEBUG_PACKETS             false
   #endif
-
-  if (DEBUG_SENSORS) {
-      Serial.println("BMP280: Initialized successfully");
-  }
-  ```
-
-**Debug Macros:**
-- Category-based debug output:
-  ```cpp
-  #define DEBUG_SERIAL true
-  #define DEBUG_SENSORS true
-  #define DEBUG_GPS true
-  #define DEBUG_LORA true
-  #define DEBUG_CAMERA true
-  #define DEBUG_POWER true
-  #define DEBUG_PACKETS true
   ```
 
 ## Manual Testing Procedures
@@ -271,24 +284,38 @@ pio test --coverage
 - Packet send/receive counters
 - Error rate calculation:
   ```cpp
-  float getPacketLossRate() const {
-      uint32_t total = packetsSent + packetsDropped;
-      return (static_cast<float>(packetsDropped) / total) * 100.0f;
-  }
+  // From src/packet_handler.h
+  float getPacketLossRate() const;
+  uint32_t getPacketsSent() const;
+  uint32_t getPacketsReceived() const;
+  uint32_t getPacketsDropped() const;
   ```
 
 **Performance Metrics:**
 - Loop time tracking in `DebugUtils`
 - Free heap monitoring
-- CPU temperature tracking
+- CPU temperature tracking:
+  ```cpp
+  // From include/common_types.h
+  struct TelemetryData {
+      // ...
+      uint16_t freeHeap;
+      float cpuTemperature;
+      // ...
+  };
+  ```
 
 ## Validation Patterns
 
 **Data Validation:**
 - Sensor data range checking:
   ```cpp
+  // From src/sensor_manager.cpp
   if (pressure < 30000.0f || pressure > 120000.0f) {
       return false;  // Invalid pressure
+  }
+  if (temperature < -40.0f || temperature > 85.0f) {
+      return false;  // Invalid temperature
   }
   ```
 - NaN checking for sensor readings:
@@ -302,17 +329,23 @@ pio test --coverage
 - CRC verification for received packets
 - Start/end byte checking:
   ```cpp
-  if (packet[0] != PACKET_START_BYTE1 || 
-      packet[1] != PACKET_START_BYTE2) {
-      return false;
-  }
+  // From src/packet_handler.h
+  #define PACKET_START_BYTE1     0xAA
+  #define PACKET_START_BYTE2     0x55
+  #define PACKET_END_BYTE1       0x0D
+  #define PACKET_END_BYTE2       0x0A
   ```
 
 **State Validation:**
-- Mode transition validation in `SystemState`
+- Mode transition validation in `SystemState::isModeTransitionAllowed()`
 - Phase transition rules enforced
-- Emergency condition detection
+- Emergency condition detection:
+  ```cpp
+  // From src/system_state.h
+  bool detectEmergencyConditions();
+  bool executeEmergencyProtocol();
+  ```
 
 ---
 
-*Testing analysis: 2026-06-08*
+*Testing analysis: 2026-06-28*

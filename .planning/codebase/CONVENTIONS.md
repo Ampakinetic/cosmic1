@@ -1,108 +1,111 @@
 # Coding Conventions
 
-**Analysis Date:** 2026-06-08
+**Analysis Date:** 2026-06-28
 
 ## Naming Patterns
 
 **Files:**
-- Snake_case for all source files: `sensor_manager.cpp`, `debug_utils.h`
-- Header files use `.h` extension for both C and C++ headers
-- Source files use `.cpp` extension for C++ implementation files
-- Configuration headers in `include/` directory: `balloon_config.h`, `sensor_pins.h`
+- Header files (`.h`): Use `snake_case` for source module headers: `sensor_manager.h`, `camera_manager.h`
+- Source files (`.cpp`): Match header names: `sensor_manager.cpp`, `camera_manager.cpp`
+- Configuration headers in `include/`: Use `snake_case` with descriptive names: `balloon_config.h`, `sensor_pins.h`, `camera_pins.h`
 - Main application entry point: `main_balloon.cpp` (not `main.cpp` for balloon firmware)
 
 **Functions:**
-- camelCase for all function names: `updateSystemState()`, `processSensors()`, `getCurrentImage()`
-- Getter functions prefix with `get`: `getBMP280Data()`, `getGPSData()`, `getStatistics()`
-- Setter functions prefix with `set`: `setDebugLevel()`, `setMode()`, `setFrequency()`
-- Boolean query functions use `is`: `isBMP280Ready()`, `isTimeToCapture()`, `isValid()`
+- Use `camelCase` for all function names and methods
+- Getters use `get` prefix: `getBMP280Data()`, `getGPSData()`, `getStatistics()`
+- Setters use `set` prefix: `setSeaLevelPressure()`, `setDebugLevel()`, `setMode()`
+- Boolean predicates use `is/has` prefix: `isBMP280Ready()`, `isTimeToCapture()`, `hasValidImage()`, `isWatchdogEnabled()`
+- Action methods use imperative verbs: `update()`, `begin()`, `captureImage()`, `resetErrorCounts()`
 - Event handlers prefix with `on`: `onSystemEvent()`, `onModeChanged()`, `onEmergencyTriggered()`
 
 **Variables:**
-- camelCase for local and member variables: `currentMode`, `lastUpdateTime`, `batteryVoltage`
-- Prefix `g_` NOT used for globals (use static with access functions)
-- Constants use UPPER_SNAKE_CASE: `MAX_PACKET_SIZE`, `DEFAULT_DEBUG_LEVEL`, `LORA_FREQUENCY`
-- Macro definitions use UPPER_SNAKE_CASE: `DEBUG_SENSORS`, `BMP280_ADDRESS`
-- Enum class names use PascalCase: `SystemMode`, `FlightPhase`, `DebugLevel`
+- Member variables use `camelCase`: `currentBMP280Data`, `seaLevelPressure`, `lastUpdateTime`
+- Local variables use `camelCase`: `currentTime`, `loopStartTime`, `success`
+- Constants use `UPPER_SNAKE_CASE` with `#define`: `DEBUG_SENSORS`, `BMP280_READ_INTERVAL_MS`, `MAX_PACKET_SIZE`
+- Static class constants use `UPPER_SNAKE_CASE`: `LOG_BUFFER_SIZE`, `DEFAULT_WATCHDOG_TIMEOUT`
+- No `g_` prefix for globals (use static with access functions)
 
 **Types:**
-- PascalCase for class/struct names: `SensorManager`, `CameraManager`, `PacketHandler`
+- Struct names use `PascalCase`: `BMP280Data`, `GPSData`, `ImageData`, `PacketHeader`
 - Struct suffix `Data` for data structures: `BMP280Data`, `GPSData`, `TelemetryData`
-- Enum class values use PascalCase: `SystemMode::ASCENT`, `DebugLevel::INFO`
-- Typedefs/using aliases follow PascalCase convention
+- Enum class names use `PascalCase`: `SystemMode`, `FlightPhase`, `PacketType`, `DebugLevel`
+- Enum values use `PascalCase`: `SystemMode::ASCENT`, `DebugLevel::ERROR`, `EventType::SYSTEM_BOOT`
+- Class names use `PascalCase`: `SensorManager`, `CameraManager`, `DebugUtils`, `SystemState`
 
 ## Code Style
 
 **Formatting:**
-- No explicit formatter configuration detected (no `.clang-format`, `.editorconfig`)
-- Indentation: 4 spaces (inferred from code structure)
-- Line length: No strict limit observed, generally kept under 120 characters
-- Brace style: K&R style - opening brace on same line for functions/controls
-- Spacing: Spaces around operators, after commas, in function parameter lists
+- No formal formatter detected (no `.clang-format`, `.prettierrc`)
+- 4-space indentation for classes/structs
+- Consistent brace style: opening brace on same line for functions/controls
+- Section headers use comment banners with `=` borders
+- Line length appears to be around 80-120 characters based on visible code
 
 **Linting:**
-- No formal linting configuration detected
-- PlatformIO build warnings used for error detection
-- `monitor_filters = esp32_exception_decoder` in `platformio.ini` for runtime debugging
+- No linting configuration detected
+- PlatformIO build warnings/errors act as primary quality check
+- Build flags include `-DCORE_DEBUG_LEVEL=3` for debug output
 
 **Comment Style:**
 - C++ `//` single-line comments preferred
-- Section headers use banner-style comments with asterisks
-- File headers describe module purpose
-- Function grouping marked with section comment banners
+- Section headers use boxed comment style:
+  ```cpp
+  // ===========================
+  // Section Name
+  // ===========================
+  ```
+- File headers use multi-line comment block describing module purpose
+- End-of-line comments for field descriptions in structs
+- Function-level comments for major operations
+- Non-obvious optimizations get explanation comments
+- Temporary workarounds marked with `// Note:` comments
 
 ## Import Organization
 
 **Order:**
 1. Module's own header (if .cpp file)
 2. Arduino framework headers (`<Arduino.h>`)
-3. ESP32/PlatformIO specific headers
-4. Project include headers (relative path in quotes)
-5. Third-party library headers
+3. C/Arduino standard library headers (`<stdint.h>`, `<stdarg.h>`)
+4. Third-party library headers (`<Adafruit_BMP280.h>`, `<TinyGPSPlus.h>`)
+5. Project configuration headers (`balloon_config.h`, `sensor_pins.h`)
+6. Module headers from `src/` (`sensor_manager.h`, `camera_manager.h`)
 
 **Path Aliases:**
 - No path aliases configured
-- Relative includes used: `#include "balloon_config.h"`
-- Platform-specific headers: `#include "sensor_pins.h"` (in include/ directory)
+- Headers use relative includes: `#include "../include/debug_utils.h"`
+- Source-to-source includes use simple paths: `#include "sensor_manager.h"`
 
-**Include Guard Pattern:**
-```cpp
-#ifndef FILENAME_H
-#define FILENAME_H
-
-// Content
-
-#endif // FILENAME_H
-```
+**Include Guards:**
+- Traditional guards used: `#ifndef SENSOR_MANAGER_H` / `#define SENSOR_MANAGER_H` / `#endif`
+- Guard format: `UPPERCASE_H` matching filename
+- End comment includes guard name: `#endif // SENSOR_MANAGER_H`
 
 ## Error Handling
 
 **Patterns:**
 - Boolean return values for success/failure: `bool begin()`, `bool captureImage()`
-- Error count tracking in managers: `bmp280ErrorCount`, `captureErrorCount`, `transmitErrorCount`
+- Error count tracking with getter methods: `getBMP280ErrorCount()`, `getCaptureErrorCount()`
+- Status struct with `valid` flag: `BMP280Data.valid`, `ImageData.valid`
 - Validation functions return false on invalid data: `validateBMP280Data()`, `validatePacket()`
-- Serial output for debug/warning/error messages
-- Try-catch NOT used (embedded C++ constraints)
+- Exception handling in main loop only: `try { ... } catch (...) { SYS_ERROR(...); }`
 
-**Error Categories:**
-- Initialization failures: Return false, log to Serial
-- Sensor read failures: Increment error count, mark data invalid
-- Communication failures: Increment error counters, retry logic
-- Critical failures: Emergency mode activation in `SystemState`
+**Validation:**
+- Range checking in sensor validation: `validateBMP280Data()`, `validateGPSData()`
+- NaN checking with `isnan()`
+- Null pointer checks before use
+- Status queries: `isReady()`, `isBMP280Ready()`, `hasValidImage()`
 
-**Logging Hierarchy:**
-```cpp
-SYS_ERROR("Hardware initialization failed");       // System-level errors
-DEBUG_ERROR(SENSORS, "Sensor read failed");        // Categorized errors
-SYS_WARNING("Some hardware issues detected");      // Warnings
-SYS_INFO("System initialization complete");       // Information
-```
+**Error Recovery:**
+- Reset methods available: `resetErrorCounts()`, `resetStatistics()`
+- Reinitialization pattern: `bool reinitialize()` on manager classes
+- Graceful degradation: subsystems marked inactive on init failure
 
 ## Logging
 
-**Framework:** Custom `DebugUtils` class in `src/debug_utils.cpp` and `include/debug_utils.h`
+**Framework:** Custom `DebugUtils` class (`src/debug_utils.h`, `src/debug_utils.cpp`)
 
 **Debug Levels:**
+- `DebugLevel::NONE` - No output
 - `DebugLevel::ERROR` - Critical errors requiring attention
 - `DebugLevel::WARNING` - Non-critical issues
 - `DebugLevel::INFO` - Normal operational messages
@@ -121,16 +124,26 @@ SYS_INFO("System initialization complete");       // Information
 - `DebugCategory::MEMORY` - Memory management
 - `DebugCategory::PERFORMANCE` - Performance metrics
 
-**Patterns:**
+**Logging Macros:**
 ```cpp
-// Category-specific macros (defined in debug_utils.h)
-SYS_ERROR("System error: %s", error);
-SENSOR_INFO("BMP280: P=%.2fPa, T=%.2f°C", pressure, temperature);
-LORA_LOG("Packet transmitted, sequence: %d", sequenceNumber);
-POWER_WARNING("Low battery: %d%%", percentage);
+// Main logging macros
+DEBUG_ERROR(cat, ...)
+DEBUG_WARNING(cat, ...)
+DEBUG_INFO(cat, ...)
+DEBUG_LOG(cat, ...)
+DEBUG_VERBOSE(cat, ...)
 
-// Direct debug instance usage
-Debug.logError(DebugCategory::SYSTEM, __FUNCTION__, __LINE__, "Format", args);
+// Category-specific macros
+SYS_ERROR(...)      // System errors
+SYS_WARNING(...)    // System warnings
+SYS_INFO(...)       // System information
+SENSOR_ERROR(...)   // Sensor errors
+SENSOR_WARNING(...)
+SENSOR_INFO(...)
+CAMERA_ERROR(...)   // Camera errors
+LORA_ERROR(...)     // LoRa errors
+POWER_ERROR(...)    // Power errors
+GPS_ERROR(...)      // GPS errors
 ```
 
 **Conditional Debug Compilation:**
@@ -147,24 +160,17 @@ if (DEBUG_SENSORS) {
 ## Comments
 
 **When to Comment:**
-- File headers describe module purpose and functionality
+- File/module headers describe module purpose and functionality
 - Section banners group related functions
-- Complex algorithms get explanatory comments
+- Complex algorithms get explanatory comments (e.g., barometric altitude formula)
 - Hardware-specific notes explain pin mappings and configurations
-- Temporary workarounds marked with `// Note:` comments
 - Non-obvious optimizations get explanation comments
+- Disabled code comments explain why (e.g., `// Method doesn't exist`)
 
 **JSDoc/TSDoc:**
-- Not used (C++ project)
+- No formal documentation standard detected
 - Function parameters documented in comments near declarations
 - Return values documented in comments
-
-**Comment Banner Pattern:**
-```cpp
-// ===========================
-// Section Name
-// ===========================
-```
 
 ## Function Design
 
@@ -172,12 +178,14 @@ if (DEBUG_SENSORS) {
 - Functions typically kept under 50 lines
 - Complex functions broken into smaller helper functions
 - Private methods in `private:` section handle implementation details
+- Manager classes have many methods (20-40 public methods typical)
 
 **Parameters:**
 - Pass by const reference for large objects: `const TelemetryData& data`
 - Pass by value for primitives and small structs
-- Pointer parameters for output buffers: `uint8_t* buffer, size_t& length`
-- Optional parameters use defaults: `bool begin()`, `uint32_t timeoutMs = 30000`
+- Pointer parameters for output buffers: `uint8_t* data, size_t length`
+- Output parameters by reference: `uint16_t& count`, `size_t& paramLength`
+- Optional parameters use defaults: `uint32_t timeoutMs = 30000`
 
 **Return Values:**
 - `bool` for success/failure operations
@@ -195,9 +203,10 @@ if (DEBUG_SENSORS) {
   ```cpp
   SensorManager& Sensors();
   CameraManager& Camera();
-  LoRaManager& LoRaComm();
+  PacketHandler& PacketMgr();
   PowerManager& PowerMgr();
   SystemState& SysState();
+  DebugUtils& Debug;
   ```
 
 **Barrel Files:**
@@ -206,29 +215,23 @@ if (DEBUG_SENSORS) {
 - Common types in `include/common_types.h`
 - Pin definitions in `include/sensor_pins.h`, `include/camera_pins.h`
 
-**Global Instances:**
-- Defined in `src/balloon_instances.cpp` (file-level static)
-- Accessed via accessor functions to avoid linking issues
-- Pattern: static instance + reference-returning function
+**Global Instance Pattern:**
+- Singleton-style accessor function: `Sensors()`, `Camera()`, `Debug`, `SysState()`, `PacketMgr()`
+- Instance defined in `src/balloon_instances.cpp`
+- Reference return: `SensorManager& Sensors()` (not pointer)
 
 **Initialization Pattern:**
-```cpp
-// Constructor
-ClassName::ClassName() {
-    // Initialize member variables
-}
+All manager classes follow same lifecycle:
+1. Constructor initializes member variables to safe defaults
+2. `begin()` performs hardware initialization
+3. `end()` performs cleanup
+4. `update()` called from main loop for periodic work
 
-// Begin method (called in setup)
-bool ClassName::begin() {
-    // Hardware initialization
-    return true;
-}
-
-// End method
-void ClassName::end() {
-    // Cleanup
-}
-```
+**Class Organization:**
+- Public interface first: constructors, lifecycle, main operations
+- Getters/setters grouped together
+- Private section at bottom with member variables and helper methods
+- Static constants at end of class definition
 
 ## Memory Management
 
@@ -274,7 +277,7 @@ void ClassName::end() {
 **ESP32/Arduino Framework:**
 - `setup()` and `loop()` functions in main application
 - Use of Arduino APIs: `Serial.begin()`, `Wire.begin()`, `digitalRead()`
-- ESP32-specific APIs: `ESP.getFreeHeap()`, `setCpuFrequencyMhz()`
+- ESP32-specific APIs: `ESP.getFreeHeap()`, `ESP.getCpuFreqMHz()`
 - millis()-based timing for non-blocking delays
 
 **Build System:**
@@ -285,4 +288,4 @@ void ClassName::end() {
 
 ---
 
-*Convention analysis: 2026-06-08*
+*Convention analysis: 2026-06-28*

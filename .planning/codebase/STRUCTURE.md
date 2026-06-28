@@ -1,6 +1,6 @@
 # Codebase Structure
 
-**Analysis Date:** 2026-06-08
+**Analysis Date:** 2026-06-28
 
 ## Directory Layout
 
@@ -117,6 +117,7 @@ C:\Work\Prog\Cosmic1\
 - `docs/BALLOON_IMPLEMENTATION_PLAN.md`: Phase-by-phase implementation plan
 - `docs/COMMUNICATION_PROTOCOL.md`: LoRa packet protocol specification
 - `docs/PIN_MAPPING_GUIDE.md`: Hardware pin assignments and validation
+- `docs/DEBUG_CRASH_SOLUTION.md`: I2C crash fix and debugger troubleshooting
 
 **Build Configuration:**
 - `partitions.csv`: Custom partition table for ESP32-S3 (3MB APP + other)
@@ -216,4 +217,4 @@ C:\Work\Prog\Cosmic1\
 
 ---
 
-*Structure analysis: 2026-06-08*
+*Structure analysis: 2026-06-28*

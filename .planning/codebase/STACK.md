@@ -1,6 +1,6 @@
 # Technology Stack
 
-**Analysis Date:** 2026-06-08
+**Analysis Date:** 2026-06-28
 
 ## Languages
 
@@ -39,7 +39,7 @@
 - TinyGPSPlus [1.0.3] - GPS NMEA parsing
 
 **Communication:**
-- LoRa [0.8.0] - LoRa radio communication (Sandeeo Mistry)
+- LoRa [0.8.0] - LoRa radio communication (Sandeep Mistry)
 - WiFi [ESP32] - WiFi connectivity (built-in)
 - HTTP Server [ESP32] - Web server for camera interface
 
@@ -91,4 +91,4 @@
 
 ---
 
-*Stack analysis: 2026-06-08*
+*Stack analysis: 2026-06-28*

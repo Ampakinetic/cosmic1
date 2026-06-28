@@ -1,244 +1,233 @@
-<!-- refreshed: 2026-06-08 -->
+<!-- refreshed: 2026-06-28 -->
 # Architecture
 
-**Analysis Date:** 2026-06-08
+**Analysis Date:** 2026-06-28
 
 ## System Overview
 
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│                        Main Application Layer                           │
-│                         `main_balloon.cpp`                             │
-├──────────────────┬──────────────────┬──────────────────┬──────────────┤
-│   SensorManager  │   CameraManager  │   LoRaManager    │ PowerManager │
-│  `sensor_manager`│ `camera_manager` │   `lora_comm`    │`power_manager`│
-├──────────────────┴──────────────────┴──────────────────┴──────────────┤
-│                      PacketHandler (packet_handler)                    │
-│                         `packet_handler`                               │
-├────────────────────────────────────────────────────────────────────────┤
-│                       SystemState (system_state)                       │
-│                         `system_state`                                 │
-├────────────────────────────────────────────────────────────────────────┤
-│                      DebugUtils (debug_utils)                          │
-│                         `debug_utils`                                  │
-├────────────────────────────────────────────────────────────────────────┤
-│                      Hardware Abstraction Layer                         │
-│     I2C (BMP280) │ UART (GPS) │ SPI (LoRa) │ Camera (DVP/I2C)          │
-│     `sensor_pins.h` │ `camera_pins.h`                                 │
-└────────────────────────────────────────────────────────────────────────┘
-         │                      │                      │
-         ▼                      ▼                      ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│ BMP280 Sensor    │  │ MAX-M10S GPS     │  │ LoRa 900T30D     │
-│ (I2C @ 0x76)     │  │ (UART1)          │  │ (SPI3)           │
-└──────────────────┘  └──────────────────┘  └──────────────────┘
-┌──────────────────┐  ┌──────────────────┐
-│ ESP32-S3 Camera  │  │ Battery Monitor  │
-│ (DVP Interface)  │  │ (ADC)            │
-└──────────────────┘  └──────────────────┘
+```text
+┌─────────────────────────────────────────────────────────────────────────┐
+│                      Main Application Layer                             │
+│                    `src/main_balloon.cpp`                              │
+├──────────────────┬──────────────────┬─────────────────────┬────────────┤
+│   Sensor Manager │   Camera Manager │    LoRa Manager     │ Power Mgr  │
+│  `src/sensor_    │  `src/camera_    │  `src/lora_comm.cpp`│`src/power_ │
+│   manager.cpp`   │   manager.cpp`   │                     │manager.cpp`│
+└────────┬─────────┴────────┬─────────┴──────────┬──────────┴────────────┘
+         │                  │                     │
+         ▼                  ▼                     ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    System State & Coordination                         │
+│         `src/system_state.cpp` + `src/packet_handler.cpp`               │
+└─────────────────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│              Hardware Abstraction Layer (ESP32-S3)                     │
+│    I2C (BMP280) | UART (GPS) | SPI (LoRa) | Camera (DVP)              │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Component Responsibilities
 
 | Component | Responsibility | File |
 |-----------|----------------|------|
-| Main Application | System initialization, main loop coordination, subsystem orchestration | `src/main_balloon.cpp` |
-| SensorManager | BMP280 pressure/temperature sensor, GPS data collection, I2C/UART management | `src/sensor_manager.cpp` |
-| CameraManager | Camera initialization, image capture, thumbnail generation, adaptive settings | `src/camera_manager.cpp` |
-| LoRaManager | LoRa radio communication, packet transmission, adaptive transmission settings | `src/lora_comm.cpp` |
-| PowerManager | Battery monitoring, power state management, deep sleep control | `src/power_manager.cpp` |
-| PacketHandler | Packet serialization, queue management, CRC validation, priority handling | `src/packet_handler.cpp` |
-| SystemState | Flight phase detection, mode management, emergency conditions, statistics | `src/system_state.cpp` |
-| DebugUtils | Logging, performance monitoring, watchdog, debug command processing | `src/debug_utils.cpp` |
-| Global Instances | Centralized singleton access to all managers | `src/balloon_instances.cpp` |
-| Web Server | HTTP streaming, camera controls, base station interface | `src/app_httpd.cpp` |
+| **Main Application** | System initialization, main loop coordination, subsystem orchestration | `src/main_balloon.cpp` |
+| **Sensor Manager** | BMP280 pressure/temperature sensor, GPS data acquisition and validation | `src/sensor_manager.cpp` |
+| **Camera Manager** | ESP32 camera control, image capture, thumbnail generation | `src/camera_manager.cpp` |
+| **LoRa Manager** | LoRa radio communication, packet transmission, adaptive SF | `src/lora_comm.cpp` |
+| **Power Manager** | Battery monitoring, power state management, deep sleep control | `src/power_manager.cpp` |
+| **System State** | Flight phase tracking, mode management, emergency detection | `src/system_state.cpp` |
+| **Packet Handler** | Packet serialization, deserialization, CRC validation, priority queuing | `src/packet_handler.cpp` |
+| **Debug Utils** | Logging, performance monitoring, watchdog feeding | `src/debug_utils.cpp` |
 
 ## Pattern Overview
 
-**Overall:** Layered Architecture with Global Singleton Managers
+**Overall:** Layered Architecture with Singleton Access Pattern
 
 **Key Characteristics:**
-- Single-threaded event loop in `main_balloon.cpp`
-- Global singleton access pattern via `balloon_instances.cpp`
-- Hardware abstraction through dedicated manager classes
-- Priority-based packet queuing for communication
-- State machine for flight phases and system modes
-- Modular subsystem design with clear separation of concerns
+- **Singleton instances** accessed via global functions (Sensors(), Camera(), LoRaComm(), PowerMgr(), SysState(), Debug)
+- **Manager classes** encapsulate hardware-specific functionality
+- **Event-driven** system state changes and emergency handling
+- **Priority-based** packet queue for LoRa transmission
+- **State machine** for flight phases and system modes
 
 ## Layers
 
-**Main Application Layer:**
-- Purpose: Orchestrate all subsystems, manage timing, handle system state
+**Application Layer:**
+- Purpose: Main system orchestration and coordination
 - Location: `src/main_balloon.cpp`
-- Contains: Arduino `setup()` and `loop()`, initialization sequence, timing functions
-- Depends on: All subsystem managers (via global singleton access)
-- Used by: PlatformIO (as entry point via `build_src_filter`)
+- Contains: setup(), loop(), subsystem coordination logic
+- Depends on: All manager classes
+- Used by: PlatformIO (entry point)
 
 **Manager Layer:**
-- Purpose: Abstract hardware interfaces, provide high-level APIs for sensors and peripherals
-- Location: `src/` (manager .cpp/.h files)
-- Contains: SensorManager, CameraManager, LoRaManager, PowerManager, PacketHandler, SystemState, DebugUtils
-- Depends on: Hardware abstraction layer (I2C, SPI, UART, camera driver)
-- Used by: Main application layer
+- Purpose: Hardware abstraction and subsystem management
+- Location: `src/*.cpp` (sensor_manager.cpp, camera_manager.cpp, lora_comm.cpp, power_manager.cpp)
+- Contains: Device-specific initialization, data acquisition, hardware control
+- Depends on: Hardware peripherals (I2C, SPI, UART, Camera)
+- Used by: Application layer
+
+**State & Coordination Layer:**
+- Purpose: System state tracking, packet handling, inter-module communication
+- Location: `src/system_state.cpp`, `src/packet_handler.cpp`
+- Contains: Flight phase detection, mode transitions, packet serialization
+- Depends on: Manager layer for data
+- Used by: Application layer
 
 **Hardware Abstraction Layer:**
-- Purpose: Direct hardware interfacing, pin configuration, low-level protocols
-- Location: `include/sensor_pins.h`, `include/camera_pins.h`, `include/balloon_config.h`
-- Contains: Pin definitions, hardware constants, peripheral configuration
-- Depends on: ESP32-S3 hardware (I2C, SPI, UART, DVP camera interface)
-- Used by: All manager classes
-
-**External Library Layer:**
-- Purpose: Third-party sensor and protocol implementations
-- Location: `.pio/libdeps/` (managed by PlatformIO)
-- Contains: Adafruit_BMP280, TinyGPSPlus, LoRa, esp32-camera, ArduinoJson
-- Depends on: ESP32-S3 platform framework
-- Used by: Manager layer (via include statements)
+- Purpose: Direct hardware interface
+- Location: ESP32-S3 Arduino framework, sensor libraries
+- Contains: I2C (Wire), SPI, UART1, Camera driver
+- Depends on: Physical hardware (BMP280, MAX-M10S, LoRa module, Camera)
+- Used by: Manager layer
 
 ## Data Flow
 
-### Primary Request Path (Balloon Main Loop)
+### Primary Request Path (Sensor → LoRa)
 
-1. **Loop entry** (`main_balloon.cpp:224` - `loop()`)
-2. **State update** (`main_balloon.cpp:558` - `updateSystemState()`)
-   - Calls `SysState().update()` → `system_state.cpp:98`
-3. **Sensor processing** (`main_balloon.cpp:592` - `processSensors()`)
-   - Calls `Sensors().update()` → `sensor_manager.cpp` (not fully implemented)
-   - Retrieves data via `getBMP280Data()` and `getGPSData()`
-4. **Camera processing** (`main_balloon.cpp:619` - `processCamera()`)
-   - Checks capture interval via `Camera().isTimeToCapture()`
-   - Calls `Camera().captureImage()` → `camera_manager.cpp`
-5. **Communication processing** (`main_balloon.cpp:653` - `processCommunications()`)
-   - Currently stub - would call `LoRaComm()` methods
-6. **Power management** (`main_balloon.cpp:685` - `processPowerManagement()`)
-   - Checks battery thresholds, disables camera on low power
-7. **Telemetry transmission** (`main_balloon.cpp:771` - `sendTelemetryData()`)
-   - Calls `PacketMgr().createTelemetryPacket()` → `packet_handler.cpp`
-8. **Timing maintenance** (`main_balloon.cpp:284` - delay for loop interval)
+1. **Sensor Acquisition** (`src/sensor_manager.cpp:136-150`)
+   - BMP280 pressure/temperature reading via I2C
+   - GPS NMEA parsing via UART1
+2. **Data Validation** (`src/sensor_manager.cpp:236-272`)
+   - Range checks for pressure (-40°C to +85°C, 300-1200 hPa)
+   - GPS validation (minimum 4 satellites, HDOP check)
+3. **System State Update** (`src/system_state.cpp:98-122`)
+   - Update altitude, velocity, temperature
+   - Flight phase detection (GROUND → LAUNCH → ASCENT → APEX → DESCENT → LANDING)
+4. **Packet Creation** (`src/packet_handler.cpp`)
+   - Serialize telemetry/GPS data to packet format
+   - Calculate CRC-16, add headers
+5. **LoRa Transmission** (`src/lora_comm.cpp`)
+   - Queue packet by priority (EMERGENCY > GPS > TELEMETRY > CAMERA > STATUS)
+   - Transmit with adaptive spreading factor based on RSSI
 
-### LoRa Packet Transmission Path
+### Image Capture Flow
 
-1. **Packet creation** (`packet_handler.cpp` - `createTelemetryPacket()`)
-2. **Queue insertion** (`packet_handler.cpp` - `addToBuffer()`)
-3. **Priority sorting** (`packet_handler.cpp` - `sortQueueByPriority()`)
-4. **Serialization** (`packet_handler.cpp` - `assemblePacket()`)
-5. **LoRa transmission** (`lora_comm.cpp` - `sendPacket()`)
-6. **ACK/NACK handling** (`lora_comm.cpp` - `handleAcknowledgment()`)
+1. **Camera Capture** (`src/camera_manager.cpp:captureImage()`)
+   - Trigger image capture via esp_camera_fb_get()
+   - Store in PSRAM buffer
+2. **Thumbnail Generation** (`src/camera_manager.cpp:createThumbnail()`)
+   - Resize to QVGA (320x240) for transmission
+3. **Packet Creation** (`src/packet_handler.cpp:createCameraPacket()`)
+   - Chunk image data into 200-byte packets
+4. **LoRa Transmission** (`src/lora_comm.cpp`)
+   - Queue at CAMERA priority (lower than telemetry/GPS)
 
-### Sensor Data Collection Path
+### Power Management Flow
 
-1. **BMP280 read** (`sensor_manager.cpp` - `updateBMP280Data()`)
-   - I2C read via Adafruit_BMP280 library
-   - Data stored in `currentBMP280Data`
-2. **GPS read** (`sensor_manager.cpp` - `updateGPSData()`)
-   - UART1 read via TinyGPSPlus library
-   - NMEA parsing, data stored in `currentGPSData`
-3. **Data validation** (`sensor_manager.cpp` - `validateBMP280Data()`)
-4. **Altitude calculation** (`sensor_manager.cpp` - `calculateAltitude()`)
+1. **Voltage Monitoring** (`src/power_manager.cpp:157-176`)
+   - ADC read from battery sense pin (GPIO 4)
+   - Convert to voltage (voltage divider ratio)
+2. **State Determination** (`src/power_manager.cpp:204-249`)
+   - Compare against thresholds (CRITICAL: 3.2V, LOW: 3.4V, NORMAL: 3.7V)
+3. **Adaptive Response** (`src/power_manager.cpp:358-400`)
+   - CPU frequency scaling (240MHz → 40MHz based on battery)
+   - Camera/disable in low power
+   - Emergency shutdown at critical voltage
+4. **Deep Sleep Entry** (`src/power_manager.cpp:453-463`)
+   - esp_sleep_enable_timer_wakeup()
+   - esp_deep_sleep_start()
 
 **State Management:**
-- Centralized in `SystemState` class with mode/phase enums
-- Event-driven updates via `processEvent()` method
-- Circular buffer for event log (50 events max)
-- Persistent state via NVS (not yet implemented)
+- System state tracked in SystemState singleton (`src/system_state.cpp`)
+- Persistent state stored in NVS/Preferences
+- Flight phase detection based on altitude and velocity
 
 ## Key Abstractions
 
-**Manager Singleton Pattern:**
-- Purpose: Provide global access to subsystem managers
-- Examples: `Sensors()`, `Camera()`, `LoRaComm()`, `PowerMgr()`, `SysState()`, `Debug`
-- Pattern: Static instances in `balloon_instances.cpp` with accessor functions
+**Sensor Data Abstraction:**
+- Purpose: Unified sensor data representation
+- Examples: `BMP280Data`, `GPSData`, `SensorGPSData` in `src/sensor_manager.h`, `include/common_types.h`
+- Pattern: Struct-based data containers with validity flags and timestamps
 
-**Packet Protocol:**
-- Purpose: Structured communication over LoRa with error detection
-- Examples: `PacketType` enum, `PacketHeader` struct, priority queues
-- Pattern: Serialize → Queue → Transmit → ACK/NACK
+**Packet Abstraction:**
+- Purpose: LoRa communication protocol
+- Examples: `Packet`, `QueuedPacket`, `LoRaPacketHeader` in `src/lora_comm.h`, `src/packet_handler.h`
+- Pattern: Header-payload-footer structure with CRC validation
 
-**Flight Phase Machine:**
-- Purpose: Track balloon flight progress for adaptive behavior
-- Examples: `FlightPhase` enum (GROUND, LAUNCH, ASCENT, APEX, DESCENT, LANDING)
-- Pattern: State transitions based on altitude/velocity thresholds
+**Power State Abstraction:**
+- Purpose: Power management state machine
+- Examples: `PowerState`, `PowerSource`, `BatteryStatus` in `src/power_manager.h`
+- Pattern: Enum-based state with thresholds and callbacks
 
-**Emergency Detection:**
-- Purpose: Automatically trigger emergency protocols
-- Examples: Altitude threshold, temperature threshold, velocity threshold
-- Pattern: Continuous monitoring in `SystemState::update()` → `detectEmergencyConditions()`
+**System Mode Abstraction:**
+- Purpose: Flight phase and mode tracking
+- Examples: `SystemMode`, `FlightPhase`, `SystemStatus` in `src/system_state.h`
+- Pattern: Enum-based states with event-driven transitions
 
 ## Entry Points
 
-**Balloon Firmware Entry Point:**
-- Location: `src/main_balloon.cpp`
-- Triggers: PlatformIO build filter (`build_src_filter = +<main_balloon.cpp>`)
+**setup() - Arduino Entry Point:**
+- Location: `src/main_balloon.cpp:150-222`
+- Triggers: PlatformIO/Arduino framework on boot
 - Responsibilities:
-  - System initialization (serial, debug, hardware, subsystems)
-  - Main loop execution at 10 Hz
-  - Telemetry and heartbeat transmission
-  - Emergency handling
+  - Initialize debug system
+  - Initialize hardware (pins, SPI, UART)
+  - Initialize all subsystem managers
+  - Perform system checks
+  - Set initial mode (PRE_FLIGHT, GROUND)
 
-**Base Station Entry Point:**
-- Location: Not yet implemented (placeholder in `platformio.ini`)
-- Triggers: Alternative build filter for base station mode
+**loop() - Main Loop:**
+- Location: `src/main_balloon.cpp:224-292`
+- Triggers: Continuous execution at ~10 Hz
 - Responsibilities:
-  - LoRa packet reception
-  - WiFi AP mode
-  - Web server hosting (`app_httpd.cpp`)
-
-**Web Server Entry Point:**
-- Location: `src/app_httpd.cpp`
-- Triggers: Base station firmware initialization
-- Responsibilities:
-  - HTTP streaming server
-  - Camera control interface
-  - WebSocket for real-time updates
+  - Feed watchdog
+  - Update system state
+  - Process sensors, camera, communications, power
+  - Send periodic telemetry (5s), heartbeat (30s), status (60s)
+  - Maintain loop timing (100ms target)
 
 ## Architectural Constraints
 
-- **Threading:** Single-threaded Arduino framework (no FreeRTOS tasks explicitly created)
-- **Global state:** Module-level singletons in `balloon_instances.cpp` (all managers)
-- **Circular imports:** None detected - clean layer separation
-- **Pin conflicts:** Validated in `sensor_pins.h` (no conflicts with camera pins)
-- **Memory:** PSRAM required for camera (`BOARD_HAS_PSRAM`, `CAMERA_REQUIRES_PSRAM=1`)
-- **Flash:** Custom partition scheme (`partitions.csv`) with 3MB APP space
-- **Timing:** Main loop runs at 10 Hz (100ms interval), sensor reads at configurable intervals
+- **Threading:** Single-threaded event loop (no FreeRTOS tasks)
+- **Global state:** Singleton instances in `src/balloon_instances.cpp` (6 global objects)
+- **Circular imports:** None (forward declarations used where needed)
+- **Hardware constraints:**
+  - PSRAM required for camera operations (8MB)
+  - 16MB flash with 3MB APP partition
+  - CPU frequency scaling (40-240MHz) for power management
+  - LoRa payload limit 240 bytes per packet
 
 ## Anti-Patterns
 
-### Missing Update Methods
+### Duplicate I2C Initialization
 
-**What happens:** Main loop calls methods like `LoRaComm().update()` or `PowerMgr().update()` that don't exist in the implementation
-**Why it's wrong:** Causes compilation errors or requires commented-out code
-**Do this instead:** Implement the missing `update()` methods in each manager class or remove the calls from main loop
+**What happens:** Multiple calls to `Wire.begin()` in different parts of the code
+**Why it's wrong:** ESP32 Wire library generates "Bus already started" warnings and can cause crashes
+**Do this instead:** Initialize I2C once in the manager that owns it (`src/sensor_manager.cpp:83`)
+**Reference:** `docs/DEBUG_CRASH_SOLUTION.md`
 
-### Header Include Conflicts
+### Missing Error Handling in Packet Transmission
 
-**What happens:** Camera headers and sensor headers both define `sensor_t` type, causing compilation conflicts
-**Why it's wrong:** Type redefinition and ambiguous symbol errors
-**Do this instead:** Forward declare sensor classes in headers (`class Adafruit_BMP280; class TinyGPSPlus;`) and include actual headers only in .cpp files (as done in `sensor_manager.h`)
+**What happens:** Packet creation failures logged but not retried
+**Why it's wrong:** Critical telemetry can be lost without retry or queuing
+**Do this instead:** Implement priority queue with retry logic in `src/lora_comm.cpp`
 
-### Stub implementations
+### Blocking Calls in Main Loop
 
-**What happens:** Many methods are stub implementations or commented out (e.g., `processCommunications()`)
-**Why it's wrong:** Appears functional but doesn't actually perform work, misleading developers
-**Do this instead:** Implement full functionality or use TODO comments with clear indications of incomplete status
+**What happens:** Long-running sensor reads or camera captures block the loop
+**Why it's wrong:** Misses watchdog deadlines, prevents timely state updates
+**Do this instead:** Use time-sliced operations, limit sensor read duration to 100ms
 
 ## Error Handling
 
-**Strategy:** Try-catch in main loop with error counting, debug logging throughout
+**Strategy:** Graceful degradation with emergency modes
 
 **Patterns:**
-- Main loop: `try { ... } catch (...) { SYS_ERROR("Exception in main loop"); }`
-- Subsystem init: Return `bool` with SYS_ERROR logging on failure
-- Critical failures: Return from setup(), preventing loop execution
-- Emergency conditions: Trigger emergency mode in SystemState with system-wide impact
+- **Validation flags:** Data structures include `valid` boolean to indicate sensor read success
+- **Error counting:** Each manager tracks error counts (bmp280ErrorCount, gpsErrorCount)
+- **Fallback values:** Use last known good data when sensor fails temporarily
+- **Emergency triggering:** SystemState monitors conditions and triggers emergency mode
+- **Callback registration:** PowerManager supports callbacks for low battery events
 
 ## Cross-Cutting Concerns
 
-**Logging:** Centralized via `DebugUtils` with category-based filtering (SYSTEM, SENSORS, CAMERA, LORA, POWER, GPS)
-**Validation:** Packet CRC validation, sensor data range checking, state transition validation
-**Authentication:** Device ID in packet headers (basic authentication only)
-**Timing:** Interval-based scheduling for telemetry (5s), heartbeat (30s), status (60s)
-**Configuration:** Compile-time defines in `balloon_config.h`, runtime in SystemState
+**Logging:** `src/debug_utils.cpp` provides categorized logging (SYS_INFO, SYS_ERROR, etc.)
+**Validation:** Each manager validates sensor data before use (range checks, NaN detection)
+**Authentication:** None (LoRa transmission is unencrypted)
+**Power Management:** CPU frequency scaling, deep sleep, component disable in low power
 
 ---
 
-*Architecture analysis: 2026-06-08*
+*Architecture analysis: 2026-06-28*

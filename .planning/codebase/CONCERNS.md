@@ -1,6 +1,6 @@
 # Codebase Concerns
 
-**Analysis Date:** 2026-06-08
+**Analysis Date:** 2026-06-28
 
 ## Tech Debt
 
@@ -35,7 +35,7 @@
 - Impact: System state not preserved across reboots, configuration lost on power cycle
 - Functions affected:
   - `saveState()` - "Placeholder for NVS save functionality"
-  - `loadState()` - "Placeholder for NVS load functionality" 
+  - `loadState()` - "Placeholder for NVS load functionality"
   - `saveStatistics()` - "Placeholder for statistics save"
   - `loadStatistics()` - "Placeholder for statistics load"
 - Fix approach:
@@ -53,6 +53,14 @@
   - Re-evaluate pin assignment with complete pin audit
   - Consider using I2C GPIO expander for additional control lines
   - Implement software-based power cycling over I2C where possible
+
+### Dummy Data in Production Code
+**Issue:** Multiple locations use hardcoded dummy values instead of actual sensor readings
+- Files: `src/main_balloon.cpp:584`, `src/main_balloon.cpp:787`
+- Impact: System reports incorrect data, masking real issues with battery monitoring and telemetry
+- Fix approach:
+  - Replace dummy PowerData with actual readings from PowerManager
+  - Use actual battery data from PowerManager instead of hardcoded values
 
 ## Known Bugs
 
@@ -76,6 +84,20 @@
 - Trigger: Antenna placement, cold start time, insufficient satellites
 - Workaround: Allow sufficient time for cold start, verify antenna placement
 - Impact: Cannot track balloon position without GPS fix
+
+### LoRa Frequency Set Dead Code
+**Symptoms:** Unreachable code after return statement in setFrequency()
+- Files: `src/lora_comm.cpp:125-138`
+- Trigger: Calling setFrequency() always succeeds, unreachable code logs failure
+- Workaround: None needed - function always returns true
+- Fix approach: Remove unreachable code (lines 133-137) or add proper error checking
+
+### isReady() Destructive Check
+**Symptoms:** isReady() calls LoRa.begin() which reinitializes the module
+- Files: `src/lora_comm.cpp:664-666`
+- Trigger: Calling isReady() to check LoRa status
+- Workaround: Don't call isReady() in production code
+- Fix approach: Implement non-destructive status check using LoRa module registers
 
 ## Security Considerations
 
@@ -110,6 +132,12 @@
   - Implement signature verification for OTA updates
   - Add rollback mechanism for corrupted updates
 
+### No Packet Authentication
+**Risk:** No verification of packet source
+- Files: `src/lora_comm.cpp`
+- Current mitigation: Basic device ID field (easily spoofed)
+- Recommendations: Implement HMAC-based authentication, add sequence timestamp verification
+
 ## Performance Bottlenecks
 
 ### Blocking LoRa Transmissions
@@ -134,20 +162,31 @@
   - Use lower resolution/thumbnails for real-time needs
   - Queue image operations for background processing
 
+### Blocking GPS Read
+**Problem:** GPS data reading blocks for 100ms in updateGPSData()
+- Files: `src/sensor_manager.cpp:196-199`
+- Cause: Synchronous serial reading with timeout
+- Improvement path: Implement async GPS reading, use hardware serial buffering, reduce timeout
+
+### Memory Allocation in Critical Path
+**Problem:** malloc() calls during image capture and packet handling
+- Files: `src/camera_manager.cpp:255`, `src/lora_comm.cpp:381`
+- Cause: Dynamic memory allocation during time-critical operations
+- Improvement path: Use pre-allocated buffers, implement memory pools, use PSRAM for images
+
 ### Debug Output Overhead
 **Problem:** Extensive debug logging in production builds
 - Files: `src/debug_utils.h`, Multiple source files
 - Impact: Serial output slows main loop, buffer overflows possible
-- Cause: Debug macros enabled in production, high-volume logging
+- Cause: Debug macros (DEBUG_SERIAL, DEBUG_SENSORS, etc.) default to true
 - Improvement path:
+  - Set all DEBUG_* macros to false in release builds
   - Ensure debug builds are separate from release
-  - Add log rate limiting
-  - Implement circular buffer with conditional flush
-  - Use compile-time switches with proper defaults
+  - Move debug output to PSRAM or external storage
 
 ### Main Loop Complexity
 **Problem:** Main loop at 10Hz with numerous subsystem updates
-**Files:** `src/main_balloon.cpp`
+- Files: `src/main_balloon.cpp`
 - Impact: Jitter in timing, potential missed deadlines
 - Cause: Sequential execution without priority scheduling
 - Improvement path:
@@ -160,7 +199,7 @@
 
 ### System State Machine
 **Files:** `src/system_state.cpp`, `src/system_state.h`
-- Why fragile: Complex state transition logic, 1045 lines of code
+- Why fragile: Complex state transition logic, 1045+ lines of code
 - Safe modification:
   - Only modify through `setMode()` and `setFlightPhase()` methods
   - Test all transition paths before deploying
@@ -197,6 +236,18 @@
   - Test fragmentation and reassembly edge cases
   - Monitor heap usage during testing
 - Test coverage: No memory leak testing identified
+
+### Camera Initialization
+**Files:** `src/camera_manager.cpp:83-124`
+- Why fragile: Camera initialization is complex with many failure points, depends on PSRAM availability
+- Safe modification: Test with and without PSRAM, add graceful degradation for missing camera
+- Test coverage: No automated tests for camera initialization failures
+
+### LoRa ACK/NACK Handling
+**Files:** `src/lora_comm.cpp:483-567`
+- Why fragile: Queue manipulation during packet processing, sequence number synchronization
+- Safe modification: Add packet validation before queue operations, implement packet sequence validation
+- Test coverage: No tests for ACK timeout scenarios
 
 ## Scaling Limits
 
@@ -248,6 +299,21 @@
 - Add SD card support for image archival
 - Implement circular buffers for telemetry logging
 - Add data export functionality
+
+### Packet Queue Size
+**Current capacity:** MAX_QUEUE_SIZE packets per priority level
+**Limit:** 5 priority queues × MAX_QUEUE_SIZE, after which packets are dropped
+**Scaling path:** Implement external PSRAM-based queue storage, packet compression
+
+### Image Buffer Size
+**Current capacity:** Single image buffer in PSRAM, plus thumbnail buffer
+**Limit:** QVGA (320x240) images, larger images will fail allocation
+**Scaling path:** Implement chunked image transmission, reduce resolution, add external storage
+
+### GPS Update Rate
+**Current capacity:** GPS read every 2000ms (GPS_READ_INTERVAL_MS)
+**Limit:** Cannot update faster than 500ms due to blocking serial read
+**Scaling path:** Implement interrupt-driven GPS parsing, use hardware GPS with higher update rate
 
 ## Dependencies at Risk
 
@@ -338,6 +404,16 @@
   - Calibrate ADC readings
   - Implement battery percentage calculation
 
+### Flight Phase Detection
+**Problem:** No automatic detection of ascent/descent/apex
+- Files: `src/system_state.cpp` has FlightPhase enum but no automatic detection logic
+- Blocks: Autonomous flight mode switching, adaptive power management
+
+### Packet Loss Recovery
+**Problem:** Store-and-forward not implemented for dropped packets
+- Blocks: Reliable data transmission in poor signal conditions
+- Impact: Data gaps during flight, missing telemetry
+
 ## Test Coverage Gaps
 
 ### No Unit Tests
@@ -401,6 +477,59 @@
   - Document expected behavior for all features
   - Run regression tests before commits
 
+## Hardware-Specific Concerns
+
+### ESP-PROG Debugger Issues
+**Problem:** Hardware debugger not detected by system
+- Files: `docs/DEBUG_CRASH_SOLUTION.md:56-246`
+- Impact: Cannot use hardware debugging, limited to serial debugging
+- Status: Hardware connection issue, not firmware
+- Fix approach: Follow troubleshooting steps in DEBUG_CRASH_SOLUTION.md, or use serial GDB debugging
+
+### Battery Voltage Measurement Accuracy
+**Problem:** ADC-based voltage reading may be inaccurate
+- Files: `src/power_manager.cpp:315-324`
+- Impact: Incorrect battery percentage, premature or late low-power mode activation
+- Fix approach: Calibrate ADC with known voltage reference, implement voltage filtering
+
+### GPS Cold Start Performance
+**Problem:** No GPS A-GPS or time预initialization
+- Files: `src/sensor_manager.cpp:113-130`
+- Impact: Long time to first fix on power-up
+- Fix approach: Implement assisted GPS, add last-known position storage, send time to GPS module
+
+## Code Quality Concerns
+
+### Inconsistent Error Handling
+**Problem:** Mix of bool returns, error codes, and exceptions
+**Files:** Throughout codebase
+**Impact:** Difficult to track errors, inconsistent error recovery
+**Fix approach:** Standardize on one error handling pattern
+
+### Magic Numbers
+**Problem:** Hardcoded values without named constants
+**Files:** `src/lora_comm.cpp:829` (batteryLevel = 330), various timing values
+**Impact:** Difficult to maintain, unclear intent
+**Fix approach:** Replace with named constants
+
+### Commented-Out Code
+**Problem:** Extensive commented code blocks
+**Files:** `src/power_manager.cpp:78-79`, `src/main_balloon.cpp:376-412`
+**Impact:** Code bloat, confusion about actual behavior
+**Fix approach:** Remove or add conditional compilation with clear documentation
+
+### Incomplete Hardware Abstraction
+**Issue:** Power control methods assume hardware capabilities that don't exist
+- Files: `src/power_manager.cpp:79`, `src/power_manager.cpp:102`, `src/power_manager.cpp:509`
+- Impact: Commented-out code indicates individual power rail control is not available; using global power control only limits granularity
+- Fix approach: Either implement individual power control with appropriate hardware, or document the limitation clearly
+
+### Commented-Out Debug Configuration
+**Issue:** Extensive commented-out configuration code in main_balloon.cpp
+- Files: `src/main_balloon.cpp:376-412`
+- Impact: Configuration is simplified/bypassed, reducing system configurability and debug capabilities
+- Fix approach: Either implement the configuration methods or remove the comments
+
 ---
 
-*Concerns audit: 2026-06-08*
+*Concerns audit: 2026-06-28*

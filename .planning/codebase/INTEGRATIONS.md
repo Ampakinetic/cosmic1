@@ -1,6 +1,6 @@
 # External Integrations
 
-**Analysis Date:** 2026-06-08
+**Analysis Date:** 2026-06-28
 
 ## APIs & External Services
 
@@ -182,4 +182,4 @@
 
 ---
 
-*Integration audit: 2026-06-08*
+*Integration audit: 2026-06-28*
