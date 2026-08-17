@@ -1,0 +1,642 @@
+/**
+ * Base Station Firmware
+ * Cosmic1 Phase 1 - Command Protocol & Control
+ *
+ * Base station for balloon camera control
+ * Sends camera commands via LoRa and displays responses
+ * Web interface for user interaction
+ */
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <HardwareSerial.h>
+
+#include "e32_lora.h"
+#include "command_sender.h"
+#include "command_protocol.h"
+
+// ===========================
+// Pin Configuration
+// ===========================
+
+// LoRa E32 (UART2)
+#define LORA_TX_PIN      14
+#define LORA_RX_PIN      48
+#define LORA_M0_PIN      19
+#define LORA_M1_PIN      20
+#define LORA_AUX_PIN     21
+#define LORA_BAUD_RATE   9600
+
+// Status LED
+#define STATUS_LED_PIN   39
+
+// ===========================
+// WiFi Configuration
+// ===========================
+
+const char* WIFI_SSID = "Cosmic1-BaseStation";
+const char* WIFI_PASSWORD = "balloontrack";
+const int WIFI_CHANNEL = 6;
+const int MAX_CONNECTIONS = 4;
+
+// ===========================
+// Web Server
+// ===========================
+
+WebServer server(80);
+
+// ===========================
+// Global Objects
+// ===========================
+
+HardwareSerial LoRaSerial(2);
+
+// ===========================
+// Application State
+// ===========================
+
+struct BaseStationState {
+    bool initialized;
+    bool wifiConnected;
+    uint32_t lastCommandTime;
+    uint16_t lastCommandSequence;
+    uint32_t commandsSent;
+    uint32_t commandsAcked;
+    uint32_t commandsFailed;
+    char lastStatus[64];
+} appState;
+
+// ===========================
+// Function Declarations
+// ===========================
+
+void setup();
+void loop();
+
+void initHardware();
+void initWiFi();
+void initLoRa();
+void initWebServer();
+
+void processLoRa();
+void processCommands();
+void updateStatus();
+
+void handleRoot();
+void handleCapture();
+void handleSetQuality();
+void handleSetBrightness();
+void handleSetContrast();
+void handleStatus();
+void handleNotFound();
+
+void sendResponse(int code, const char* status, const char* message = nullptr);
+void sendHTML(const char* html);
+void updateLED();
+
+// ===========================
+// HTML Templates
+// ===========================
+
+const char HTML_HEADER[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cosmic1 - Base Station Camera Control</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #0f172a;
+            color: #e2e8f0;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            background: linear-gradient(135deg, #1e293b, #334155);
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        .header h1 {
+            color: #60a5fa;
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+        .header p {
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        .status-bar {
+            background: #1e293b;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 10px;
+        }
+        .status-item {
+            text-align: center;
+        }
+        .status-label {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-bottom: 5px;
+        }
+        .status-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #60a5fa;
+        }
+        .card {
+            background: #1e293b;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        .card h2 {
+            color: #60a5fa;
+            font-size: 18px;
+            margin-bottom: 15px;
+        }
+        .button-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+        }
+        button {
+            background: linear-gradient(135deg, #3b82f6, #2563eb);
+            color: white;
+            border: none;
+            padding: 15px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        button:hover {
+            background: linear-gradient(135deg, #60a5fa, #3b82f6);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(96, 165, 250, 0.3);
+        }
+        button:active {
+            transform: translateY(0);
+        }
+        button.danger {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+        }
+        button.danger:hover {
+            background: linear-gradient(135deg, #f87171, #ef4444);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            color: #94a3b8;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            background: #475569;
+            border-radius: 3px;
+            outline: none;
+        }
+        input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            background: #334155;
+            border: 1px solid #475569;
+            border-radius: 5px;
+            color: #e2e8f0;
+            font-size: 14px;
+        }
+        .message {
+            background: #334155;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 10px;
+            font-size: 14px;
+        }
+        .message.success {
+            background: #065f46;
+            border-left: 4px solid #10b981;
+        }
+        .message.error {
+            background: #7f1d1d;
+            border-left: 4px solid #ef4444;
+        }
+        .message.info {
+            background: #1e3a5f;
+            border-left: 4px solid #3b82f6;
+        }
+        .led {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+        }
+        .led.green { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
+        .led.red { background: #ef4444; box-shadow: 0 0 10px #ef4444; }
+        .led.yellow { background: #eab308; box-shadow: 0 0 10px #eab308; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🎈 Cosmic1 Base Station</h1>
+            <p>Camera Control Command Center</p>
+        </div>
+)rawliteral";
+
+const char HTML_FOOTER[] PROGMEM = R"rawliteral(
+    </div>
+    <script>
+        function updateStatus() {
+            fetch('/status')
+                .then(r => r.json())
+                .then(data => {
+                    document.getElementById('cmd-sent').textContent = data.sent;
+                    document.getElementById('cmd-acked').textContent = data.acked;
+                    document.getElementById('cmd-failed').textContent = data.failed;
+                    document.getElementById('cmd-pending').textContent = data.pending;
+
+                    const led = document.getElementById('status-led');
+                    led.className = 'led ' + (data.connected ? 'green' : 'red');
+                })
+                .catch(err => console.error(err));
+        }
+
+        setInterval(updateStatus, 1000);
+        updateStatus();
+    </script>
+</body>
+</html>
+)rawliteral";
+
+// ===========================
+// Setup
+// ===========================
+
+void setup() {
+    Serial.begin(115200);
+    delay(1000);
+
+    Serial.println("\n==========================================");
+    Serial.println("Cosmic1 Base Station - Phase 1");
+    Serial.println("Command Protocol & Control");
+    Serial.println("==========================================\n");
+
+    memset(&appState, 0, sizeof(appState));
+    strncpy(appState.lastStatus, "Initializing...", sizeof(appState.lastStatus) - 1);
+
+    initHardware();
+    initWiFi();
+    initLoRa();
+    initWebServer();
+
+    appState.initialized = true;
+    strcpy(appState.lastStatus, "System ready");
+
+    Serial.println("Setup complete. Base station ready.\n");
+}
+
+// ===========================
+// Main Loop
+// ===========================
+
+void loop() {
+    if (!appState.initialized) {
+        return;
+    }
+
+    // Handle web clients
+    server.handleClient();
+
+    // Process LoRa communication
+    processLoRa();
+
+    // Process command retries and timeouts
+    CmdSender().process();
+
+    // Update status
+    updateStatus();
+
+    // Small delay
+    delay(10);
+}
+
+// ===========================
+// Initialization
+// ===========================
+
+void initHardware() {
+    Serial.println("Initializing hardware...");
+
+    pinMode(STATUS_LED_PIN, OUTPUT);
+    digitalWrite(STATUS_LED_PIN, LOW);
+
+    Serial.println("  Hardware initialized");
+}
+
+void initWiFi() {
+    Serial.println("Initializing WiFi AP...");
+
+    WiFi.mode(WIFI_AP);
+    WiFi.softAP(WIFI_SSID, WIFI_PASSWORD, WIFI_CHANNEL, 0, MAX_CONNECTIONS);
+
+    IPAddress IP = WiFi.softAPIP();
+    Serial.printf("  AP started: %s\n", WIFI_SSID);
+    Serial.printf("  IP address: %s\n", IP.toString().c_str());
+
+    appState.wifiConnected = true;
+}
+
+void initLoRa() {
+    Serial.println("Initializing LoRa E32...");
+
+    if (!E32LoRaModule().begin(&LoRaSerial, LORA_RX_PIN, LORA_TX_PIN,
+                               LORA_M0_PIN, LORA_M1_PIN, LORA_AUX_PIN,
+                               LORA_BAUD_RATE)) {
+        Serial.println("  ERROR: LoRa initialization failed!");
+        return;
+    }
+
+    if (!CmdSender().begin(&E32LoRaModule())) {
+        Serial.println("  ERROR: Command sender initialization failed!");
+        return;
+    }
+
+    Serial.println("  LoRa E32 initialized");
+    Serial.println("  Command sender ready");
+}
+
+void initWebServer() {
+    Serial.println("Initializing web server...");
+
+    server.on("/", HTTP_GET, handleRoot);
+    server.on("/capture", HTTP_POST, handleCapture);
+    server.on("/set-quality", HTTP_POST, handleSetQuality);
+    server.on("/set-brightness", HTTP_POST, handleSetBrightness);
+    server.on("/set-contrast", HTTP_POST, handleSetContrast);
+    server.on("/status", HTTP_GET, handleStatus);
+    server.onNotFound(handleNotFound);
+
+    server.begin();
+    Serial.println("  Web server started");
+}
+
+// ===========================
+// Processing
+// ===========================
+
+void processLoRa() {
+    // Command sender handles incoming ACK/NACK
+    // Just update our statistics
+    appState.commandsSent = CmdSender().getCommandsSent();
+    appState.commandsAcked = CmdSender().getCommandsAcked();
+    appState.commandsFailed = CmdSender().getCommandsFailed();
+}
+
+void updateStatus() {
+    static uint32_t lastUpdate = 0;
+
+    if (millis() - lastUpdate > 5000) {
+        lastUpdate = millis();
+
+        // Blink LED to show activity
+        static bool ledState = false;
+        ledState = !ledState;
+        digitalWrite(STATUS_LED_PIN, ledState ? HIGH : LOW);
+    }
+}
+
+// ===========================
+// Web Handlers
+// ===========================
+
+void handleRoot() {
+    String html = FPSTR(HTML_HEADER);
+
+    // Status bar
+    html += "<div class=\"status-bar\">";
+    html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Status</div>";
+    html += "<div class=\"status-value\"><span id=\"status-led\" class=\"led green\"></span>Ready</div>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Sent</div>";
+    html += "<div class=\"status-value\" id=\"cmd-sent\">0</div>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Acked</div>";
+    html += "<div class=\"status-value\" id=\"cmd-acked\">0</div>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Pending</div>";
+    html += "<div class=\"status-value\" id=\"cmd-pending\">0</div>";
+    html += "</div>";
+    html += "</div>";
+
+    // Capture card
+    html += "<div class=\"card\">";
+    html += "<h2>📸 Manual Capture</h2>";
+    html += "<form action=\"/capture\" method=\"POST\">";
+    html += "<button type=\"submit\">Trigger Camera Capture</button>";
+    html += "</form>";
+    html += "</div>";
+
+    // Settings card
+    html += "<div class=\"card\">";
+    html += "<h2>⚙️ Camera Settings</h2>";
+
+    // Quality
+    html += "<form action=\"/set-quality\" method=\"POST\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>Quality (0-63, lower is better):</label>";
+    html += "<input type=\"number\" name=\"quality\" min=\"0\" max=\"63\" value=\"10\">";
+    html += "</div>";
+    html += "<button type=\"submit\">Set Quality</button>";
+    html += "</form>";
+
+    html += "<hr style=\"border-color: #475569; margin: 20px 0;\">";
+
+    // Brightness
+    html += "<form action=\"/set-brightness\" method=\"POST\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>Brightness (-2 to 2):</label>";
+    html += "<input type=\"number\" name=\"brightness\" min=\"-2\" max=\"2\" value=\"0\">";
+    html += "</div>";
+    html += "<button type=\"submit\">Set Brightness</button>";
+    html += "</form>";
+
+    html += "<hr style=\"border-color: #475569; margin: 20px 0;\">";
+
+    // Contrast
+    html += "<form action=\"/set-contrast\" method=\"POST\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>Contrast (-2 to 2):</label>";
+    html += "<input type=\"number\" name=\"contrast\" min=\"-2\" max=\"2\" value=\"0\">";
+    html += "</div>";
+    html += "<button type=\"submit\">Set Contrast</button>";
+    html += "</form>";
+
+    html += "</div>";
+
+    html += FPSTR(HTML_FOOTER);
+
+    server.send(200, "text/html", html);
+}
+
+void handleCapture() {
+    Serial.println("Capture command requested");
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::CAPTURE_NOW);
+    appState.lastCommandTime = millis();
+    appState.lastCommandSequence = seq;
+
+    if (seq > 0) {
+        sendResponse(200, "OK", "Capture command sent");
+        Serial.printf("  Capture command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send capture command");
+        Serial.println("  ERROR: Failed to send capture command");
+    }
+}
+
+void handleSetQuality() {
+    if (!server.hasArg("quality")) {
+        sendResponse(400, "Error", "Missing quality parameter");
+        return;
+    }
+
+    uint8_t quality = server.arg("quality").toInt();
+
+    if (quality > 63) {
+        sendResponse(400, "Error", "Invalid quality value (0-63)");
+        return;
+    }
+
+    Serial.printf("Set quality command: %d\n", quality);
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_QUALITY, &quality, 1);
+
+    if (seq > 0) {
+        sendResponse(200, "OK", "Quality change command sent");
+        Serial.printf("  Set quality command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send quality command");
+    }
+}
+
+void handleSetBrightness() {
+    if (!server.hasArg("brightness")) {
+        sendResponse(400, "Error", "Missing brightness parameter");
+        return;
+    }
+
+    int8_t brightness = static_cast<int8_t>(server.arg("brightness").toInt());
+
+    if (brightness < -2 || brightness > 2) {
+        sendResponse(400, "Error", "Invalid brightness value (-2 to 2)");
+        return;
+    }
+
+    Serial.printf("Set brightness command: %d\n", brightness);
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_BRIGHTNESS, &brightness, 1);
+
+    if (seq > 0) {
+        sendResponse(200, "OK", "Brightness change command sent");
+        Serial.printf("  Set brightness command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send brightness command");
+    }
+}
+
+void handleSetContrast() {
+    if (!server.hasArg("contrast")) {
+        sendResponse(400, "Error", "Missing contrast parameter");
+        return;
+    }
+
+    int8_t contrast = static_cast<int8_t>(server.arg("contrast").toInt());
+
+    if (contrast < -2 || contrast > 2) {
+        sendResponse(400, "Error", "Invalid contrast value (-2 to 2)");
+        return;
+    }
+
+    Serial.printf("Set contrast command: %d\n", contrast);
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_CONTRAST, &contrast, 1);
+
+    if (seq > 0) {
+        sendResponse(200, "OK", "Contrast change command sent");
+        Serial.printf("  Set contrast command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send contrast command");
+    }
+}
+
+void handleStatus() {
+    String json = "{";
+    json += "\"connected\":true,";
+    json += "\"sent\":" + String(appState.commandsSent) + ",";
+    json += "\"acked\":" + String(appState.commandsAcked) + ",";
+    json += "\"failed\":" + String(appState.commandsFailed) + ",";
+    json += "\"pending\":" + String(CmdSender().hasPendingCommands() ? 1 : 0);
+    json += "}";
+
+    server.send(200, "application/json", json);
+}
+
+void handleNotFound() {
+    sendResponse(404, "Not Found", "Endpoint not found");
+}
+
+// ===========================
+// Response Helpers
+// ===========================
+
+void sendResponse(int code, const char* status, const char* message) {
+    String json = "{";
+    json += "\"status\":\"" + String(status) + "\"";
+
+    if (message) {
+        json += ",\"message\":\"" + String(message) + "\"";
+    }
+
+    json += "}";
+
+    server.send(code, "application/json", json);
+}
+
+void sendHTML(const char* html) {
+    server.send(200, "text/html", html);
+}
+
+void updateLED() {
+    static uint32_t lastBlink = 0;
+    static bool ledState = false;
+
+    if (millis() - lastBlink > 1000) {
+        lastBlink = millis();
+        ledState = !ledState;
+        digitalWrite(STATUS_LED_PIN, ledState ? HIGH : LOW);
+    }
+}
