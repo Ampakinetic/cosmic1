@@ -2,24 +2,26 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: unknown
-stopped_at: Phase 1 context gathered
-last_updated: "2026-08-17T22:14:47.486Z"
+current_phase: 1
+status: executing
+last_updated: "2026-08-18T12:00:00.000Z"
 progress:
-  total_phases: 1
+  total_phases: 3
   completed_phases: 0
-  total_plans: 0
+  total_plans: 1
   completed_plans: 0
+stopped_at: null
+current_phase_name: command-protocol-control
 ---
 
 # Project State
 
-**Last Updated:** 2025-08-18
+**Last Updated:** 2026-08-18
 
 ## Current Status
 
 **Project:** Cosmic1 Base Station Camera Control Extension
-**Phase:** Planning Complete
+**Phase:** Phase 1 — plan 01-01 executed, pending verification
 **Milestone:** v1.0
 
 ## Progress
@@ -27,31 +29,49 @@ progress:
 - ✅ Project initialized
 - ✅ Requirements defined (24 requirements)
 - ✅ Roadmap created (3 phases)
-- ⏳ Ready for Phase 1 execution
+- ✅ Phase 1 plan created
+- ✅ Phase 1 plan 01-01 executed (T1–T8 tracer, committed via closeout — see 01-01-SUMMARY.md)
+- ⏳ Phase 1 verification (verifier + hardware UAT)
+- ⏳ Phase 1 gap closure: auto-capture timer (CTRL-03/04), full settings UI (CTRL-02)
+- ⏳ Phase 2: Image Transmission (pending)
 
 ## Current Phase
 
 **Phase 1: Command Protocol & Control**
 
-- Status: Not started
+- Status: executing — tracer complete, expansions partial, verification not yet run
 - Requirements: 6 (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02)
 - Goal: Establish bidirectional LoRa communication for camera control
 
+### Delivered (code-level, builds green on both targets)
+
+- Command protocol spec + CRC16 serializer (`include/command_protocol.h`, `src/command_protocol.cpp`)
+- E32-900T30D UART LoRa driver (`include/e32_lora.h`, `src/e32_lora.cpp`)
+- Base station sender with retry (3x, 2000ms ACK timeout) (`src/command_sender.cpp`)
+- Balloon command handler with ACK/NACK + CameraManager wiring (`src/command_handler.cpp`)
+- Base station web UI: capture trigger + quality/brightness/contrast forms (`src/main_basestation.cpp`)
+- Balloon integration + `esp32-s3-basestation` build env (`src/main_balloon.cpp`, `platformio.ini`)
+
+### Known Gaps (documented in 01-01-SUMMARY.md)
+
+- Auto-capture interval timer is a placeholder — CTRL-03/CTRL-04 not functionally delivered
+- Web UI exposes 3 of 7 camera settings — CTRL-02 partial
+- No hardware tests run yet (T9/E5/A5 require radios + camera)
+
 ## Project Reference
 
-See: `.planning/PROJECT.md` (updated 2025-08-18)
+See: `.planning/PROJECT.md`
 
 **Core value:** Users can remotely control the balloon camera and view captured images through the base station web interface, with real-time telemetry and map tracking always available.
 
-**Current focus:** Phase 1 - Command Protocol & Control
+**Current focus:** Phase 01 — command-protocol-control (verification)
 
 ## Next Steps
 
-1. Run `/gsd-discuss-phase 1` to gather context and clarify approach
-2. Run `/gsd-plan-phase 1` to create detailed plan
-3. Execute Phase 1 plan
-4. Verify Phase 1 completion
-5. Continue to Phase 2
+1. **Code review gate:** `/gsd-code-review 1` (auto-invoked by execute-phase)
+2. **Phase verification:** verifier runs; expected gaps on CTRL-03/CTRL-04
+3. **Gap closure:** `/gsd-plan-phase 1 --gaps` then `/gsd-execute-phase 1 --gaps-only`
+4. **Hardware UAT:** flash both units, run command-flow tests (`/gsd-verify-work 1`)
 
 ## Configuration
 
@@ -69,10 +89,4 @@ See: `.planning/PROJECT.md` (updated 2025-08-18)
 **Git Tracking:** Enabled
 
 ---
-*State initialized: 2025-08-18*
-
-## Session
-
-**Last session:** 2026-08-17T22:14:47.471Z
-**Stopped at:** Phase 1 context gathered
-**Resume file:** .planning/phases/01-command-protocol-control/01-CONTEXT.md
+*State updated: 2026-08-18 - plan 01-01 closeout complete, pending verification*
