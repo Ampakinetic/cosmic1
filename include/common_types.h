@@ -32,7 +32,11 @@ enum class PacketType : uint8_t {
     COMMAND_ACK = 0x06,
     STATUS = 0x07,
     DEBUG = 0x08,
-    
+
+    // Camera command and response types (Phase 1)
+    COMMAND = 0x10,
+    RESPONSE = 0x11,
+
     // LoRa-specific types (for compatibility)
     GPS = 0x02,
     CAMERA_THUMB = 0x03,

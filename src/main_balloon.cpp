@@ -10,6 +10,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <Preferences.h>
+#include <HardwareSerial.h>
 #include "balloon_config.h"
 #include "board_config.h"
 #include "sensor_pins.h"
@@ -23,6 +24,10 @@
 #include "packet_handler.h"
 #include "system_state.h"
 #include "debug_utils.h"
+
+// Phase 1: Command Protocol & Control
+#include "e32_lora.h"
+#include "command_handler.h"
 
 // Forward declarations for missing types
 struct PowerData {
@@ -40,9 +45,13 @@ struct PowerData {
 // Global Configuration
 // ===========================
 
+#ifndef FIRMWARE_VERSION
 #define FIRMWARE_VERSION "2.0.0"
+#endif
 #define BUILD_DATE __DATE__ " " __TIME__
+#ifndef SYSTEM_NAME
 #define SYSTEM_NAME "Cosmic1-Balloon"
+#endif
 
 // Timing Constants
 #define SETUP_DELAY_MS           1000
@@ -365,7 +374,22 @@ bool initializeSubsystems() {
         return false;
     }
     SYS_INFO("System state initialized");
-    
+
+    // Phase 1: Initialize E32 LoRa module and Command Handler
+    HardwareSerial* loraSerial = &Serial2;
+    if (!E32LoRaModule().begin(loraSerial, 48, 14, 19, 20, 21, 9600)) {
+        SYS_WARNING("E32 LoRa module initialization failed");
+    } else {
+        SYS_INFO("E32 LoRa module initialized");
+    }
+
+    if (!CmdHandler().begin(&E32LoRaModule(), &Camera())) {
+        SYS_WARNING("Command handler initialization failed");
+    } else {
+        SYS_INFO("Command handler initialized");
+    }
+    appState.communicationActive = true;
+
     SYS_INFO("All subsystems initialized successfully");
     return true;
 }
@@ -723,13 +747,16 @@ void processPowerManagement() {
 
 void processPacketHandling() {
     // PacketMgr().update(); // Method doesn't exist
-    
+
     // Check for packet handler errors - simplified for now
     // float packetLossRate = PacketMgr().getPacketLossRate();
     // if (packetLossRate > 10.0f) {
     //     SYS_WARNING("High packet loss rate: %.1f%%", packetLossRate);
     // }
-    
+
+    // Process incoming camera commands (Phase 1)
+    CmdHandler().process();
+
     // Update subsystem state
     // SysState().setSubsystemState("lora", SubsystemState::ACTIVE);
 }
