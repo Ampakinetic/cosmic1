@@ -1,0 +1,705 @@
+#include "command_handler.h"
+
+// Debug configuration
+#ifndef DEBUG_COMMAND_HANDLER
+#define DEBUG_COMMAND_HANDLER true
+#endif
+
+// ===========================
+// Static Instance
+// ===========================
+
+static CommandHandler commandHandlerInstance;
+CommandHandler& CmdHandler() {
+    return commandHandlerInstance;
+}
+
+// ===========================
+// Constructor/Destructor
+// ===========================
+
+CommandHandler::CommandHandler()
+    : lora(nullptr)
+    , camera(nullptr)
+    , initialized(false)
+    , receiveIndex(0)
+    , inPacket(false)
+    , hasCommand(false)
+    , commandsReceived(0)
+    , commandsExecuted(0)
+    , commandsFailed(0)
+{
+}
+
+CommandHandler::~CommandHandler() {
+    end();
+}
+
+// ===========================
+// Initialization
+// ===========================
+
+bool CommandHandler::begin(E32LoRa* lora, CameraManager* camera) {
+    if (!lora || !camera) {
+        return false;
+    }
+
+    this->lora = lora;
+    this->camera = camera;
+
+    resetReceiveState();
+
+    initialized = true;
+
+    if (DEBUG_COMMAND_HANDLER) {
+        Serial.println("CommandHandler: Initialized");
+    }
+
+    return true;
+}
+
+void CommandHandler::end() {
+    initialized = false;
+    resetReceiveState();
+}
+
+// ===========================
+// Main Processing
+// ===========================
+
+void CommandHandler::process() {
+    if (!initialized || !lora) {
+        return;
+    }
+
+    // Read all available bytes from LoRa
+    while (lora->available() > 0) {
+        uint8_t byte = lora->read();
+        processIncomingByte(byte);
+    }
+
+    // Process complete command if received
+    if (hasCommand && !pendingCommand.processing) {
+        pendingCommand.processing = true;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Executing command %02X\n",
+                         static_cast<uint8_t>(pendingCommand.packet.cmd));
+        }
+
+        CommandResult result = executeCommand(pendingCommand.packet);
+
+        // Send response
+        ResponsePacket response;
+        if (result.success) {
+            response = CommandProtocol::createACK(
+                pendingCommand.packet.sequenceNumber,
+                result.responseData,
+                result.responseLength
+            );
+        } else {
+            response = CommandProtocol::createNACK(
+                pendingCommand.packet.sequenceNumber,
+                result.responseType,
+                result.message
+            );
+        }
+
+        sendResponse(response);
+
+        // Clear pending command
+        hasCommand = false;
+        pendingCommand.processing = false;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Command %s - %s\n",
+                         CommandProtocol::commandToString(pendingCommand.packet.cmd),
+                         result.success ? "SUCCESS" : "FAILED");
+        }
+    }
+}
+
+// ===========================
+// Command Execution
+// ===========================
+
+CommandResult CommandHandler::executeCommand(const CommandPacket& cmd) {
+    CommandResult result{};
+    result.success = false;
+    result.responseType = ResponseType::NACK;
+    result.responseLength = 0;
+
+    commandsReceived++;
+
+    // Check if camera is ready
+    if (!camera->isReady()) {
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Camera not ready", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    // Dispatch to handler based on command type
+    switch (cmd.cmd) {
+        case CameraCommand::CAPTURE_NOW:
+            return handleCaptureNow(cmd);
+
+        case CameraCommand::SET_RESOLUTION:
+            return handleSetResolution(cmd);
+
+        case CameraCommand::SET_QUALITY:
+            return handleSetQuality(cmd);
+
+        case CameraCommand::SET_BRIGHTNESS:
+            return handleSetBrightness(cmd);
+
+        case CameraCommand::SET_CONTRAST:
+            return handleSetContrast(cmd);
+
+        case CameraCommand::SET_SATURATION:
+            return handleSetSaturation(cmd);
+
+        case CameraCommand::SET_EXPOSURE:
+            return handleSetExposure(cmd);
+
+        case CameraCommand::SET_WB_MODE:
+            return handleSetWBMode(cmd);
+
+        case CameraCommand::AUTO_CAPTURE_ENABLE:
+            return handleAutoCaptureEnable(cmd);
+
+        case CameraCommand::AUTO_CAPTURE_DISABLE:
+            return handleAutoCaptureDisable(cmd);
+
+        case CameraCommand::GET_STATUS:
+            return handleGetStatus(cmd);
+
+        default:
+            result.responseType = ResponseType::NACK_INVALID;
+            strncpy(result.message, "Unknown command", sizeof(result.message) - 1);
+            commandsFailed++;
+            return result;
+    }
+}
+
+// ===========================
+// Command Handlers
+// ===========================
+
+CommandResult CommandHandler::handleCaptureNow(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    if (DEBUG_COMMAND_HANDLER) {
+        Serial.println("CommandHandler: CAPTURE_NOW");
+    }
+
+    // Capture image
+    if (camera->captureImage()) {
+        result.success = true;
+        result.responseType = ResponseType::ACK;
+
+        // Return image ID as response data
+        static uint16_t imageId = 0;
+        imageId++;
+
+        result.responseData[0] = (imageId >> 8) & 0xFF;
+        result.responseData[1] = imageId & 0xFF;
+        result.responseLength = 2;
+
+        commandsExecuted++;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Captured image ID %d\n", imageId);
+        }
+    } else {
+        result.success = false;
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Capture failed", sizeof(result.message) - 1);
+        commandsFailed++;
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleSetResolution(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    if (cmd.payloadLength < 1) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing parameter", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    FrameSize fs = static_cast<FrameSize>(cmd.payload[0]);
+    framesize_t espFs;
+
+    if (!framesizeFromInt(fs, espFs)) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid resolution", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    if (camera->setFrameSize(espFs)) {
+        result.success = true;
+        result.responseType = ResponseType::ACK;
+
+        result.responseData[0] = static_cast<uint8_t>(fs);
+        result.responseLength = 1;
+
+        commandsExecuted++;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Set resolution to %d\n", static_cast<int>(fs));
+        }
+    } else {
+        result.success = false;
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Set resolution failed", sizeof(result.message) - 1);
+        commandsFailed++;
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleSetQuality(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    if (cmd.payloadLength < 1) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing parameter", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    uint8_t quality = cmd.payload[0];
+
+    if (quality > 63) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid quality", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    if (camera->setQuality(quality)) {
+        result.success = true;
+        result.responseType = ResponseType::ACK;
+
+        result.responseData[0] = quality;
+        result.responseLength = 1;
+
+        commandsExecuted++;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Set quality to %d\n", quality);
+        }
+    } else {
+        result.success = false;
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Set quality failed", sizeof(result.message) - 1);
+        commandsFailed++;
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleSetBrightness(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    if (cmd.payloadLength < 1) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing parameter", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    int8_t brightness = static_cast<int8_t>(cmd.payload[0]);
+
+    if (brightness < -2 || brightness > 2) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid brightness", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    if (camera->setBrightness(brightness)) {
+        result.success = true;
+        result.responseType = ResponseType::ACK;
+
+        result.responseData[0] = static_cast<uint8_t>(brightness);
+        result.responseLength = 1;
+
+        commandsExecuted++;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Set brightness to %d\n", brightness);
+        }
+    } else {
+        result.success = false;
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Set brightness failed", sizeof(result.message) - 1);
+        commandsFailed++;
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleSetContrast(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    if (cmd.payloadLength < 1) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing parameter", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    int8_t contrast = static_cast<int8_t>(cmd.payload[0]);
+
+    if (contrast < -2 || contrast > 2) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid contrast", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    if (camera->setContrast(contrast)) {
+        result.success = true;
+        result.responseType = ResponseType::ACK;
+
+        result.responseData[0] = static_cast<uint8_t>(contrast);
+        result.responseLength = 1;
+
+        commandsExecuted++;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Set contrast to %d\n", contrast);
+        }
+    } else {
+        result.success = false;
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Set contrast failed", sizeof(result.message) - 1);
+        commandsFailed++;
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleSetSaturation(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    if (cmd.payloadLength < 1) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing parameter", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    int8_t saturation = static_cast<int8_t>(cmd.payload[0]);
+
+    if (saturation < -2 || saturation > 2) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid saturation", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    // Set saturation using sensor (not exposed in CameraManager yet)
+    // For now, just acknowledge
+    result.success = true;
+    result.responseType = ResponseType::ACK;
+    result.responseData[0] = static_cast<uint8_t>(saturation);
+    result.responseLength = 1;
+    commandsExecuted++;
+
+    if (DEBUG_COMMAND_HANDLER) {
+        Serial.printf("CommandHandler: Set saturation to %d (placeholder)\n", saturation);
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleSetExposure(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    if (cmd.payloadLength < 1) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing parameter", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    int8_t exposure = static_cast<int8_t>(cmd.payload[0]);
+
+    if (exposure < -2 || exposure > 2) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid exposure", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    // Set exposure using sensor (not exposed in CameraManager yet)
+    // For now, just acknowledge
+    result.success = true;
+    result.responseType = ResponseType::ACK;
+    result.responseData[0] = static_cast<uint8_t>(exposure);
+    result.responseLength = 1;
+    commandsExecuted++;
+
+    if (DEBUG_COMMAND_HANDLER) {
+        Serial.printf("CommandHandler: Set exposure to %d (placeholder)\n", exposure);
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleSetWBMode(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    if (cmd.payloadLength < 1) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing parameter", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    WhiteBalanceMode wbMode = static_cast<WhiteBalanceMode>(cmd.payload[0]);
+
+    if (static_cast<int>(wbMode) > 4) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid WB mode", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    // Set white balance using sensor (not exposed in CameraManager yet)
+    // For now, just acknowledge
+    result.success = true;
+    result.responseType = ResponseType::ACK;
+    result.responseData[0] = static_cast<uint8_t>(wbMode);
+    result.responseLength = 1;
+    commandsExecuted++;
+
+    if (DEBUG_COMMAND_HANDLER) {
+        Serial.printf("CommandHandler: Set WB mode to %d (placeholder)\n", static_cast<int>(wbMode));
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleAutoCaptureEnable(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    if (cmd.payloadLength < 4) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing interval", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    uint32_t intervalMs = CommandProtocol::readUint32(cmd.payload);
+
+    if (intervalMs < 1000 || intervalMs > 3600000) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid interval", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    // Auto-capture will be implemented in Phase 1 expansion
+    // For now, just acknowledge
+    result.success = true;
+    result.responseType = ResponseType::ACK;
+    CommandProtocol::writeUint32(result.responseData, intervalMs);
+    result.responseLength = 4;
+    commandsExecuted++;
+
+    if (DEBUG_COMMAND_HANDLER) {
+        Serial.printf("CommandHandler: Auto-capture enabled at %lu ms (placeholder)\n", intervalMs);
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleAutoCaptureDisable(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    // Auto-capture will be implemented in Phase 1 expansion
+    // For now, just acknowledge
+    result.success = true;
+    result.responseType = ResponseType::ACK;
+    commandsExecuted++;
+
+    if (DEBUG_COMMAND_HANDLER) {
+        Serial.println("CommandHandler: Auto-capture disabled (placeholder)");
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleGetStatus(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    ResponseStatusData status{};
+    status.imageId = 0; // TODO: Track last image ID
+    status.autoCaptureEnabled = 0; // TODO: Track auto-capture state
+    status.autoCaptureInterval = 0;
+    status.currentResolution = static_cast<FrameSize>(0x06); // QVGA default
+    status.currentQuality = 10; // Default quality
+    status.currentBrightness = 0;
+    status.currentContrast = 0;
+
+    result.success = true;
+    result.responseType = ResponseType::STATUS;
+    memcpy(result.responseData, &status, sizeof(ResponseStatusData));
+    result.responseLength = sizeof(ResponseStatusData);
+    commandsExecuted++;
+
+    if (DEBUG_COMMAND_HANDLER) {
+        Serial.println("CommandHandler: Status sent");
+    }
+
+    return result;
+}
+
+// ===========================
+// Response Sending
+// ===========================
+
+bool CommandHandler::sendResponse(const ResponsePacket& response) {
+    if (!initialized || !lora) {
+        return false;
+    }
+
+    uint8_t buffer[128];
+    size_t length = 0;
+
+    if (!CommandProtocol::serializeResponse(response, buffer, length)) {
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.println("CommandHandler: Failed to serialize response");
+        }
+        return false;
+    }
+
+    bool sent = lora->transmit(buffer, length);
+
+    if (DEBUG_COMMAND_HANDLER) {
+        Serial.printf("CommandHandler: Response %s - %d bytes\n",
+                     sent ? "sent" : "failed", length);
+    }
+
+    return sent;
+}
+
+// ===========================
+// Reception Helpers
+// ===========================
+
+void CommandHandler::processIncomingByte(uint8_t byte) {
+    if (!inPacket) {
+        // Looking for start sequence
+        if (receiveIndex == 0 && byte == CMD_START_BYTE1) {
+            receiveBuffer[receiveIndex++] = byte;
+        } else if (receiveIndex == 1 && byte == CMD_START_BYTE2) {
+            receiveBuffer[receiveIndex++] = byte;
+            inPacket = true;
+        } else {
+            receiveIndex = 0; // Reset
+        }
+    } else {
+        // In packet
+        receiveBuffer[receiveIndex++] = byte;
+
+        // Check for end sequence
+        if (receiveIndex >= 2) {
+            if (receiveBuffer[receiveIndex - 2] == CMD_END_BYTE1 &&
+                receiveBuffer[receiveIndex - 1] == CMD_END_BYTE2) {
+                // Complete packet received
+                if (validatePacket(receiveBuffer, receiveIndex)) {
+                    CommandPacket cmd;
+                    if (CommandProtocol::deserializeCommand(receiveBuffer, receiveIndex, cmd)) {
+                        pendingCommand.packet = cmd;
+                        pendingCommand.receivedTime = millis();
+                        hasCommand = true;
+                    }
+                }
+                resetReceiveState();
+            } else if (receiveIndex >= sizeof(receiveBuffer)) {
+                // Buffer overflow
+                resetReceiveState();
+            }
+        }
+    }
+}
+
+void CommandHandler::resetReceiveState() {
+    receiveIndex = 0;
+    inPacket = false;
+    memset(receiveBuffer, 0, sizeof(receiveBuffer));
+}
+
+bool CommandHandler::validatePacket(const uint8_t* buffer, size_t length) {
+    if (length < CMD_HEADER_SIZE + 4) {
+        return false;
+    }
+
+    return CommandProtocol::validateCRC(buffer, length);
+}
+
+// ===========================
+// Camera Helpers
+// ===========================
+
+bool CommandHandler::framesizeFromInt(FrameSize fs, framesize_t& espFramesize) {
+    switch (fs) {
+        case FrameSize::FRAMESIZE_QQVGA:
+            espFramesize = FRAMESIZE_QQVGA;
+            return true;
+        case FrameSize::FRAMESIZE_QVGA:
+            espFramesize = FRAMESIZE_QVGA;
+            return true;
+        case FrameSize::FRAMESIZE_HQVGA:
+            espFramesize = FRAMESIZE_HQVGA;
+            return true;
+        case FrameSize::FRAMESIZE_QXGA:
+            espFramesize = FRAMESIZE_QXGA;
+            return true;
+        case FrameSize::FRAMESIZE_VGA:
+            espFramesize = FRAMESIZE_VGA;
+            return true;
+        case FrameSize::FRAMESIZE_SVGA:
+            espFramesize = FRAMESIZE_SVGA;
+            return true;
+        case FrameSize::FRAMESIZE_XGA:
+            espFramesize = FRAMESIZE_XGA;
+            return true;
+        case FrameSize::FRAMESIZE_SXGA:
+            espFramesize = FRAMESIZE_SXGA;
+            return true;
+        case FrameSize::FRAMESIZE_UXGA:
+            espFramesize = FRAMESIZE_UXGA;
+            return true;
+        default:
+            return false;
+    }
+}
+
+// ===========================
+// Statistics and Debug
+// ===========================
+
+void CommandHandler::resetStatistics() {
+    commandsReceived = 0;
+    commandsExecuted = 0;
+    commandsFailed = 0;
+}
+
+void CommandHandler::printStatus() const {
+    Serial.println("=== Command Handler Status ===");
+    Serial.printf("Initialized: %s\n", initialized ? "Yes" : "No");
+    Serial.printf("Commands Received: %lu\n", commandsReceived);
+    Serial.printf("Commands Executed: %lu\n", commandsExecuted);
+    Serial.printf("Commands Failed: %lu\n", commandsFailed);
+    Serial.printf("Has Pending Command: %s\n", hasCommand ? "Yes" : "No");
+}
