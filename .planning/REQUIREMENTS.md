@@ -37,7 +37,7 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 ### Priority & Reliability
 
 - [ ] **PRI-01**: Telemetry data always has priority over camera/image data on LoRa link
-- [ ] **PRI-02**: Camera commands use retry mechanism with timeout for failed transmissions
+- [x] **PRI-02**: Camera commands use retry mechanism with timeout for failed transmissions
 - [ ] **PRI-03**: System gracefully handles LoRa bandwidth limitations
 
 ### Alerts & Monitoring
@@ -54,6 +54,7 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 Deferred to future release. Tracked but not in current roadmap.
 
 ### Advanced Features
+
 - **ADV-01**: Multiple balloon tracking support
 - **ADV-02**: Advanced camera features (face detection, AI processing)
 - **ADV-03**: Satellite fallback communication (Iridium)
@@ -96,7 +97,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WEB-05 | Phase 3 | Pending |
 | WEB-06 | - | Complete (existing) |
 | PRI-01 | Phase 2 | Pending |
-| PRI-02 | Phase 1 | Pending |
+| PRI-02 | Phase 1 | Complete |
 | PRI-03 | Phase 2 | Pending |
 | ALRT-01 | Phase 3 | Pending |
 | ALRT-02 | Phase 3 | Pending |
@@ -106,6 +107,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ALRT-06 | Phase 3 | Pending |
 
 **Coverage:**
+
 - v1 requirements: 24 total
 - Mapped to phases: 24
 - Unmapped: 0 ✓

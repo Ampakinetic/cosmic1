@@ -45,13 +45,13 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 4 plans (01-01 executed; 01-02..01-04 are gap closure from 01-VERIFICATION.md)
+**Plans:** 1/4 plans executed (01-01 executed; 01-02..01-04 are gap closure from 01-VERIFICATION.md)
 
 Plans:
 **Wave 1**
 
 - [x] PLAN.md — executed tracer (non-standard filename; summary at 01-01-SUMMARY.md)
-- [ ] 01-02-PLAN.md — Protocol integrity: CRC/sequence fix, 240-byte limits, length-driven framing, retry terminal states
+- [x] 01-02-PLAN.md — Protocol integrity: CRC/sequence fix, 240-byte limits, length-driven framing, retry terminal states
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
