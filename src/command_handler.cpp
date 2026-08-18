@@ -1,5 +1,6 @@
 #include "command_handler.h"
 #include "auto_capture.h"
+#include "image_tx_manager.h"
 
 // Debug configuration
 #ifndef DEBUG_COMMAND_HANDLER
@@ -177,6 +178,9 @@ CommandResult CommandHandler::executeCommand(const CommandPacket& cmd) {
 
         case CameraCommand::GET_STATUS:
             return handleGetStatus(cmd);
+
+        case CameraCommand::IMAGE_WINDOW_REQUEST:
+            return handleImageWindowRequest(cmd);
 
         default:
             result.responseType = ResponseType::NACK_INVALID;
@@ -593,6 +597,60 @@ CommandResult CommandHandler::handleGetStatus(const CommandPacket& cmd) {
 
     if (DEBUG_COMMAND_HANDLER) {
         Serial.println("CommandHandler: Status sent");
+    }
+
+    return result;
+}
+
+CommandResult CommandHandler::handleImageWindowRequest(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    // PayloadImageWindowRequest: imageId BE16, startChunk BE16, count u8
+    if (cmd.payloadLength < 5) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing window params", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    // All validation and arming lives in ImageTx (T-02-04); this handler
+    // only maps the outcome onto the existing response machinery so the
+    // base's tracked-command table, terminal-state guard, and duplicate-ACK
+    // guard apply unchanged (Phase 1 CR-03 lesson applied to chunk ACKs)
+    WindowRequestResult outcome = ImageTx().handleWindowRequest(cmd.payload, cmd.payloadLength);
+
+    switch (outcome) {
+        case WindowRequestResult::ARMED:
+            result.success = true;
+            result.responseType = ResponseType::ACK;
+            // Echo the armed window (imageId BE16, startChunk BE16, count u8)
+            // so the base can confirm exactly what was armed
+            memcpy(result.responseData, cmd.payload, 5);
+            result.responseLength = 5;
+            commandsExecuted++;
+
+            if (DEBUG_COMMAND_HANDLER) {
+                Serial.println("CommandHandler: IMAGE_WINDOW_REQUEST armed");
+            }
+            break;
+
+        case WindowRequestResult::UNKNOWN_IMAGE:
+            result.responseType = ResponseType::NACK_INVALID;
+            strncpy(result.message, "Unknown image", sizeof(result.message) - 1);
+            commandsFailed++;
+            break;
+
+        case WindowRequestResult::INVALID_RANGE:
+            result.responseType = ResponseType::NACK_INVALID;
+            strncpy(result.message, "Invalid window", sizeof(result.message) - 1);
+            commandsFailed++;
+            break;
+
+        case WindowRequestResult::BUSY:
+            result.responseType = ResponseType::NACK_BUSY;
+            strncpy(result.message, "Window busy", sizeof(result.message) - 1);
+            commandsFailed++;
+            break;
     }
 
     return result;

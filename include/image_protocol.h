@@ -64,6 +64,15 @@ static constexpr uint8_t  IMG_TX_QUEUE_DEPTH         = 3;
 // an image incomplete
 static constexpr uint8_t  IMG_RETRANSMIT_MAX_PASSES  = 3;
 
+// Full-image transfer cap (research Q4 resolution): fulls larger than this
+// never arm a pull — the balloon logs a warning naming the image ID and size
+// while the thumbnail still pushes, and the base never sees a FULL_IMAGE
+// manifest for them (no airtime is wasted on a doomed transfer). PAIRED with
+// MAX_IMAGE_SIZE (50000) in include/base_station_config.h — the base-side
+// manifest-validation bound; the two must stay equal or the balloon would
+// announce manifests the base rejects.
+static constexpr uint32_t IMG_MAX_IMAGE_SIZE         = 50000;
+
 static constexpr uint32_t IMG_WINDOW_STALL_MS        = 8000;
 static constexpr uint32_t IMG_ENTRY_TTL_MS           = 900000;
 

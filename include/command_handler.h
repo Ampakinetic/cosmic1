@@ -86,6 +86,11 @@ private:
     CommandResult handleAutoCaptureDisable(const CommandPacket& cmd);
     CommandResult handleGetStatus(const CommandPacket& cmd);
 
+    // Phase 2 (02-02): base pulls a window of full-image chunks (D-21);
+    // validates via ImageTx().handleWindowRequest and answers through the
+    // existing createResponsePacket path (ACK/NACK_INVALID/NACK_BUSY)
+    CommandResult handleImageWindowRequest(const CommandPacket& cmd);
+
     // Response sending
     bool sendResponse(const ResponsePacket& response);
 

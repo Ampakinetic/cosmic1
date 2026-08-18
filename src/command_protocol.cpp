@@ -555,6 +555,7 @@ const char* CommandProtocol::commandToString(CameraCommand cmd) {
         case CameraCommand::AUTO_CAPTURE_ENABLE: return "AUTO_CAPTURE_ENABLE";
         case CameraCommand::AUTO_CAPTURE_DISABLE: return "AUTO_CAPTURE_DISABLE";
         case CameraCommand::GET_STATUS: return "GET_STATUS";
+        case CameraCommand::IMAGE_WINDOW_REQUEST: return "IMAGE_WINDOW_REQUEST";
         default: return "UNKNOWN";
     }
 }

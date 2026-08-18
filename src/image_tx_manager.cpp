@@ -71,6 +71,11 @@ void ImageTxManager::process() {
         return;
     }
 
+    // Eviction policy (c): entries idle longer than IMG_ENTRY_TTL_MS are
+    // evicted with a log — bounded memory regardless of capture rate
+    // (bookkeeping only; costs no transmit).
+    sweepExpiredEntries();
+
     // Poll the single image-ID authority every pass (CR-05 invariant):
     // AutoCap().getLastImageId() is the ONLY image-ID source. A changed ID
     // means a capture completed and its buffers must be taken over BEFORE
@@ -113,20 +118,41 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
     entry.captureTimeMs = img.timestamp;
     entry.settings = snapshotSettings();
 
-    // Take PSRAM ownership of the full image BEFORE returning from this
-    // branch (Pitfall 7): the next capture's freeCurrentImage() must not
-    // pull bytes out from under a transfer
-    entry.fullBuffer = (uint8_t*)ps_malloc(img.length);
-    if (!entry.fullBuffer) {
-        if (DEBUG_IMAGE_TX) {
-            Serial.printf("ImageTx: PSRAM allocation failed for image %u full buffer (%u bytes); dropped\n",
-                         imageId, static_cast<unsigned>(img.length));
-        }
-        return;
+    // Enqueue gate (research Q4 resolution / PRI-03): a full image larger
+    // than IMG_MAX_IMAGE_SIZE never arms a full transfer — log a warning
+    // naming the image ID and size, skip the doomed copy entirely, and let
+    // the thumbnail still push. The base never sees a FULL_IMAGE manifest
+    // for it, so no pull is attempted (no airtime wasted on a transfer the
+    // base would reject at its own MAX_IMAGE_SIZE validation).
+    bool fullArmable = (img.length <= IMG_MAX_IMAGE_SIZE);
+    if (!fullArmable) {
+        Serial.printf("ImageTx: image %u full size %u B exceeds cap %u B; skipping full transfer (thumbnail still pushes)\n",
+                     imageId,
+                     static_cast<unsigned>(img.length),
+                     static_cast<unsigned>(IMG_MAX_IMAGE_SIZE));
     }
-    memcpy(entry.fullBuffer, img.buffer, img.length);
-    entry.fullLength = img.length;
-    entry.fullCrc32 = esp_rom_crc32_le(0, entry.fullBuffer, entry.fullLength);
+
+    if (fullArmable) {
+        // Take PSRAM ownership of the full image BEFORE returning from this
+        // branch (Pitfall 7): the next capture's freeCurrentImage() must not
+        // pull bytes out from under a transfer
+        entry.fullBuffer = (uint8_t*)ps_malloc(img.length);
+        if (!entry.fullBuffer) {
+            if (DEBUG_IMAGE_TX) {
+                Serial.printf("ImageTx: PSRAM allocation failed for image %u full buffer (%u bytes); dropped\n",
+                             imageId, static_cast<unsigned>(img.length));
+            }
+            return;
+        }
+        memcpy(entry.fullBuffer, img.buffer, img.length);
+        entry.fullLength = img.length;
+        entry.fullCrc32 = esp_rom_crc32_le(0, entry.fullBuffer, entry.fullLength);
+        entry.fullTotalChunks = chunksForSize(entry.fullLength);
+    } else {
+        entry.fullBuffer = nullptr;
+        entry.fullLength = 0;
+        entry.fullTotalChunks = 0;
+    }
 
     if (haveThumb && thumb.valid && thumb.buffer != nullptr) {
         entry.thumbBuffer = (uint8_t*)ps_malloc(thumb.length);
@@ -134,8 +160,7 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
             memcpy(entry.thumbBuffer, thumb.buffer, thumb.length);
             entry.thumbLength = thumb.length;
             entry.thumbCrc32 = esp_rom_crc32_le(0, entry.thumbBuffer, entry.thumbLength);
-            entry.thumbTotalChunks = static_cast<uint16_t>(
-                (thumb.length + IMG_CHUNK_PAYLOAD_SIZE - 1) / IMG_CHUNK_PAYLOAD_SIZE);
+            entry.thumbTotalChunks = chunksForSize(thumb.length);
             entry.state = ImageTxEntryState::PUSH_THUMB_MANIFEST;
         } else {
             // Thumbnail copy failed — still enqueue the full image; skip the
@@ -147,7 +172,8 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
             entry.thumbBuffer = nullptr;
             entry.thumbLength = 0;
             entry.thumbTotalChunks = 0;
-            entry.state = ImageTxEntryState::THUMB_PUSHED;
+            entry.state = fullTransferArmable(entry) ? ImageTxEntryState::ANNOUNCE_FULL
+                                                     : ImageTxEntryState::THUMB_PUSHED;
         }
     } else {
         // captureThumbnail failed — still enqueue the full image and skip
@@ -158,9 +184,17 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
         entry.thumbBuffer = nullptr;
         entry.thumbLength = 0;
         entry.thumbTotalChunks = 0;
-        entry.state = ImageTxEntryState::THUMB_PUSHED;
+        entry.state = fullTransferArmable(entry) ? ImageTxEntryState::ANNOUNCE_FULL
+                                                 : ImageTxEntryState::THUMB_PUSHED;
     }
     entry.lastActivityMs = millis();
+
+    // Nothing transferable (no thumbnail AND no armable full) — do not
+    // occupy a queue slot
+    if (entry.state == ImageTxEntryState::THUMB_PUSHED &&
+        entry.thumbBuffer == nullptr && entry.fullBuffer == nullptr) {
+        return;
+    }
 
     // Place the entry — bounded queue with drop-oldest on overflow
     ImageTxEntry* slot = nullptr;
@@ -182,7 +216,7 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
             }
         }
         Serial.printf("ImageTx: queue overflow (depth %u); dropping OLDEST entry image %u for image %u\n",
-                     static_cast<unsigned>(QUEUE_DEPTH), slot->imageId, imageId);
+                     static_cast<unsigned>(IMG_TX_QUEUE_DEPTH), slot->imageId, imageId);
         freeEntry(*slot);
     }
     *slot = entry;
@@ -202,35 +236,77 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
 // ===========================
 
 ImageTxEntry* ImageTxManager::findActiveEntry() {
-    // FIFO by enqueue order: the oldest entry with an unfinished push
+    // FIFO by enqueue order: the oldest entry with unfinished PUSH work
+    // (thumbnail manifest/chunks, or the pending full announcement)
     ImageTxEntry* best = nullptr;
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
         if (!entries[i].used) {
             continue;
         }
-        if (entries[i].state != ImageTxEntryState::THUMB_PUSHED) {
-            if (best == nullptr || entries[i].enqueueSeq < best->enqueueSeq) {
-                best = &entries[i];
-            }
+        switch (entries[i].state) {
+            case ImageTxEntryState::PUSH_THUMB_MANIFEST:
+            case ImageTxEntryState::PUSH_THUMB_CHUNKS:
+            case ImageTxEntryState::ANNOUNCE_FULL:
+                if (best == nullptr || entries[i].enqueueSeq < best->enqueueSeq) {
+                    best = &entries[i];
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    return best;
+}
+
+ImageTxEntry* ImageTxManager::findWindowServiceEntry() {
+    // FIFO by enqueue order (D-19): the earliest ANNOUNCED entry with an
+    // armed, not-yet-complete window
+    ImageTxEntry* best = nullptr;
+    for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+        if (!entries[i].used || entries[i].state != ImageTxEntryState::ANNOUNCED) {
+            continue;
+        }
+        if (!entries[i].windowArmed ||
+            entries[i].windowNextIndex >= entries[i].windowStart + entries[i].windowCount) {
+            continue;
+        }
+        if (best == nullptr || entries[i].enqueueSeq < best->enqueueSeq) {
+            best = &entries[i];
         }
     }
     return best;
 }
 
 void ImageTxManager::pushPending() {
+    // D-19 transmit ordering within the chunk branch: push work (thumbnail
+    // manifests/chunks and full announcements) outranks window service, so a
+    // new capture's thumbnail pushes immediately even while an older entry's
+    // window is mid-service — and the in-progress pull is never abandoned:
+    // its window context simply waits for the push work to drain.
     ImageTxEntry* entry = findActiveEntry();
-    if (entry == nullptr) {
-        return;
+    if (entry != nullptr) {
+        if (entry->state == ImageTxEntryState::PUSH_THUMB_MANIFEST) {
+            pushThumbManifest(*entry);
+            return; // one transmit per pass
+        }
+
+        if (entry->state == ImageTxEntryState::PUSH_THUMB_CHUNKS) {
+            pushThumbChunk(*entry);
+            return; // one transmit per pass
+        }
+
+        if (entry->state == ImageTxEntryState::ANNOUNCE_FULL) {
+            announceFullManifest(*entry);
+            return; // one transmit per pass
+        }
     }
 
-    if (entry->state == ImageTxEntryState::PUSH_THUMB_MANIFEST) {
-        pushThumbManifest(*entry);
-        return; // one transmit per pass
-    }
-
-    if (entry->state == ImageTxEntryState::PUSH_THUMB_CHUNKS) {
-        pushThumbChunk(*entry);
-        return; // one transmit per pass
+    // No push work pending: service the earliest armed window, one chunk
+    // this pass (the balloon never volunteers chunks outside a requested
+    // window — Pitfall 5)
+    ImageTxEntry* serving = findWindowServiceEntry();
+    if (serving != nullptr) {
+        serviceWindowChunk(*serving);
     }
 }
 
@@ -274,7 +350,7 @@ bool ImageTxManager::pushThumbManifest(ImageTxEntry& entry) {
 
 bool ImageTxManager::pushThumbChunk(ImageTxEntry& entry) {
     if (entry.nextThumbChunk >= entry.thumbTotalChunks) {
-        entry.state = ImageTxEntryState::THUMB_PUSHED;
+        entry.state = completedThumbState(entry);
         return true;
     }
 
@@ -302,11 +378,209 @@ bool ImageTxManager::pushThumbChunk(ImageTxEntry& entry) {
     entry.nextThumbChunk++;
     entry.lastActivityMs = millis();
     if (entry.nextThumbChunk >= entry.thumbTotalChunks) {
-        entry.state = ImageTxEntryState::THUMB_PUSHED;
+        entry.state = completedThumbState(entry);
         // Thumbnail holes from failed transmits are healed by the SAME
         // windowed-pull re-request path (D-22), wired in 02-02/02-03
     }
     return ok;
+}
+
+// Where an entry lands once its thumbnail push completes: armable fulls
+// proceed to the one-time FULL_IMAGE announcement (D-17 ordering), everything
+// else parks until eviction.
+ImageTxEntryState ImageTxManager::completedThumbState(const ImageTxEntry& entry) const {
+    return fullTransferArmable(entry) ? ImageTxEntryState::ANNOUNCE_FULL
+                                      : ImageTxEntryState::THUMB_PUSHED;
+}
+
+// ===========================
+// Full-Image Announcement (D-17 pull half)
+// ===========================
+
+bool ImageTxManager::announceFullManifest(ImageTxEntry& entry) {
+    ImageManifestBody body{};
+    body.imageId = entry.imageId;
+    body.imageKind = static_cast<uint8_t>(ImageKind::FULL_IMAGE);
+    body.captureSource = entry.captureSource;
+    body.totalSize = entry.fullLength;
+    body.chunkSize = IMG_CHUNK_PAYLOAD_SIZE;
+    body.totalChunks = entry.fullTotalChunks;
+    body.crc32 = entry.fullCrc32;   // D-23: end-to-end CRC over the full image bytes
+    body.captureTimeMs = entry.captureTimeMs;
+    body.resolution = entry.settings.resolution;
+    body.quality = entry.settings.quality;
+    body.brightness = entry.settings.brightness;
+    body.contrast = entry.settings.contrast;
+    body.saturation = entry.settings.saturation;
+    body.exposure = entry.settings.exposure;
+    body.wbMode = entry.settings.wbMode;
+
+    ImageManifestPacket pkt = createManifestPacket(body); // factory owns the 0x12 type byte
+
+    uint8_t buffer[CMD_MAX_PACKET_SIZE];
+    size_t length = 0;
+    bool ok = CommandProtocol::serializeManifest(pkt, buffer, length) && lora->transmit(buffer, length);
+
+    if (DEBUG_IMAGE_TX) {
+        Serial.printf("ImageTx: FULL manifest(image %u, %u B, %u chunks) %s\n",
+                     entry.imageId,
+                     static_cast<unsigned>(entry.fullLength),
+                     static_cast<unsigned>(entry.fullTotalChunks),
+                     ok ? "sent" : "FAILED");
+    }
+
+    // Emitted exactly ONCE per entry: from ANNOUNCED on, chunks flow only
+    // through a window context armed by handleWindowRequest
+    entry.state = ImageTxEntryState::ANNOUNCED;
+    entry.lastActivityMs = millis();
+    return ok;
+}
+
+// ===========================
+// Window Servicing (D-21 pull half, Pitfall 5)
+// ===========================
+
+WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, size_t len) {
+    if (!initialized || payload == nullptr || len < 5) {
+        return WindowRequestResult::INVALID_RANGE;
+    }
+
+    // PayloadImageWindowRequest: imageId BE16, startChunk BE16, count u8
+    // (Pitfall 9: decode via the big-endian helpers, never a struct memcpy)
+    uint16_t imageId = CommandProtocol::readUint16(payload);
+    uint16_t startChunk = CommandProtocol::readUint16(payload + 2);
+    uint16_t count = payload[4];
+
+    // Untrusted RF input (T-02-04): validate EVERYTHING before arming — the
+    // request must name a queued ANNOUNCED entry whose full transfer is armed
+    ImageTxEntry* target = nullptr;
+    for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+        if (entries[i].used && entries[i].imageId == imageId &&
+            entries[i].state == ImageTxEntryState::ANNOUNCED) {
+            if (target == nullptr || entries[i].enqueueSeq < target->enqueueSeq) {
+                target = &entries[i];
+            }
+        }
+    }
+    if (target == nullptr) {
+        if (DEBUG_IMAGE_TX) {
+            Serial.printf("ImageTx: window request for unknown/evicted image %u rejected\n", imageId);
+        }
+        return WindowRequestResult::UNKNOWN_IMAGE;
+    }
+
+    if (count < 1 || count > IMG_WINDOW_MAX_CHUNKS || startChunk >= target->fullTotalChunks) {
+        if (DEBUG_IMAGE_TX) {
+            Serial.printf("ImageTx: window request for image %u out of bounds (start %u, count %u, total %u)\n",
+                         imageId, startChunk, count, target->fullTotalChunks);
+        }
+        return WindowRequestResult::INVALID_RANGE;
+    }
+    // Clamp the tail: a request that overruns the last chunk is trimmed to
+    // what actually exists (a request fully past the end is rejected above)
+    if (static_cast<uint32_t>(startChunk) + count > target->fullTotalChunks) {
+        count = static_cast<uint16_t>(target->fullTotalChunks - startChunk);
+    }
+
+    // FIFO pull order (D-19): the base asking for this ID means it has moved
+    // past older entries — implicitly complete them and free their buffers
+    evictEntriesOlderThan(*target);
+
+    // One entry actively services at a time: any OTHER entry with an armed,
+    // incomplete window means the base must retry later (its existing
+    // timeout/retry machinery handles the wait)
+    for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+        if (&entries[i] != target && entries[i].used && entries[i].windowArmed &&
+            entries[i].windowNextIndex < entries[i].windowStart + entries[i].windowCount) {
+            if (DEBUG_IMAGE_TX) {
+                Serial.printf("ImageTx: window request for image %u deferred — image %u window mid-service\n",
+                             imageId, entries[i].imageId);
+            }
+            return WindowRequestResult::BUSY;
+        }
+    }
+
+    // Arm — idempotent (Pitfall 10): arming (re-)resets the cursor to
+    // startChunk, so a duplicate or re-requested window simply re-sends the
+    // same indices; no ID allocation, no queue mutation, no state corruption
+    target->windowArmed = true;
+    target->windowStart = startChunk;
+    target->windowCount = count;
+    target->windowNextIndex = startChunk;
+    target->lastActivityMs = millis();
+
+    if (DEBUG_IMAGE_TX) {
+        Serial.printf("ImageTx: window armed for image %u (chunks %u..%u)\n",
+                     imageId, startChunk, static_cast<unsigned>(startChunk) + count - 1);
+    }
+    return WindowRequestResult::ARMED;
+}
+
+bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
+    if (!entry.windowArmed ||
+        entry.windowNextIndex >= entry.windowStart + entry.windowCount) {
+        entry.windowArmed = false;
+        return true;
+    }
+
+    // Slice the owned PSRAM buffer at chunkIndex * 200 (bounds hold by
+    // construction: windowNextIndex < windowStart + windowCount <= fullTotalChunks)
+    uint16_t idx = entry.windowNextIndex;
+    size_t offset = static_cast<size_t>(idx) * IMG_CHUNK_PAYLOAD_SIZE;
+    size_t remaining = entry.fullLength - offset;
+    uint8_t chunkLen = static_cast<uint8_t>(
+        (remaining > IMG_CHUNK_PAYLOAD_SIZE) ? IMG_CHUNK_PAYLOAD_SIZE : remaining);
+
+    ImageChunkPacket pkt = createChunkPacket(entry.imageId, idx,
+                                             entry.fullBuffer + offset, chunkLen);
+
+    uint8_t buffer[CMD_MAX_PACKET_SIZE];
+    size_t length = 0;
+    bool ok = CommandProtocol::serializeChunk(pkt, buffer, length) && lora->transmit(buffer, length);
+
+    if (DEBUG_IMAGE_TX) {
+        Serial.printf("ImageTx: window chunk(image %u, %u/%u, %u B) %s\n",
+                     entry.imageId,
+                     static_cast<unsigned>(idx - entry.windowStart + 1),
+                     static_cast<unsigned>(entry.windowCount),
+                     chunkLen,
+                     ok ? "sent" : "FAILED");
+    }
+
+    entry.windowNextIndex++;
+    entry.lastActivityMs = millis();
+    if (entry.windowNextIndex >= entry.windowStart + entry.windowCount) {
+        // Window complete: clear the armed context and await the next request
+        entry.windowArmed = false;
+    }
+    return ok;
+}
+
+// ===========================
+// Eviction Policy (bounded memory, T-02-05)
+// ===========================
+
+void ImageTxManager::evictEntriesOlderThan(const ImageTxEntry& reference) {
+    for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+        if (entries[i].used && entries[i].enqueueSeq < reference.enqueueSeq) {
+            Serial.printf("ImageTx: window request for image %u supersedes older entry image %u; evicted\n",
+                         reference.imageId, entries[i].imageId);
+            freeEntry(entries[i]);
+        }
+    }
+}
+
+void ImageTxManager::sweepExpiredEntries() {
+    uint32_t now = millis();
+    for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+        // Wraparound-safe comparison; an armed mid-service window refreshes
+        // lastActivityMs per chunk, so an active pull can never expire
+        if (entries[i].used && (now - entries[i].lastActivityMs) > IMG_ENTRY_TTL_MS) {
+            Serial.printf("ImageTx: entry image %u idle > %u ms (TTL); evicted\n",
+                         entries[i].imageId, static_cast<unsigned>(IMG_ENTRY_TTL_MS));
+            freeEntry(entries[i]);
+        }
+    }
 }
 
 // ===========================
@@ -345,6 +619,18 @@ ImageTxSettings ImageTxManager::snapshotSettings() const {
     return s;
 }
 
+// A full transfer can only be armed when the owned buffer exists and its
+// length is inside the IMG_MAX_IMAGE_SIZE cap (oversize entries park after
+// their thumbnail push — the Q4 gate)
+bool ImageTxManager::fullTransferArmable(const ImageTxEntry& entry) const {
+    return entry.fullBuffer != nullptr && entry.fullLength > 0 &&
+           entry.fullLength <= IMG_MAX_IMAGE_SIZE;
+}
+
+uint16_t ImageTxManager::chunksForSize(size_t lengthBytes) {
+    return static_cast<uint16_t>((lengthBytes + IMG_CHUNK_PAYLOAD_SIZE - 1) / IMG_CHUNK_PAYLOAD_SIZE);
+}
+
 void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     if (entry.fullBuffer != nullptr) {
         free(entry.fullBuffer);
@@ -355,9 +641,16 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
         entry.thumbBuffer = nullptr;
     }
     entry.fullLength = 0;
+    entry.fullCrc32 = 0;
+    entry.fullTotalChunks = 0;
     entry.thumbLength = 0;
+    entry.thumbCrc32 = 0;
     entry.thumbTotalChunks = 0;
     entry.nextThumbChunk = 0;
+    entry.windowArmed = false;
+    entry.windowStart = 0;
+    entry.windowCount = 0;
+    entry.windowNextIndex = 0;
     entry.used = false;
     entry.state = ImageTxEntryState::IDLE;
 }
