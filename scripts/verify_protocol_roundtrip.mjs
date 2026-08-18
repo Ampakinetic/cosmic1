@@ -664,14 +664,15 @@ function deserializeTelemetryBeacon(buffer) {
 //     payload layouts in include/image_protocol.h) ---
 
 function encodeWindowRequest(p) {
-    const b = Buffer.alloc(5);
+    const b = Buffer.alloc(6);
     b.writeUInt16BE(p.imageId, 0);
-    b.writeUInt16BE(p.startChunk, 2);
-    b[4] = p.count;
+    b[2] = p.imageKind;
+    b.writeUInt16BE(p.startChunk, 3);
+    b[5] = p.count;
     return b;
 }
 function decodeWindowRequest(b) {
-    return { imageId: b.readUInt16BE(0), startChunk: b.readUInt16BE(2), count: b[4] };
+    return { imageId: b.readUInt16BE(0), imageKind: b[2], startChunk: b.readUInt16BE(3), count: b[5] };
 }
 
 function encodeThresholds(p) {

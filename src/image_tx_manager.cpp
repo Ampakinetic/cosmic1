@@ -333,11 +333,20 @@ ImageTxEntry* ImageTxManager::findActiveEntry() {
 }
 
 ImageTxEntry* ImageTxManager::findWindowServiceEntry() {
-    // FIFO by enqueue order (D-19): the earliest ANNOUNCED entry with an
-    // armed, not-yet-complete window
+    // FIFO by enqueue order (D-19): the earliest entry with an armed,
+    // not-yet-complete window. ANNOUNCED entries serve FULL windows; a
+    // THUMB_PUSHED entry is admitted ONLY while a (thumbnail heal) window is
+    // armed on it (02-05 / CR-01 — otherwise it is a parked oversize entry
+    // with no service work)
     ImageTxEntry* best = nullptr;
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
-        if (!entries[i].used || entries[i].state != ImageTxEntryState::ANNOUNCED) {
+        if (!entries[i].used) {
+            continue;
+        }
+        const bool stateServiceable =
+            entries[i].state == ImageTxEntryState::ANNOUNCED ||
+            (entries[i].state == ImageTxEntryState::THUMB_PUSHED && entries[i].windowArmed);
+        if (!stateServiceable) {
             continue;
         }
         if (!entries[i].windowArmed ||
@@ -515,25 +524,54 @@ bool ImageTxManager::announceFullManifest(ImageTxEntry& entry) {
 // ===========================
 
 WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, size_t len) {
-    if (!initialized || payload == nullptr || len < 5) {
+    if (!initialized || payload == nullptr || len < 6) {
         return WindowRequestResult::INVALID_RANGE;
     }
 
-    // PayloadImageWindowRequest: imageId BE16, startChunk BE16, count u8
-    // (Pitfall 9: decode via the big-endian helpers, never a struct memcpy)
+    // PayloadImageWindowRequest: imageId BE16, imageKind u8, startChunk BE16,
+    // count u8 — 6 bytes (Pitfall 9: decode via the big-endian helpers, never
+    // a struct memcpy)
     uint16_t imageId = CommandProtocol::readUint16(payload);
-    uint16_t startChunk = CommandProtocol::readUint16(payload + 2);
-    uint16_t count = payload[4];
+    uint8_t imageKind = payload[2];
+    uint16_t startChunk = CommandProtocol::readUint16(payload + 3);
+    uint16_t count = payload[5];
 
-    // Untrusted RF input (T-02-04): validate EVERYTHING before arming — the
-    // request must name a queued ANNOUNCED entry whose full transfer is armed
+    // Untrusted RF input (T-02-11 extends T-02-04): validate the kind byte
+    // against the ImageKind enum BEFORE any entry matching or buffer access —
+    // a crafted request cannot address an unowned buffer
+    if (imageKind != static_cast<uint8_t>(ImageKind::THUMBNAIL) &&
+        imageKind != static_cast<uint8_t>(ImageKind::FULL_IMAGE)) {
+        if (DEBUG_IMAGE_TX) {
+            Serial.printf("ImageTx: window request for image %u carries unknown kind %u; rejected\n",
+                         imageId, imageKind);
+        }
+        return WindowRequestResult::INVALID_RANGE;
+    }
+    const bool thumbWindow = (imageKind == static_cast<uint8_t>(ImageKind::THUMBNAIL));
+
+    // Untrusted RF input (T-02-04): validate EVERYTHING before arming. Target
+    // matching is KIND-SPLIT (D-22 / CR-01): FULL_IMAGE requests address
+    // ANNOUNCED entries (post-full-manifest, exactly as before); THUMBNAIL
+    // requests address any same-id entry whose thumbnail push provably
+    // finished (state past PUSH_THUMB_*) and that still owns thumbnail bytes
+    // — this admits THUMB_PUSHED oversize parks (whose full never announces)
+    // alongside ANNOUNCED entries, so thumbnail heals are servable end-to-end
     ImageTxEntry* target = nullptr;
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
-        if (entries[i].used && entries[i].imageId == imageId &&
-            entries[i].state == ImageTxEntryState::ANNOUNCED) {
-            if (target == nullptr || entries[i].enqueueSeq < target->enqueueSeq) {
-                target = &entries[i];
+        if (!entries[i].used || entries[i].imageId != imageId) {
+            continue;
+        }
+        if (thumbWindow) {
+            if (entries[i].thumbBuffer == nullptr ||
+                entries[i].state == ImageTxEntryState::PUSH_THUMB_MANIFEST ||
+                entries[i].state == ImageTxEntryState::PUSH_THUMB_CHUNKS) {
+                continue;
             }
+        } else if (entries[i].state != ImageTxEntryState::ANNOUNCED) {
+            continue;
+        }
+        if (target == nullptr || entries[i].enqueueSeq < target->enqueueSeq) {
+            target = &entries[i];
         }
     }
     if (target == nullptr) {
@@ -543,22 +581,31 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
         return WindowRequestResult::UNKNOWN_IMAGE;
     }
 
-    if (count < 1 || count > IMG_WINDOW_MAX_CHUNKS || startChunk >= target->fullTotalChunks) {
+    // Per-kind range validation (T-02-11): startChunk/count are bounded by
+    // the totalChunks of the kind the request actually addresses
+    const uint16_t totalChunks = thumbWindow ? target->thumbTotalChunks
+                                             : target->fullTotalChunks;
+    if (count < 1 || count > IMG_WINDOW_MAX_CHUNKS || startChunk >= totalChunks) {
         if (DEBUG_IMAGE_TX) {
             Serial.printf("ImageTx: window request for image %u out of bounds (start %u, count %u, total %u)\n",
-                         imageId, startChunk, count, target->fullTotalChunks);
+                         imageId, startChunk, count, totalChunks);
         }
         return WindowRequestResult::INVALID_RANGE;
     }
     // Clamp the tail: a request that overruns the last chunk is trimmed to
     // what actually exists (a request fully past the end is rejected above)
-    if (static_cast<uint32_t>(startChunk) + count > target->fullTotalChunks) {
-        count = static_cast<uint16_t>(target->fullTotalChunks - startChunk);
+    if (static_cast<uint32_t>(startChunk) + count > totalChunks) {
+        count = static_cast<uint16_t>(totalChunks - startChunk);
     }
 
-    // FIFO pull order (D-19): the base asking for this ID means it has moved
-    // past older entries — implicitly complete them and free their buffers
-    evictEntriesOlderThan(*target);
+    if (!thumbWindow) {
+        // FIFO pull order (D-19): the base asking for this ID means it has
+        // moved past older entries — implicitly complete them and free their
+        // buffers. FULL requests ONLY (02-05 Gap 2 eviction safety): a
+        // THUMBNAIL heal request must NEVER evict — any parked or queued
+        // entry may still be the active pull's target mid-stream
+        evictEntriesOlderThan(*target);
+    }
 
     // One entry actively services at a time: any OTHER entry with an armed,
     // incomplete window means the base must retry later (its existing
@@ -578,13 +625,15 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     // startChunk, so a duplicate or re-requested window simply re-sends the
     // same indices; no ID allocation, no queue mutation, no state corruption
     target->windowArmed = true;
+    target->windowKind = imageKind;
     target->windowStart = startChunk;
     target->windowCount = count;
     target->windowNextIndex = startChunk;
     target->lastActivityMs = millis();
 
     if (DEBUG_IMAGE_TX) {
-        Serial.printf("ImageTx: window armed for image %u (chunks %u..%u)\n",
+        Serial.printf("ImageTx: %s window armed for image %u (chunks %u..%u)\n",
+                     thumbWindow ? "THUMBNAIL" : "FULL",
                      imageId, startChunk, static_cast<unsigned>(startChunk) + count - 1);
     }
     return WindowRequestResult::ARMED;
@@ -597,16 +646,25 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
         return true;
     }
 
-    // Slice the owned PSRAM buffer at chunkIndex * 200 (bounds hold by
-    // construction: windowNextIndex < windowStart + windowCount <= fullTotalChunks)
+    // KIND-SELECTED source (D-22 / CR-01): the armed window names which owned
+    // buffer it serves — THUMBNAIL windows slice thumbnail bytes, FULL windows
+    // slice full-image bytes. The offset math is identical for both (chunk
+    // index * 200, tail-clamped by the selected buffer's remaining bytes;
+    // bounds hold by construction: windowNextIndex < windowStart +
+    // windowCount <= the armed kind's totalChunks, and the arming matcher
+    // guaranteed that kind's buffer is non-null)
+    const bool thumbWindow = (entry.windowKind == static_cast<uint8_t>(ImageKind::THUMBNAIL));
+    const uint8_t* source = thumbWindow ? entry.thumbBuffer : entry.fullBuffer;
+    const size_t sourceLength = thumbWindow ? entry.thumbLength : entry.fullLength;
+
     uint16_t idx = entry.windowNextIndex;
     size_t offset = static_cast<size_t>(idx) * IMG_CHUNK_PAYLOAD_SIZE;
-    size_t remaining = entry.fullLength - offset;
+    size_t remaining = sourceLength - offset;
     uint8_t chunkLen = static_cast<uint8_t>(
         (remaining > IMG_CHUNK_PAYLOAD_SIZE) ? IMG_CHUNK_PAYLOAD_SIZE : remaining);
 
     ImageChunkPacket pkt = createChunkPacket(entry.imageId, idx,
-                                             entry.fullBuffer + offset, chunkLen);
+                                             source + offset, chunkLen);
 
     uint8_t buffer[CMD_MAX_PACKET_SIZE];
     size_t length = 0;
@@ -722,6 +780,7 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     entry.thumbTotalChunks = 0;
     entry.nextThumbChunk = 0;
     entry.windowArmed = false;
+    entry.windowKind = 0;
     entry.windowStart = 0;
     entry.windowCount = 0;
     entry.windowNextIndex = 0;

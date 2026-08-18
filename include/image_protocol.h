@@ -74,6 +74,26 @@ static constexpr uint8_t  IMG_RETRANSMIT_MAX_PASSES  = 3;
 static constexpr uint32_t IMG_MAX_IMAGE_SIZE         = 50000;
 
 static constexpr uint32_t IMG_WINDOW_STALL_MS        = 8000;
+
+// Bounded push/window interleaving (02-05 / CR-03 fix a): when an armed
+// window's entry has waited longer than this, the balloon PREEMPTS its own
+// push work to service one window chunk. Must stay STRICTLY below
+// IMG_WINDOW_STALL_MS (8000) — the base's stall clock resets on every
+// accepted chunk, so a window serviced within this bound can never trip the
+// base's 8 s stall while the balloon still holds it armed.
+static constexpr uint32_t IMG_WINDOW_SERVICE_PREEMPT_MS = 5000;
+
+// Oversize-thumbnail heal fallback (02-05 / CR-01 base half): an oversize
+// image's thumbnail never gets a FULL_IMAGE manifest (the balloon parks it at
+// THUMB_PUSHED without announcing), so the manifest-arrived proof gate can
+// never open. This idle bound (no chunk progress for this long after the
+// push provably drained the queue elsewhere) is the only remaining evidence
+// the push finished — after it, the base may heal a stalled thumbnail even
+// without a same-id FULL slot, and the D-24 3-pass bound then resolves the
+// row honestly instead of an infinite RECEIVING stall. 24 s = 3x the stall
+// window, beyond any plausible queued-push wait.
+static constexpr uint32_t IMG_THUMB_HEAL_IDLE_MS      = 24000;
+
 static constexpr uint32_t IMG_ENTRY_TTL_MS           = 900000;
 
 // Minimal telemetry-over-E32 beacon cadence (PRI-01 / SC-5 observability;
@@ -141,10 +161,12 @@ struct TelemetryBeaconBody {
 // Command Payloads (ride PACKET_TYPE_COMMAND frames)
 // ===========================
 
-// IMAGE_WINDOW_REQUEST (0x30) payload — 5 bytes:
-//   imageId u16, startChunk u16, count u8
+// IMAGE_WINDOW_REQUEST (0x30) payload — 6 bytes:
+//   imageId u16, imageKind u8, startChunk u16, count u8
 struct PayloadImageWindowRequest {
     uint16_t imageId;     // BE16
+    uint8_t  imageKind;   // u8 — ImageKind the window addresses (THUMBNAIL/FULL_IMAGE);
+                          // makes thumbnail heals addressable (D-22, 02-05/CR-01)
     uint16_t startChunk;  // BE16 — first chunk index of the window
     uint8_t  count;       // chunks in this window (<= IMG_WINDOW_MAX_CHUNKS)
 };

@@ -96,10 +96,15 @@ struct ImageTxEntry {
     uint16_t nextThumbChunk;  // 0-based index of the next chunk to push
 
     // Window context (D-21 pull half) — armed ONLY by handleWindowRequest.
-    // Idempotent by construction (Pitfall 10): arming resets windowNextIndex
-    // to windowStart, so a duplicate or re-requested window simply re-sends
-    // the same indices; no ID allocation, no queue mutation.
+    // KIND-PARAMETERIZED (02-05/CR-01): windowKind names which of the entry's
+    // two owned buffers the armed window serves (THUMBNAIL slices
+    // thumbBuffer, FULL_IMAGE slices fullBuffer), validated against that
+    // kind's totalChunks at arming. Idempotent by construction (Pitfall 10):
+    // arming resets windowNextIndex to windowStart, so a duplicate or
+    // re-requested window simply re-sends the same indices; no ID allocation,
+    // no queue mutation.
     bool windowArmed;
+    uint8_t  windowKind;      // ImageKind the armed window serves
     uint16_t windowStart;     // first chunk index of the armed window
     uint16_t windowCount;     // chunks in the armed window
     uint16_t windowNextIndex; // next chunk index to transmit
@@ -159,7 +164,7 @@ private:
     // Push/service side — at most ONE transmit per call
     void pushPending();
     ImageTxEntry* findActiveEntry();          // earliest entry with push work (thumb or full announcement)
-    ImageTxEntry* findWindowServiceEntry();   // earliest ANNOUNCED entry with an armed, incomplete window
+    ImageTxEntry* findWindowServiceEntry();   // earliest entry with an armed, incomplete window (ANNOUNCED, or THUMB_PUSHED with a heal window armed)
 
     // Eviction policy (bounded memory)
     void evictEntriesOlderThan(const ImageTxEntry& reference); // newer-ID window request (D-19)

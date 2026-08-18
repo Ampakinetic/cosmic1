@@ -679,28 +679,31 @@ CommandResult CommandHandler::handleGetStatus(const CommandPacket& cmd) {
 CommandResult CommandHandler::handleImageWindowRequest(const CommandPacket& cmd) {
     CommandResult result{};
 
-    // PayloadImageWindowRequest: imageId BE16, startChunk BE16, count u8
-    if (cmd.payloadLength < 5) {
+    // PayloadImageWindowRequest: imageId BE16, imageKind u8, startChunk BE16,
+    // count u8 — 6 bytes (02-05 / CR-01: the kind byte makes thumbnail heals
+    // addressable, D-22)
+    if (cmd.payloadLength < 6) {
         result.responseType = ResponseType::NACK_PARAM;
         strncpy(result.message, "Missing window params", sizeof(result.message) - 1);
         commandsFailed++;
         return result;
     }
 
-    // All validation and arming lives in ImageTx (T-02-04); this handler
-    // only maps the outcome onto the existing response machinery so the
-    // base's tracked-command table, terminal-state guard, and duplicate-ACK
-    // guard apply unchanged (Phase 1 CR-03 lesson applied to chunk ACKs)
+    // All validation and arming lives in ImageTx (T-02-04/T-02-11); this
+    // handler only maps the outcome onto the existing response machinery so
+    // the base's tracked-command table, terminal-state guard, and
+    // duplicate-ACK guard apply unchanged (Phase 1 CR-03 lesson applied to
+    // chunk ACKs)
     WindowRequestResult outcome = ImageTx().handleWindowRequest(cmd.payload, cmd.payloadLength);
 
     switch (outcome) {
         case WindowRequestResult::ARMED:
             result.success = true;
             result.responseType = ResponseType::ACK;
-            // Echo the armed window (imageId BE16, startChunk BE16, count u8)
-            // so the base can confirm exactly what was armed
-            memcpy(result.responseData, cmd.payload, 5);
-            result.responseLength = 5;
+            // Echo the armed window (imageId BE16, imageKind u8, startChunk
+            // BE16, count u8) so the base can confirm exactly what was armed
+            memcpy(result.responseData, cmd.payload, 6);
+            result.responseLength = 6;
             commandsExecuted++;
 
             if (DEBUG_COMMAND_HANDLER) {
