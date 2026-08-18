@@ -61,6 +61,7 @@ struct BaseStationState {
     bool wifiConnected;
     uint32_t lastCommandTime;
     uint16_t lastCommandSequence;
+    char lastCommandName[32];
     uint32_t commandsSent;
     uint32_t commandsAcked;
     uint32_t commandsFailed;
@@ -88,6 +89,10 @@ void handleCapture();
 void handleSetQuality();
 void handleSetBrightness();
 void handleSetContrast();
+void handleSetResolution();
+void handleSetSaturation();
+void handleSetExposure();
+void handleSetWBMode();
 void handleStatus();
 void handleNotFound();
 
@@ -113,6 +118,7 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             background: #0f172a;
             color: #e2e8f0;
             min-height: 100vh;
+            line-height: 1.5;
         }
         .container {
             max-width: 800px;
@@ -129,7 +135,7 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         .header h1 {
             color: #60a5fa;
             font-size: 24px;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
         }
         .header p {
             color: #94a3b8;
@@ -137,20 +143,20 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         }
         .status-bar {
             background: #1e293b;
-            padding: 15px;
+            padding: 16px;
             border-radius: 8px;
             margin-bottom: 20px;
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 10px;
+            gap: 8px;
         }
         .status-item {
             text-align: center;
         }
         .status-label {
-            font-size: 12px;
+            font-size: 14px;
             color: #94a3b8;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
         }
         .status-value {
             font-size: 18px;
@@ -172,13 +178,13 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         .button-group {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 10px;
+            gap: 8px;
         }
         button {
             background: linear-gradient(135deg, #3b82f6, #2563eb);
             color: white;
             border: none;
-            padding: 15px;
+            padding: 16px;
             border-radius: 8px;
             font-size: 16px;
             font-weight: bold;
@@ -200,13 +206,13 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             background: linear-gradient(135deg, #f87171, #ef4444);
         }
         .form-group {
-            margin-bottom: 15px;
+            margin-bottom: 16px;
         }
         label {
             display: block;
             color: #94a3b8;
             font-size: 14px;
-            margin-bottom: 5px;
+            margin-bottom: 4px;
         }
         input[type="range"] {
             width: 100%;
@@ -215,9 +221,9 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             border-radius: 3px;
             outline: none;
         }
-        input[type="number"] {
+        input[type="number"], select {
             width: 100%;
-            padding: 10px;
+            padding: 8px;
             background: #334155;
             border: 1px solid #475569;
             border-radius: 5px;
@@ -228,7 +234,7 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             background: #334155;
             border-radius: 8px;
             padding: 15px;
-            margin-top: 10px;
+            margin-top: 8px;
             font-size: 14px;
         }
         .message.success {
@@ -253,6 +259,11 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         .led.green { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
         .led.red { background: #ef4444; box-shadow: 0 0 10px #ef4444; }
         .led.yellow { background: #eab308; box-shadow: 0 0 10px #eab308; }
+        @media (max-width: 480px) {
+            .status-bar {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
     </style>
 </head>
 <body>
@@ -393,6 +404,10 @@ void initWebServer() {
     server.on("/set-quality", HTTP_POST, handleSetQuality);
     server.on("/set-brightness", HTTP_POST, handleSetBrightness);
     server.on("/set-contrast", HTTP_POST, handleSetContrast);
+    server.on("/set-resolution", HTTP_POST, handleSetResolution);
+    server.on("/set-saturation", HTTP_POST, handleSetSaturation);
+    server.on("/set-exposure", HTTP_POST, handleSetExposure);
+    server.on("/set-wb", HTTP_POST, handleSetWBMode);
     server.on("/status", HTTP_GET, handleStatus);
     server.onNotFound(handleNotFound);
 
@@ -495,6 +510,66 @@ void handleRoot() {
     html += "<button type=\"submit\">Set Contrast</button>";
     html += "</form>";
 
+    html += "<hr style=\"border-color: #475569; margin: 20px 0;\">";
+
+    // Resolution
+    html += "<form action=\"/set-resolution\" method=\"POST\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>Resolution:</label>";
+    html += "<select name=\"resolution\">";
+    html += "<option value=\"5\">QQVGA 160x120</option>";
+    html += "<option value=\"6\" selected>QVGA 320x240</option>";
+    html += "<option value=\"7\">HQVGA 240x176</option>";
+    html += "<option value=\"8\">QXGA 400x296</option>";
+    html += "<option value=\"9\">VGA 640x480</option>";
+    html += "<option value=\"10\">SVGA 800x600</option>";
+    html += "<option value=\"11\">XGA 1024x768</option>";
+    html += "<option value=\"12\">SXGA 1280x1024</option>";
+    html += "<option value=\"13\">UXGA 1600x1200</option>";
+    html += "</select>";
+    html += "</div>";
+    html += "<button type=\"submit\">Set Resolution</button>";
+    html += "</form>";
+
+    html += "<hr style=\"border-color: #475569; margin: 20px 0;\">";
+
+    // Saturation
+    html += "<form action=\"/set-saturation\" method=\"POST\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>Saturation (-2 to 2):</label>";
+    html += "<input type=\"number\" name=\"saturation\" min=\"-2\" max=\"2\" value=\"0\">";
+    html += "</div>";
+    html += "<button type=\"submit\">Set Saturation</button>";
+    html += "</form>";
+
+    html += "<hr style=\"border-color: #475569; margin: 20px 0;\">";
+
+    // Exposure
+    html += "<form action=\"/set-exposure\" method=\"POST\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>Exposure (-2 to 2):</label>";
+    html += "<input type=\"number\" name=\"exposure\" min=\"-2\" max=\"2\" value=\"0\">";
+    html += "</div>";
+    html += "<button type=\"submit\">Set Exposure</button>";
+    html += "</form>";
+
+    html += "<hr style=\"border-color: #475569; margin: 20px 0;\">";
+
+    // White balance
+    html += "<form action=\"/set-wb\" method=\"POST\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>White balance:</label>";
+    html += "<select name=\"wb\">";
+    html += "<option value=\"0\" selected>Auto</option>";
+    html += "<option value=\"1\">Sunny</option>";
+    html += "<option value=\"2\">Cloudy</option>";
+    html += "<option value=\"3\">Office</option>";
+    html += "<option value=\"4\">Home</option>";
+    html += "</select>";
+    html += "</div>";
+    html += "<button type=\"submit\">Set White Balance</button>";
+    html += "</form>";
+
     html += "</div>";
 
     html += FPSTR(HTML_FOOTER);
@@ -507,9 +582,10 @@ void handleCapture() {
 
     uint16_t seq = CmdSender().sendCommand(CameraCommand::CAPTURE_NOW);
     appState.lastCommandTime = millis();
-    appState.lastCommandSequence = seq;
 
     if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Capture", sizeof(appState.lastCommandName) - 1);
         sendResponse(200, "OK", "Capture command sent");
         Serial.printf("  Capture command sent (seq=%d)\n", seq);
     } else {
@@ -524,18 +600,22 @@ void handleSetQuality() {
         return;
     }
 
-    uint8_t quality = server.arg("quality").toInt();
+    // WR-07: range-check the full long before any narrowing cast
+    long quality = server.arg("quality").toInt();
 
-    if (quality > 63) {
+    if (quality < 0 || quality > 63) {
         sendResponse(400, "Error", "Invalid quality value (0-63)");
         return;
     }
 
-    Serial.printf("Set quality command: %d\n", quality);
+    uint8_t value = static_cast<uint8_t>(quality);
+    Serial.printf("Set quality command: %d\n", value);
 
-    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_QUALITY, &quality, 1);
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_QUALITY, &value, 1);
 
     if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Set Quality", sizeof(appState.lastCommandName) - 1);
         sendResponse(200, "OK", "Quality change command sent");
         Serial.printf("  Set quality command sent (seq=%d)\n", seq);
     } else {
@@ -549,18 +629,22 @@ void handleSetBrightness() {
         return;
     }
 
-    int8_t brightness = static_cast<int8_t>(server.arg("brightness").toInt());
+    // WR-07: range-check the full long before any narrowing cast
+    long brightness = server.arg("brightness").toInt();
 
     if (brightness < -2 || brightness > 2) {
         sendResponse(400, "Error", "Invalid brightness value (-2 to 2)");
         return;
     }
 
-    Serial.printf("Set brightness command: %d\n", brightness);
+    int8_t value = static_cast<int8_t>(brightness);
+    Serial.printf("Set brightness command: %d\n", value);
 
-    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_BRIGHTNESS, &brightness, 1);
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_BRIGHTNESS, &value, 1);
 
     if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Set Brightness", sizeof(appState.lastCommandName) - 1);
         sendResponse(200, "OK", "Brightness change command sent");
         Serial.printf("  Set brightness command sent (seq=%d)\n", seq);
     } else {
@@ -574,22 +658,143 @@ void handleSetContrast() {
         return;
     }
 
-    int8_t contrast = static_cast<int8_t>(server.arg("contrast").toInt());
+    // WR-07: range-check the full long before any narrowing cast
+    long contrast = server.arg("contrast").toInt();
 
     if (contrast < -2 || contrast > 2) {
         sendResponse(400, "Error", "Invalid contrast value (-2 to 2)");
         return;
     }
 
-    Serial.printf("Set contrast command: %d\n", contrast);
+    int8_t value = static_cast<int8_t>(contrast);
+    Serial.printf("Set contrast command: %d\n", value);
 
-    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_CONTRAST, &contrast, 1);
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_CONTRAST, &value, 1);
 
     if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Set Contrast", sizeof(appState.lastCommandName) - 1);
         sendResponse(200, "OK", "Contrast change command sent");
         Serial.printf("  Set contrast command sent (seq=%d)\n", seq);
     } else {
         sendResponse(500, "Error", "Failed to send contrast command");
+    }
+}
+
+void handleSetResolution() {
+    if (!server.hasArg("resolution")) {
+        sendResponse(400, "Error", "Missing resolution parameter");
+        return;
+    }
+
+    // WR-07: range-check the full long before narrowing to the FrameSize enum value
+    long resolution = server.arg("resolution").toInt();
+
+    if (resolution < 5 || resolution > 13) {
+        sendResponse(400, "Error", "Invalid resolution value (5-13)");
+        return;
+    }
+
+    // D-09: resolution travels as its predefined single-byte enum code
+    uint8_t value = static_cast<uint8_t>(resolution);
+    Serial.printf("Set resolution command: framesize %d\n", value);
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_RESOLUTION, &value, 1);
+
+    if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Set Resolution", sizeof(appState.lastCommandName) - 1);
+        sendResponse(200, "OK", "Resolution change command sent");
+        Serial.printf("  Set resolution command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send resolution command");
+    }
+}
+
+void handleSetSaturation() {
+    if (!server.hasArg("saturation")) {
+        sendResponse(400, "Error", "Missing saturation parameter");
+        return;
+    }
+
+    // WR-07: range-check the full long before any narrowing cast
+    long saturation = server.arg("saturation").toInt();
+
+    if (saturation < -2 || saturation > 2) {
+        sendResponse(400, "Error", "Invalid saturation value (-2 to 2)");
+        return;
+    }
+
+    int8_t value = static_cast<int8_t>(saturation);
+    Serial.printf("Set saturation command: %d\n", value);
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_SATURATION, &value, 1);
+
+    if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Set Saturation", sizeof(appState.lastCommandName) - 1);
+        sendResponse(200, "OK", "Saturation change command sent");
+        Serial.printf("  Set saturation command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send saturation command");
+    }
+}
+
+void handleSetExposure() {
+    if (!server.hasArg("exposure")) {
+        sendResponse(400, "Error", "Missing exposure parameter");
+        return;
+    }
+
+    // WR-07: range-check the full long before any narrowing cast
+    long exposure = server.arg("exposure").toInt();
+
+    if (exposure < -2 || exposure > 2) {
+        sendResponse(400, "Error", "Invalid exposure value (-2 to 2)");
+        return;
+    }
+
+    int8_t value = static_cast<int8_t>(exposure);
+    Serial.printf("Set exposure command: %d\n", value);
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_EXPOSURE, &value, 1);
+
+    if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Set Exposure", sizeof(appState.lastCommandName) - 1);
+        sendResponse(200, "OK", "Exposure change command sent");
+        Serial.printf("  Set exposure command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send exposure command");
+    }
+}
+
+void handleSetWBMode() {
+    if (!server.hasArg("wb")) {
+        sendResponse(400, "Error", "Missing wb parameter");
+        return;
+    }
+
+    // WR-07: range-check the full long before narrowing to the WhiteBalanceMode enum value
+    long wbMode = server.arg("wb").toInt();
+
+    if (wbMode < 0 || wbMode > 4) {
+        sendResponse(400, "Error", "Invalid white balance value (0-4)");
+        return;
+    }
+
+    uint8_t value = static_cast<uint8_t>(wbMode);
+    Serial.printf("Set white balance command: mode %d\n", value);
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_WB_MODE, &value, 1);
+
+    if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Set White Balance", sizeof(appState.lastCommandName) - 1);
+        sendResponse(200, "OK", "White balance change command sent");
+        Serial.printf("  Set white balance command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send white balance command");
     }
 }
 
