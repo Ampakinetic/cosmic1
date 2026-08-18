@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 3/4 plans executed (01-01 tracer + 01-02 protocol + 01-03 base station UI done; 01-04 pending — gap closure from 01-VERIFICATION.md)
+**Plans:** 5 plans (01-01 tracer + 01-02..01-04 gap closure executed; 01-05 CR-05 gap closure from 01-VERIFICATION.md re-verification)
 
 Plans:
 **Wave 1**
@@ -57,6 +57,10 @@ Plans:
 
 - [x] 01-03-PLAN.md — Base station UI: all 7 settings forms, auto-capture controls, per-command outcome panel, real link LED (2026-08-18)
 - [x] 01-04-PLAN.md — Balloon execution: camera sensor setters, AutoCapture interval module, real GET_STATUS, loop wiring
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 01-05-PLAN.md — CR-05 gap closure: remove the legacy 30 s capture timer running beside commanded auto-capture; AutoCapture becomes the sole capture/image-ID authority (CTRL-01/CTRL-03/CTRL-04)
 
 ### Phase 2: Image Transmission
 
