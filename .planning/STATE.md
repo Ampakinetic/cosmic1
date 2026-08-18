@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Phase 02 UI-SPEC approved
-last_updated: "2026-08-18T23:03:03.870Z"
+stopped_at: "Completed 02-05-PLAN.md (transfer state-machine gap closure: CR-01/02/03 + WR-05 closed; 4 gaps)"
+last_updated: "2026-08-18T23:29:22.800Z"
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 11
-  completed_plans: 9
-current_phase: 1
+  completed_plans: 10
+current_phase: 2
 current_phase_name: image-transmission
 ---
 
@@ -22,15 +22,15 @@ current_phase_name: image-transmission
 ## Current Status
 
 **Project:** Cosmic1 Base Station Camera Control Extension
-**Phase:** Phase 1 — all 6 plans executed (tracer + 01-02..01-06); re-verification #3 human_needed: zero open code gaps; 5 UAT items pending (4 hardware + 1 prohibition review); then security gate
+**Phase:** Phase 2 — all 5 plans executed (02-01 tracer + 02-02..02-04 + 02-05 gap closure); all 4 verifier gaps closed at code level; next: re-verification of the gap closures, hardware UAT, then security gate
 **Milestone:** v1.0
 
 ## Current Position
 
-**Current Plan:** 4
+**Current Plan:** 5 of 5 executed (02-05 complete 2026-08-19)
 **Total Plans in Phase:** 5
-**Status:** Ready to execute
-**Progress:** [█████████░] 90% (all 6 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
+**Status:** Phase 02 execution complete — re-verification + UAT pending
+**Progress:** [█████████░] 91% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
 
 ## Progress
 
@@ -45,7 +45,11 @@ current_phase_name: image-transmission
 - ✅ Phase 1 gap-closure plan 01-04 executed — real sensor setters for saturation/exposure/WB, AutoCapture interval timer module, truthful GET_STATUS, shared image-ID sequence, main-loop wiring (see 01-04-SUMMARY.md)
 - ✅ Phase 1 gap-closure plan 01-05 executed — CR-05 closed: legacy 30 s capture timer removed, AutoCapture is the sole capture/image-ID authority; both targets green, wire harness 10/10 (see 01-05-SUMMARY.md)
 - ✅ Phase 1 gap-closure plan 01-06 executed — response-path criticals closed: packet.type set in both factories + faithful harness clause (f, 15/15); frameSizeFromEsp name-based GET_STATUS mapping + CIF relabel; handleResponse terminal-state guard (see 01-06-SUMMARY.md)
-- ⏳ Phase 2: Image Transmission (pending)
+- ✅ Phase 2 plan 02-01 executed (tracer) — CR-04/WR-11 thumbnail fix + full Phase 2 wire contract + WR-12 type dispatch (see 02-01-SUMMARY.md)
+- ✅ Phase 2 plan 02-02 executed — balloon full pipeline: full announce + FIFO window servicing, TX arbitration + 5 s telemetry beacon (PRI-01/SC-5)
+- ✅ Phase 2 plan 02-03 executed — base full pipeline: windowed ARQ (D-21/D-24), end-to-end CRC32 (D-23), SD storage + sidecars, transfer progress UI (D-20)
+- ✅ Phase 2 plan 02-04 executed — CTRL-05 event triggers: altitude/distance/flight-phase capture inside AutoCapture, UI-configurable thresholds
+- ✅ Phase 2 gap-closure plan 02-05 executed (2026-08-19) — all 4 02-VERIFICATION gaps closed: kind-addressable 6-byte window requests + balloon thumbnail servicing (Gap 2/D-22), bounded push/window interleaving (preemption 5000 ms) + completion-aware class-ranked eviction (Gap 1/D-19/D-24), passCount reset on progress + slot-pressure full reset (Gaps 1-RX/3/D-20), kind-suffixed sidecars IMG_{id}_T.JSON (Gap 4/D-30); both targets green, harness 47 checks green, PRI-01 order-gates green (see 02-05-SUMMARY.md)
 
 ## Current Phase
 
@@ -93,9 +97,10 @@ See: `.planning/PROJECT.md`
 
 ## Next Steps
 
-1. **Hardware UAT:** `/gsd-verify-work 1` — flash both units and run the 5 items in `01-UAT.md` (UAT item 2, degraded-link duplicate-ACK, is meaningful only now that the guard landed)
-2. **Security gate (before phase complete):** `/gsd-secure-phase 1` — enforcement enabled, no SECURITY.md yet (WR-08 scope included)
-3. **Then:** `/gsd-progress` to advance toward phase transition and Phase 2 (Image Transmission — note CR-04 must-fix-before-first-caller rides IMG-02)
+1. **Phase 02 re-verification:** run the phase verifier (`/gsd-verify-work 2` or equivalent) — the 4 gap closures in 02-05 need independent confirmation (verifier's own reads/greps/harness/builds), mirroring the Phase 1 re-verification loop
+2. **Hardware UAT:** fulls complete under the 20 s capture cadence, a link-loss thumbnail hole heals RETRYING→COMPLETE, telemetry age stays within ~10 s during transfers, and an SD card shows IMG_{id}.JPG + IMG_{id}_T.JPG + IMG_{id}.JSON + IMG_{id}_T.JSON after both kinds finalize (Gap 1/2/PRI-01/Gap 4 runtime halves — see 02-05-SUMMARY Known Limitations)
+3. **Security gate (before phase complete):** `/gsd-secure-phase 2` (Phase 1's gate also still pending — `01-UAT.md` items + `/gsd-secure-phase 1`)
+4. **Then:** `/gsd-progress` toward the phase transition and Phase 3 (Enhanced Web Interface)
 
 ## Configuration
 
@@ -113,13 +118,13 @@ See: `.planning/PROJECT.md`
 **Git Tracking:** Enabled
 
 ---
-*State updated: 2026-08-18 - 01-06 executed (response-path criticals closed); re-verification #3 human_needed: zero open code gaps, 5 UAT items*
+*State updated: 2026-08-19 - 02-05 executed (transfer state-machine gap closure: all 4 02-VERIFICATION gaps closed at code level); Phase 02 all 5 plans executed; re-verification + hardware UAT + security gate pending*
 
 ## Session
 
-**Last session:** 2026-08-18T22:41:01.415Z
-**Stopped at:** Phase 02 UI-SPEC approved
-**Resume file:** C:/Work/Prog/Cosmic1/.planning/phases/02-image-transmission/02-UI-SPEC.md
+**Last session:** 2026-08-18T23:29:22.758Z
+**Stopped at:** Completed 02-05-PLAN.md (transfer state-machine gap closure: CR-01/02/03 + WR-05 closed; 4 gaps)
+**Resume file:** None
 
 ## Performance Metrics
 
@@ -133,6 +138,7 @@ See: `.planning/PROJECT.md`
 | Phase 02 P02 | 550s (continuation session; Task 1 in prior session) | 3 tasks | 7 files |
 | Phase 02 P03 | 90m | 3 tasks | 9 files |
 | Phase 02 P04 | ~12 min | 2 tasks | 8 files |
+| Phase 02 P05 | ~21 min | 3 tasks | 8 files |
 
 ## Decisions
 
@@ -152,3 +158,7 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 02-04: event triggers live inside AutoCapture.process() behind the SC-5 master enable — AUTO_CAPTURE_DISABLE stops interval AND event captures; fire() is the single gated capture path (D-28 spacing wraps every automatic source, T-01-09 baseline-before-attempt, shared allocateImageId) and every fire advances lastCaptureTime so D-27 (event resets interval baseline) falls out of the arithmetic
 - [Phase ?]: 02-04: eventsEnabled defaults OFF at boot — event captures require explicit opt-in via the UI toggle; delta defaults 150 m / 500 m / 20 s spacing (research sketch constants), all re-validated in-module so a spoofed SET_EVENT_THRESHOLDS cannot machine-gun the camera (T-02-11 double validation)
 - [Phase ?]: 02-04: base polls GET_STATUS every 30 s (skipped while commands are in flight) and CommandSender latches the newest STATUS payload — the Event Capture card displays balloon-reported truth, never the last-submitted form
+- [Phase ?]: 02-05: window requests are kind-addressable on the wire (imageId BE16, imageKind u8 at offset 2, startChunk BE16, count u8 — 6 bytes, harness-pinned to the literal bytes) — a thumbnail heal rides the SAME windowed ARQ as a full pull (D-22 restored as the single reliability mechanism); the balloon serves THUMBNAIL windows from thumbBuffer on any entry whose push finished, and a THUMBNAIL request never evicts anything
+- [Phase ?]: 02-05: fairness preemption lives INSIDE the chunk branch — pushPending() services a starved armed window (> IMG_WINDOW_SERVICE_PREEMPT_MS 5000 ms, strictly under the base's 8000 ms stall) before push work, while the beacon early-return and command-response loop order stay untouched (PRI-01 proven by node order-gates); overflow eviction is class-ranked with the windowEverArmed ANNOUNCED entry (the active pull) as last resort
+- [Phase ?]: 02-05: D-24 bounds only CONSECUTIVE unhealed stalls — acceptChunk is the sole passCount zero-writer (accepted-chunk progress retires charged passes); thumbnail heals fire only when no full pull is active AND the same-id FULL manifest arrived (push provably finished), with a 24 s idle fallback for oversize thumbnails that never announce a full; heal chunks route to the armed THUMBNAIL slot before the FULL-first precedence
+- [Phase ?]: 02-05: sidecars are kind-suffixed — IMG_{id}_T.JSON for thumbnails vs IMG_{id}.JSON for fulls (mirrors D-31's _T.JPG, the Phase 3 gallery contract) so neither finalization truncates the other's D-30 record; slot-pressure evictions fully reset the slot (*oldest = ImageRxTransfer{}) so a new manifest starts at 0/N
