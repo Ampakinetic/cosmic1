@@ -2,8 +2,10 @@
 // ============================================================================
 // Wire-format regression harness for the camera command protocol.
 //
-// MIRRORS src/command_protocol.cpp (CRC16, packet layouts, validation rules).
-// It MUST be updated whenever the wire format changes.
+// MIRRORS src/command_protocol.cpp (CRC16, packet layouts, validation rules)
+// and the length-driven receive framing in src/command_sender.cpp /
+// src/command_handler.cpp. It MUST be updated whenever the wire format
+// changes.
 //
 // Clauses — exits 0 only if ALL hold:
 //   (a) every sequence number 1..65535 serializes into a packet that passes
@@ -12,11 +14,12 @@
 //       bytes (would produce a 241-byte packet) while accepting the 224-byte
 //       boundary (240-byte packet exactly)
 //   (c) a command whose payload contains the consecutive bytes 0x0D 0x0A
-//       passes packet validation (the receiver-framing survival regression
-//       for CR-03 is added alongside the length-driven receiver code)
+//       passes packet validation, and BOTH length-driven receivers
+//       (response flavor + command flavor) accumulate it intact
 //   (d) the DEFECTIVE pre-fix serializer variant (zero placeholder at header
 //       offset 3, sequence patched in after the CRC is written) FAILS the
 //       sequence sweep — proof the harness has teeth
+//   (e) truncated or bogus-length streams never produce a packet (CR-03)
 // ============================================================================
 
 'use strict';
@@ -26,6 +29,7 @@ const CMD_HEADER_SIZE = 7;
 const CMD_MAX_PAYLOAD_SIZE = 200;   // commands
 const CMD_MAX_RESPONSE_DATA = 50;   // responses
 const CMD_MAX_PACKET_SIZE = 240;    // LoRa packet limit
+const HANDLER_RX_BUFFER_SIZE = 256; // CommandHandler::receiveBuffer (already above protocol max)
 const CMD_START_BYTE1 = 0xAA;
 const CMD_START_BYTE2 = 0x55;
 const CMD_END_BYTE1 = 0x0D;
@@ -156,6 +160,69 @@ function serializeResponse(responseType, refSequence, data) {
 }
 
 // ============================================================================
+// Receive framing (transcribed from the length-driven processIncomingByte
+// rule shared by CommandSender and CommandHandler — CR-03)
+// ============================================================================
+
+// bodyOverhead: 4 for responses (responseType + refSequence BE16 + dataLength),
+//               5 for commands (cmd + sequence BE16 + payloadLength BE16).
+// bufferSize:   sizeof the receiver's receiveBuffer member.
+function makeLengthDrivenReceiver({ bodyOverhead, maxBody, bufferSize }) {
+    const receiveBuffer = Buffer.alloc(bufferSize);
+    let receiveIndex = 0;
+    let inPacket = false;
+    const packets = [];
+
+    function resetReceiveState() {
+        receiveIndex = 0;
+        inPacket = false;
+    }
+
+    function processIncomingByte(byte) {
+        if (!inPacket) {
+            // Start-byte hunt: 0xAA then 0x55
+            if (receiveIndex === 0 && byte === CMD_START_BYTE1) {
+                receiveBuffer[receiveIndex++] = byte;
+            } else if (receiveIndex === 1 && byte === CMD_START_BYTE2) {
+                receiveBuffer[receiveIndex++] = byte;
+                inPacket = true;
+            } else {
+                receiveIndex = 0;
+            }
+            return;
+        }
+
+        receiveBuffer[receiveIndex++] = byte;
+
+        if (receiveIndex < CMD_HEADER_SIZE) {
+            return;
+        }
+
+        // Big-endian body length from header offsets 4-5
+        const bodyLen = (receiveBuffer[4] << 8) | receiveBuffer[5];
+        const expectedTotal = CMD_HEADER_SIZE + bodyOverhead + bodyLen + 4;
+
+        if (expectedTotal > bufferSize || bodyLen > maxBody) {
+            resetReceiveState(); // bogus header
+            return;
+        }
+
+        if (receiveIndex < expectedTotal) {
+            return; // still accumulating
+        }
+
+        // End marker verified ONLY at the expected framed position
+        if (receiveBuffer[expectedTotal - 2] === CMD_END_BYTE1 &&
+            receiveBuffer[expectedTotal - 1] === CMD_END_BYTE2) {
+            packets.push(Buffer.from(receiveBuffer.subarray(0, expectedTotal)));
+        }
+        resetReceiveState();
+    }
+
+    return { packets, feed: processIncomingByte };
+}
+
+// ============================================================================
 // Balloon-side packet acceptance (start bytes + end bytes + validateCRC —
 // the checks deserializeCommand runs before trusting a framed packet)
 // ============================================================================
@@ -227,6 +294,45 @@ function assert(condition, label) {
     // Only sequences whose low byte is 0 (multiples of 256) passed: 255 of 65535
     assert(accepted === 255, `(d) defective variant: sweep fails (${accepted}/65535 accepted — expected exactly 255)`);
     assert(!seq1Accepted, "(d) defective variant: sequence 1 (the sender's first command) is rejected");
+}
+
+// (c)+(e) Length-driven framing regression (CR-03)
+{
+    // Response flavor (base station): data starting with the 0x0D 0x0A pair
+    const responseRx = makeLengthDrivenReceiver({ bodyOverhead: 4, maxBody: CMD_MAX_RESPONSE_DATA, bufferSize: CMD_MAX_PACKET_SIZE });
+    const responsePacket = serializeResponse(0x05, 42, Buffer.from([0x0D, 0x0A, 0x00, 0x00])); // STATUS with CRLF-leading data
+    for (const b of responsePacket) responseRx.feed(b);
+    assert(responseRx.packets.length === 1 &&
+           responseRx.packets[0].equals(responsePacket) &&
+           validateCRC(responseRx.packets[0], responseRx.packets[0].length),
+           '(c) response receiver accumulates a packet with 0x0D 0x0A leading the data, intact');
+
+    // Command flavor (balloon): payload containing the 0x0D 0x0A pair mid-payload
+    const commandRx = makeLengthDrivenReceiver({ bodyOverhead: 5, maxBody: CMD_MAX_PAYLOAD_SIZE, bufferSize: HANDLER_RX_BUFFER_SIZE });
+    const commandPacket = serializeCommand(9, 0x10, Buffer.from([0x00, 0x0D, 0x0A, 0x00]));
+    for (const b of commandPacket) commandRx.feed(b);
+    assert(commandRx.packets.length === 1 &&
+           commandRx.packets[0].equals(commandPacket) &&
+           balloonAccepts(commandRx.packets[0]),
+           '(c) command receiver accumulates a packet with embedded 0x0D 0x0A payload, intact');
+
+    // Truncated stream: half the expected bytes, then idle — nothing validates
+    const truncatedRx = makeLengthDrivenReceiver({ bodyOverhead: 4, maxBody: CMD_MAX_RESPONSE_DATA, bufferSize: CMD_MAX_PACKET_SIZE });
+    const full = serializeResponse(0x00, 5, Buffer.alloc(20));
+    for (const b of full.subarray(0, Math.floor(full.length / 2))) truncatedRx.feed(b);
+    assert(truncatedRx.packets.length === 0, '(e) truncated stream (half the expected bytes, then idle) produces no packet');
+
+    // Bogus header length: bodyLen above the protocol maximum resets the receiver
+    const bogusRx = makeLengthDrivenReceiver({ bodyOverhead: 4, maxBody: CMD_MAX_RESPONSE_DATA, bufferSize: CMD_MAX_PACKET_SIZE });
+    bogusRx.feed(CMD_START_BYTE1);
+    bogusRx.feed(CMD_START_BYTE2);
+    bogusRx.feed(PACKET_TYPE_RESPONSE);
+    bogusRx.feed(0x00);
+    bogusRx.feed(0x01); // bodyLen high byte...
+    bogusRx.feed(0xF4); // ...bodyLen = 500 > CMD_MAX_RESPONSE_DATA
+    bogusRx.feed(0x00);
+    for (let i = 0; i < 32; i++) bogusRx.feed(0x00);
+    assert(bogusRx.packets.length === 0, '(e) bogus header length (bodyLen over protocol max) resets the receiver, no packet');
 }
 
 // ============================================================================

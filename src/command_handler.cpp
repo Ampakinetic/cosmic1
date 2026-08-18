@@ -92,7 +92,10 @@ void CommandHandler::process() {
         // Send response
         ResponsePacket response;
         if (result.success) {
-            response = CommandProtocol::createACK(
+            // Typed by the handler's result (WR-05): ACK for plain success,
+            // STATUS for status queries — never flattened to ACK
+            response = createResponsePacket(
+                result.responseType,
                 pendingCommand.packet.sequenceNumber,
                 result.responseData,
                 result.responseLength
@@ -607,30 +610,48 @@ void CommandHandler::processIncomingByte(uint8_t byte) {
         } else {
             receiveIndex = 0; // Reset
         }
-    } else {
-        // In packet
-        receiveBuffer[receiveIndex++] = byte;
+        return;
+    }
 
-        // Check for end sequence
-        if (receiveIndex >= 2) {
-            if (receiveBuffer[receiveIndex - 2] == CMD_END_BYTE1 &&
-                receiveBuffer[receiveIndex - 1] == CMD_END_BYTE2) {
-                // Complete packet received
-                if (validatePacket(receiveBuffer, receiveIndex)) {
-                    CommandPacket cmd;
-                    if (CommandProtocol::deserializeCommand(receiveBuffer, receiveIndex, cmd)) {
-                        pendingCommand.packet = cmd;
-                        pendingCommand.receivedTime = millis();
-                        hasCommand = true;
-                    }
-                }
-                resetReceiveState();
-            } else if (receiveIndex >= sizeof(receiveBuffer)) {
-                // Buffer overflow
-                resetReceiveState();
+    // In packet — length-driven framing (CR-03): an embedded 0x0D 0x0A pair in
+    // the payload must not terminate the packet, so the end marker is only
+    // ever tested at the length the header announces. Mirrors the framing
+    // rule in CommandSender::processIncomingByte.
+    receiveBuffer[receiveIndex++] = byte;
+
+    if (receiveIndex < CMD_HEADER_SIZE) {
+        return;
+    }
+
+    // Big-endian body length from header offsets 4-5 (payloadLength for commands)
+    size_t bodyLen = (static_cast<size_t>(receiveBuffer[4]) << 8) | receiveBuffer[5];
+
+    // Commands: header + cmd/sequence/payloadLength block (5) + payload + CRC/end (4)
+    size_t expectedTotal = CMD_HEADER_SIZE + 5 + bodyLen + 4;
+
+    if (expectedTotal > sizeof(receiveBuffer) || bodyLen > CMD_MAX_PAYLOAD_SIZE) {
+        resetReceiveState(); // Bogus header — lengths exceed protocol bounds
+        return;
+    }
+
+    if (receiveIndex < expectedTotal) {
+        return; // Still accumulating toward the announced length
+    }
+
+    // Full expected length received: verify the end marker at the framed
+    // position, then validate and dispatch
+    if (receiveBuffer[expectedTotal - 2] == CMD_END_BYTE1 &&
+        receiveBuffer[expectedTotal - 1] == CMD_END_BYTE2) {
+        if (validatePacket(receiveBuffer, expectedTotal)) {
+            CommandPacket cmd;
+            if (CommandProtocol::deserializeCommand(receiveBuffer, expectedTotal, cmd)) {
+                pendingCommand.packet = cmd;
+                pendingCommand.receivedTime = millis();
+                hasCommand = true;
             }
         }
     }
+    resetReceiveState();
 }
 
 void CommandHandler::resetReceiveState() {

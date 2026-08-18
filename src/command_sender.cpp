@@ -216,28 +216,45 @@ void CommandSender::processIncomingByte(uint8_t byte) {
         } else {
             receiveIndex = 0; // Reset
         }
-    } else {
-        // In packet
-        receiveBuffer[receiveIndex++] = byte;
+        return;
+    }
 
-        // Check for end sequence
-        if (receiveIndex >= 2) {
-            if (receiveBuffer[receiveIndex - 2] == CMD_END_BYTE1 &&
-                receiveBuffer[receiveIndex - 1] == CMD_END_BYTE2) {
-                // Complete packet received
-                if (validatePacket(receiveBuffer, receiveIndex)) {
-                    ResponsePacket response;
-                    if (CommandProtocol::deserializeResponse(receiveBuffer, receiveIndex, response)) {
-                        handleResponse(response);
-                    }
-                }
-                resetReceiveState();
-            } else if (receiveIndex >= sizeof(receiveBuffer)) {
-                // Buffer overflow
-                resetReceiveState();
+    // In packet — length-driven framing (CR-03): an embedded 0x0D 0x0A pair in
+    // the response data must not terminate the packet, so the end marker is
+    // only ever tested at the length the header announces.
+    receiveBuffer[receiveIndex++] = byte;
+
+    if (receiveIndex < CMD_HEADER_SIZE) {
+        return;
+    }
+
+    // Big-endian body length from header offsets 4-5 (dataLength for responses)
+    size_t bodyLen = (static_cast<size_t>(receiveBuffer[4]) << 8) | receiveBuffer[5];
+
+    // Responses: header + responseType/refSequence/dataLength block (4) + data + CRC/end (4)
+    size_t expectedTotal = CMD_HEADER_SIZE + 4 + bodyLen + 4;
+
+    if (expectedTotal > sizeof(receiveBuffer) || bodyLen > CMD_MAX_RESPONSE_DATA) {
+        resetReceiveState(); // Bogus header — lengths exceed protocol bounds
+        return;
+    }
+
+    if (receiveIndex < expectedTotal) {
+        return; // Still accumulating toward the announced length
+    }
+
+    // Full expected length received: verify the end marker at the framed
+    // position, then validate and dispatch
+    if (receiveBuffer[expectedTotal - 2] == CMD_END_BYTE1 &&
+        receiveBuffer[expectedTotal - 1] == CMD_END_BYTE2) {
+        if (validatePacket(receiveBuffer, expectedTotal)) {
+            ResponsePacket response;
+            if (CommandProtocol::deserializeResponse(receiveBuffer, expectedTotal, response)) {
+                handleResponse(response);
             }
         }
     }
+    resetReceiveState();
 }
 
 void CommandSender::handleResponse(const ResponsePacket& response) {
@@ -256,7 +273,9 @@ void CommandSender::handleResponse(const ResponsePacket& response) {
     cmd->hasResponse = true;
 
     // Update state based on response type
-    if (response.responseType == ResponseType::ACK) {
+    if (response.responseType == ResponseType::ACK || response.responseType == ResponseType::STATUS) {
+        // ACK confirms execution; STATUS is a successful typed response
+        // (GET_STATUS) — both count as success (WR-05)
         cmd->state = CommandState::ACKED;
         pendingCommandCount--;
         commandsAcked++;
