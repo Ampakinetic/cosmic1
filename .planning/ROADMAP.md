@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 1/4 plans executed (01-01 executed; 01-02..01-04 are gap closure from 01-VERIFICATION.md)
+**Plans:** 3/4 plans executed (01-01 tracer + 01-02 protocol + 01-03 base station UI done; 01-04 pending — gap closure from 01-VERIFICATION.md)
 
 Plans:
 **Wave 1**
@@ -55,7 +55,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-03-PLAN.md — Base station UI: all 7 settings forms, auto-capture controls, per-command outcome panel, real link LED
+- [x] 01-03-PLAN.md — Base station UI: all 7 settings forms, auto-capture controls, per-command outcome panel, real link LED (2026-08-18)
 - [ ] 01-04-PLAN.md — Balloon execution: camera sensor setters, AutoCapture interval module, real GET_STATUS, loop wiring
 
 ### Phase 2: Image Transmission
