@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 02-02-PLAN.md (beacon-on decision recorded; Tasks 1+3 committed)
-last_updated: "2026-08-18T20:18:02.622Z"
+stopped_at: Completed 02-03-PLAN.md
+last_updated: "2026-08-18T21:09:06.419Z"
 progress:
   total_phases: 2
   completed_phases: 0
   total_plans: 10
-  completed_plans: 7
+  completed_plans: 8
 current_phase: 1
 current_phase_name: image-transmission
 ---
@@ -27,10 +27,10 @@ current_phase_name: image-transmission
 
 ## Current Position
 
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 4
 **Status:** Ready to execute
-**Progress:** [███████░░░] 70% (all 6 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
+**Progress:** [████████░░] 80% (all 6 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
 
 ## Progress
 
@@ -117,8 +117,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-18T20:18:02.565Z
-**Stopped at:** Completed 02-02-PLAN.md (beacon-on decision recorded; Tasks 1+3 committed)
+**Last session:** 2026-08-18T21:09:06.361Z
+**Stopped at:** Completed 02-03-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -131,6 +131,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P06 | 11 min | 3 tasks | 7 files |
 | Phase 02 P01 | 3243s | 3 tasks | 15 files |
 | Phase 02 P02 | 550s (continuation session; Task 1 in prior session) | 3 tasks | 7 files |
+| Phase 02 P03 | 90m | 3 tasks | 9 files |
 
 ## Decisions
 
@@ -144,3 +145,6 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: Base reassembly follows the push stream: a new manifest supersedes any in-flight transfer; CRC-mismatch completions keep the previous verified thumbnail — never fabricated state (D-22 windowed pull arrives 02-03)
 - [Phase ?]: Binary HTTP bodies on this WebServer core use setContentLength + send + sendContent (no raw-pointer send overload exists); parameterized /img/{id}_t.jpg routes via not-found dispatch with strictly-numeric id parsing
 - [Phase 02]: 02-02: PRI-01/SC-5 satisfied by a live 0x14 telemetry beacon — user-confirmed at blocking checkpoint (research Q1 option a); beacon outranks image chunks in transmit arbitration, never the reverse
+- [Phase ?]: Window requests ride the Phase 1 tracked-command machinery with CMD_ACK_TIMEOUT_WINDOW_MS (15 s) while a separate 8 s stall clock watches the chunk stream — the ACK bounds only the arm handshake (02-03)
+- [Phase ?]: Fulls stream straight to SD via seek+offset with no whole-image RAM buffer; complete is set only after esp_rom_crc32_le read-back verification, and SD-degraded transfers report INCOMPLETE (notStored) even at 100 percent chunks (02-03)
+- [Phase ?]: D-22 consequence flagged for hardware UAT: the balloon serves windows only from announced full entries, so a thumbnail-hole window re-request cannot retrieve thumbnail bytes — the base degrades honestly to INCOMPLETE after 3 passes (02-03)
