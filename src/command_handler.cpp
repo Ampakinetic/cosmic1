@@ -408,16 +408,23 @@ CommandResult CommandHandler::handleSetSaturation(const CommandPacket& cmd) {
         return result;
     }
 
-    // Set saturation using sensor (not exposed in CameraManager yet)
-    // For now, just acknowledge
-    result.success = true;
-    result.responseType = ResponseType::ACK;
-    result.responseData[0] = static_cast<uint8_t>(saturation);
-    result.responseLength = 1;
-    commandsExecuted++;
+    if (camera->setSaturation(saturation)) {
+        result.success = true;
+        result.responseType = ResponseType::ACK;
 
-    if (DEBUG_COMMAND_HANDLER) {
-        Serial.printf("CommandHandler: Set saturation to %d (placeholder)\n", saturation);
+        result.responseData[0] = static_cast<uint8_t>(saturation);
+        result.responseLength = 1;
+
+        commandsExecuted++;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Set saturation to %d\n", saturation);
+        }
+    } else {
+        result.success = false;
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Set saturation failed", sizeof(result.message) - 1);
+        commandsFailed++;
     }
 
     return result;
@@ -442,16 +449,23 @@ CommandResult CommandHandler::handleSetExposure(const CommandPacket& cmd) {
         return result;
     }
 
-    // Set exposure using sensor (not exposed in CameraManager yet)
-    // For now, just acknowledge
-    result.success = true;
-    result.responseType = ResponseType::ACK;
-    result.responseData[0] = static_cast<uint8_t>(exposure);
-    result.responseLength = 1;
-    commandsExecuted++;
+    if (camera->setExposure(exposure)) {
+        result.success = true;
+        result.responseType = ResponseType::ACK;
 
-    if (DEBUG_COMMAND_HANDLER) {
-        Serial.printf("CommandHandler: Set exposure to %d (placeholder)\n", exposure);
+        result.responseData[0] = static_cast<uint8_t>(exposure);
+        result.responseLength = 1;
+
+        commandsExecuted++;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Set exposure to %d\n", exposure);
+        }
+    } else {
+        result.success = false;
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Set exposure failed", sizeof(result.message) - 1);
+        commandsFailed++;
     }
 
     return result;
@@ -469,23 +483,31 @@ CommandResult CommandHandler::handleSetWBMode(const CommandPacket& cmd) {
 
     WhiteBalanceMode wbMode = static_cast<WhiteBalanceMode>(cmd.payload[0]);
 
-    if (static_cast<int>(wbMode) > 4) {
+    int wbModeValue = static_cast<int>(wbMode);
+    if (wbModeValue < 0 || wbModeValue > 4) {
         result.responseType = ResponseType::NACK_PARAM;
         strncpy(result.message, "Invalid WB mode", sizeof(result.message) - 1);
         commandsFailed++;
         return result;
     }
 
-    // Set white balance using sensor (not exposed in CameraManager yet)
-    // For now, just acknowledge
-    result.success = true;
-    result.responseType = ResponseType::ACK;
-    result.responseData[0] = static_cast<uint8_t>(wbMode);
-    result.responseLength = 1;
-    commandsExecuted++;
+    if (camera->setWBMode(wbModeValue)) {
+        result.success = true;
+        result.responseType = ResponseType::ACK;
 
-    if (DEBUG_COMMAND_HANDLER) {
-        Serial.printf("CommandHandler: Set WB mode to %d (placeholder)\n", static_cast<int>(wbMode));
+        result.responseData[0] = static_cast<uint8_t>(wbMode);
+        result.responseLength = 1;
+
+        commandsExecuted++;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Set WB mode to %d\n", wbModeValue);
+        }
+    } else {
+        result.success = false;
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Set WB mode failed", sizeof(result.message) - 1);
+        commandsFailed++;
     }
 
     return result;

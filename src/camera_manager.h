@@ -52,6 +52,9 @@ private:
     int currentQuality;
     int currentBrightness;
     int currentContrast;
+    int currentSaturation;
+    int currentExposure;
+    int currentWBMode;
     
     // Timing
     uint32_t lastCaptureTime;
@@ -99,11 +102,17 @@ public:
     bool setQuality(int quality);
     bool setBrightness(int brightness);
     bool setContrast(int contrast);
-    
+    bool setSaturation(int saturation);
+    bool setExposure(int exposureLevel);
+    bool setWBMode(int wbMode);
+
     framesize_t getFrameSize() const { return currentFrameSize; }
     int getQuality() const { return currentQuality; }
     int getBrightness() const { return currentBrightness; }
     int getContrast() const { return currentContrast; }
+    int getSaturation() const { return currentSaturation; }
+    int getExposure() const { return currentExposure; }
+    int getWBMode() const { return currentWBMode; }
     
     // Status methods
     bool isReady() const { return initialized; }

@@ -16,6 +16,9 @@ CameraManager::CameraManager() {
     currentQuality = BALLOON_CAMERA_QUALITY;
     currentBrightness = BALLOON_CAMERA_BRIGHTNESS;
     currentContrast = BALLOON_CAMERA_CONTRAST;
+    currentSaturation = 0;
+    currentExposure = 0;
+    currentWBMode = 0;
     
     // Initialize timing
     lastCaptureTime = 0;
@@ -405,18 +408,75 @@ bool CameraManager::setContrast(int contrast) {
     if (!initialized) {
         return false;
     }
-    
+
     sensor_t* s = esp_camera_sensor_get();
     if (!s) {
         return false;
     }
-    
+
     if (s->set_contrast(s, contrast) != 0) {
         return false;
     }
-    
+
     currentContrast = contrast;
-    
+
+    return true;
+}
+
+bool CameraManager::setSaturation(int saturation) {
+    if (!initialized) {
+        return false;
+    }
+
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) {
+        return false;
+    }
+
+    if (s->set_saturation(s, saturation) != 0) {
+        return false;
+    }
+
+    currentSaturation = saturation;
+
+    return true;
+}
+
+bool CameraManager::setExposure(int exposureLevel) {
+    if (!initialized) {
+        return false;
+    }
+
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) {
+        return false;
+    }
+
+    if (s->set_ae_level(s, exposureLevel) != 0) {
+        return false;
+    }
+
+    currentExposure = exposureLevel;
+
+    return true;
+}
+
+bool CameraManager::setWBMode(int wbMode) {
+    if (!initialized) {
+        return false;
+    }
+
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) {
+        return false;
+    }
+
+    if (s->set_wb_mode(s, wbMode) != 0) {
+        return false;
+    }
+
+    currentWBMode = wbMode;
+
     return true;
 }
 
