@@ -20,7 +20,7 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 
 - [x] **IMG-01**: Captured images are transmitted from balloon to base station over LoRa
 - [x] **IMG-02**: Thumbnail preview (320x240 or smaller) displays immediately on base station
-- [ ] **IMG-03**: Full resolution images transfer in background after thumbnail
+- [x] **IMG-03**: Full resolution images transfer in background after thumbnail
 - [x] **IMG-04**: Images are chunked into packets for reliable LoRa transmission
 - [ ] **IMG-05**: Base station stores received images on SD card
 - [ ] **IMG-06**: Image gallery displays all received images with pagination
@@ -36,9 +36,9 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 
 ### Priority & Reliability
 
-- [ ] **PRI-01**: Telemetry data always has priority over camera/image data on LoRa link
+- [x] **PRI-01**: Telemetry data always has priority over camera/image data on LoRa link
 - [x] **PRI-02**: Camera commands use retry mechanism with timeout for failed transmissions
-- [ ] **PRI-03**: System gracefully handles LoRa bandwidth limitations
+- [x] **PRI-03**: System gracefully handles LoRa bandwidth limitations
 
 ### Alerts & Monitoring
 
@@ -86,7 +86,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CTRL-06 | Phase 1 | Complete |
 | IMG-01 | Phase 2 | Complete |
 | IMG-02 | Phase 2 | Complete |
-| IMG-03 | Phase 2 | Pending |
+| IMG-03 | Phase 2 | Complete |
 | IMG-04 | Phase 2 | Complete |
 | IMG-05 | Phase 2 | Pending |
 | IMG-06 | Phase 3 | Pending |
@@ -96,9 +96,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WEB-04 | Phase 3 | Pending |
 | WEB-05 | Phase 3 | Pending |
 | WEB-06 | - | Complete (existing) |
-| PRI-01 | Phase 2 | Pending |
+| PRI-01 | Phase 2 | Complete |
 | PRI-02 | Phase 1 | Complete |
-| PRI-03 | Phase 2 | Pending |
+| PRI-03 | Phase 2 | Complete |
 | ALRT-01 | Phase 3 | Pending |
 | ALRT-02 | Phase 3 | Pending |
 | ALRT-03 | Phase 3 | Pending |

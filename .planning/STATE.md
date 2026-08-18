@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 02-01-PLAN.md
-last_updated: "2026-08-18T15:46:06.785Z"
+stopped_at: Completed 02-02-PLAN.md (beacon-on decision recorded; Tasks 1+3 committed)
+last_updated: "2026-08-18T20:18:02.622Z"
 progress:
   total_phases: 2
   completed_phases: 0
   total_plans: 10
-  completed_plans: 6
+  completed_plans: 7
 current_phase: 1
 current_phase_name: image-transmission
 ---
@@ -27,10 +27,10 @@ current_phase_name: image-transmission
 
 ## Current Position
 
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 4
 **Status:** Ready to execute
-**Progress:** [██████░░░░] 60% (all 6 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
+**Progress:** [███████░░░] 70% (all 6 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
 
 ## Progress
 
@@ -117,8 +117,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-18T15:46:06.742Z
-**Stopped at:** Completed 02-01-PLAN.md
+**Last session:** 2026-08-18T20:18:02.565Z
+**Stopped at:** Completed 02-02-PLAN.md (beacon-on decision recorded; Tasks 1+3 committed)
 **Resume file:** None
 
 ## Performance Metrics
@@ -130,6 +130,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P05 | 7 min | 2 tasks | 4 files |
 | Phase 01 P06 | 11 min | 3 tasks | 7 files |
 | Phase 02 P01 | 3243s | 3 tasks | 15 files |
+| Phase 02 P02 | 550s (continuation session; Task 1 in prior session) | 3 tasks | 7 files |
 
 ## Decisions
 
@@ -142,3 +143,4 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: Phase 2 wire contract locked: 0x12/0x14 receivers force fixed body lengths (27/17) instead of trusting header bodyLen; 0x13 keeps header bodyLen == dataLen so chunk framing stays command-shaped
 - [Phase ?]: Base reassembly follows the push stream: a new manifest supersedes any in-flight transfer; CRC-mismatch completions keep the previous verified thumbnail — never fabricated state (D-22 windowed pull arrives 02-03)
 - [Phase ?]: Binary HTTP bodies on this WebServer core use setContentLength + send + sendContent (no raw-pointer send overload exists); parameterized /img/{id}_t.jpg routes via not-found dispatch with strictly-numeric id parsing
+- [Phase 02]: 02-02: PRI-01/SC-5 satisfied by a live 0x14 telemetry beacon — user-confirmed at blocking checkpoint (research Q1 option a); beacon outranks image chunks in transmit arbitration, never the reverse
