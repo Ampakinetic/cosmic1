@@ -16,6 +16,7 @@
 #include "command_sender.h"
 #include "command_protocol.h"
 #include "image_rx_manager.h"
+#include "sd_storage.h"
 
 // ===========================
 // Pin Configuration
@@ -92,6 +93,7 @@ void loop();
 void initHardware();
 void initWiFi();
 void initLoRa();
+void initStorage();
 void initWebServer();
 
 void processLoRa();
@@ -279,6 +281,52 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         .led.green { background: #22c55e; box-shadow: 0 0 10px #22c55e; }
         .led.red { background: #ef4444; box-shadow: 0 0 10px #ef4444; }
         .led.yellow { background: #eab308; box-shadow: 0 0 10px #eab308; }
+        .transfer-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: #334155;
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin-top: 8px;
+            font-size: 13px;
+            flex-wrap: wrap;
+        }
+        .transfer-id { font-weight: bold; min-width: 110px; }
+        .transfer-kind {
+            font-size: 11px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: #1e3a5f;
+            color: #93c5fd;
+            font-weight: bold;
+        }
+        .transfer-kind.full { background: #312e81; color: #a5b4fc; }
+        .progress-track {
+            flex: 1;
+            height: 8px;
+            background: #475569;
+            border-radius: 4px;
+            overflow: hidden;
+            min-width: 60px;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6, #60a5fa);
+        }
+        .progress-fill.done { background: #22c55e; }
+        .progress-fill.failed { background: #ef4444; }
+        .transfer-chunks { color: #94a3b8; font-size: 12px; white-space: nowrap; }
+        .transfer-state {
+            font-size: 11px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-weight: bold;
+        }
+        .transfer-state.QUEUED, .transfer-state.RECEIVING { background: #1e3a5f; color: #93c5fd; }
+        .transfer-state.RETRYING { background: #713f12; color: #fbbf24; }
+        .transfer-state.COMPLETE { background: #065f46; color: #34d399; }
+        .transfer-state.INCOMPLETE { background: #7f1d1d; color: #f87171; }
         @media (max-width: 480px) {
             .status-bar {
                 grid-template-columns: repeat(2, 1fr);
@@ -350,6 +398,78 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                         list.appendChild(row);
                     });
 
+                    // D-20: one row per transfer slot — pushed thumbnails and
+                    // pulled fulls share the same bar and locked vocabulary;
+                    // every value is server-computed truth, the client only
+                    // presents it
+                    const tlist = document.getElementById('transfer-list');
+                    tlist.innerHTML = '';
+                    const transfers = data.transfers || [];
+                    if (transfers.length === 0) {
+                        const empty = document.createElement('div');
+                        empty.className = 'message info';
+                        empty.textContent = 'No image transfers yet — trigger a capture to start one.';
+                        tlist.appendChild(empty);
+                    } else {
+                        transfers.forEach(function (t) {
+                            const row = document.createElement('div');
+                            row.className = 'transfer-row';
+
+                            // Completed rows link to the stored bytes: fulls
+                            // stream from /img/{id} (SD), thumbnails from
+                            // /img/{id}_t.jpg (retained RAM or SD fallback)
+                            let head;
+                            if (t.state === 'COMPLETE') {
+                                head = document.createElement('a');
+                                head.href = t.kind === 'THUMB'
+                                    ? ('/img/' + t.id + '_t.jpg') : ('/img/' + t.id);
+                                head.target = '_blank';
+                                head.style.color = '#60a5fa';
+                                head.style.textDecoration = 'none';
+                            } else {
+                                head = document.createElement('span');
+                            }
+                            head.className = 'transfer-id';
+                            head.textContent = 'Image #' + t.id;
+
+                            const kind = document.createElement('span');
+                            kind.className = 'transfer-kind' + (t.kind === 'FULL' ? ' full' : '');
+                            kind.textContent = t.kind;
+
+                            const track = document.createElement('div');
+                            track.className = 'progress-track';
+                            const fill = document.createElement('div');
+                            fill.className = 'progress-fill'
+                                + (t.state === 'COMPLETE' ? ' done'
+                                   : (t.state === 'INCOMPLETE' ? ' failed' : ''));
+                            fill.style.width = Math.max(0, Math.min(100, t.percent)) + '%';
+                            track.appendChild(fill);
+
+                            const chunks = document.createElement('span');
+                            chunks.className = 'transfer-chunks';
+                            chunks.textContent = t.chunksReceived + '/' + t.chunksTotal
+                                + ' chunks · ' + t.percent + '%';
+
+                            const state = document.createElement('span');
+                            state.className = 'transfer-state ' + t.state;
+                            state.textContent = t.state;
+
+                            row.appendChild(head);
+                            row.appendChild(kind);
+                            row.appendChild(track);
+                            row.appendChild(chunks);
+                            row.appendChild(state);
+                            tlist.appendChild(row);
+                        });
+                    }
+
+                    // Storage chip (IMG-05): honest computed state — green OK,
+                    // amber UNAVAILABLE (no card) or FULL (write failed)
+                    const sd = data.storage;
+                    const sdEl = document.getElementById('storage-state');
+                    sdEl.textContent = sd ? sd.state : 'UNKNOWN';
+                    sdEl.style.color = (sd && sd.state === 'OK') ? '#22c55e' : '#eab308';
+
                     // Latest capture (IMG-01): swap the image only when a NEW
                     // CRC-verified id lands; the dataset gate plus per-id src
                     // means a stale image is never shown under a new id
@@ -417,6 +537,7 @@ void setup() {
     initHardware();
     initWiFi();
     initLoRa();
+    initStorage();
     initWebServer();
 
     appState.initialized = true;
@@ -507,6 +628,25 @@ void initLoRa() {
     Serial.println("  LoRa E32 initialized");
     Serial.println("  Command sender ready");
     Serial.println("  Image receiver ready");
+}
+
+void initStorage() {
+    Serial.println("Initializing SD storage...");
+
+    // IMG-05: begin() returns true even on mount failure — the station runs
+    // degraded without persistence (degrade, never halt); the UI storage
+    // chip and /status consume the honest state from getStatus()
+    SDStorage().begin();
+
+    SdStorageStatus st = SDStorage().getStatus();
+    if (st.available) {
+        Serial.println("  SD storage ready (/images)");
+    } else if (st.initFailed) {
+        Serial.println("  SD storage UNAVAILABLE (no card / mount failed) — "
+                       "running without persistence");
+    } else {
+        Serial.println("  SD storage degraded — storing stopped, existing files kept");
+    }
 }
 
 void initWebServer() {
@@ -603,6 +743,10 @@ void handleRoot() {
     html += "<div class=\"status-label\">Pending</div>";
     html += "<div class=\"status-value\" id=\"cmd-pending\">0</div>";
     html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Storage</div>";
+    html += "<div class=\"status-value\" id=\"storage-state\">Unknown</div>";
+    html += "</div>";
     html += "</div>";
 
     // Command Queue card (D-16: pinned last command + one row per remaining
@@ -612,6 +756,15 @@ void handleRoot() {
     html += "<div class=\"status-value\" id=\"lastcmd-name\">No commands yet</div>";
     html += "<div class=\"message info\" id=\"lastcmd-state\">Trigger a capture or change a setting — the result of your last command appears here.</div>";
     html += "<div id=\"cmd-queue-list\"></div>";
+    html += "</div>";
+
+    // Transfer progress card (D-20): one row per transfer slot — pushed
+    // thumbnails and pulled fulls share the SAME panel, progress bar, and
+    // locked state vocabulary; the poll script fills the rows (empty state
+    // until the first manifest arrives)
+    html += "<div class=\"card\">";
+    html += "<h2>📦 Image Transfers</h2>";
+    html += "<div id=\"transfer-list\"></div>";
     html += "</div>";
 
     // Capture card
@@ -1065,6 +1218,7 @@ const char* commandDisplayName(uint8_t commandType) {
         case CameraCommand::AUTO_CAPTURE_ENABLE:  return "Auto-Capture On";
         case CameraCommand::AUTO_CAPTURE_DISABLE: return "Auto-Capture Off";
         case CameraCommand::GET_STATUS:           return "Get Status";
+        case CameraCommand::IMAGE_WINDOW_REQUEST: return "Image Window";
     }
     return "Command";
 }
@@ -1153,6 +1307,36 @@ void handleStatus() {
         json += "\"telemetry\":null,";
     }
 
+    // D-20: one row per transfer slot — pushed thumbnails and pulled fulls
+    // in the same array, every value derived from the chunk bitmap / pass
+    // counter / terminal flags (locked transferStateToString vocabulary)
+    TransferRow rows[ImageRxManager::RX_TRANSFER_SLOTS];
+    uint8_t rowCount = ImageRx().getTransferSnapshot(rows, ImageRxManager::RX_TRANSFER_SLOTS);
+    json += "\"transfers\":[";
+    for (uint8_t i = 0; i < rowCount; i++) {
+        if (i > 0) {
+            json += ",";
+        }
+        json += "{\"id\":" + String(rows[i].imageId) + ",";
+        json += "\"kind\":\"" + String(rows[i].kind == static_cast<uint8_t>(ImageKind::THUMBNAIL)
+                                          ? "THUMB" : "FULL") + "\",";
+        json += "\"chunksReceived\":" + String(rows[i].receivedChunks) + ",";
+        json += "\"chunksTotal\":" + String(rows[i].totalChunks) + ",";
+        json += "\"percent\":" + String(rows[i].percent) + ",";
+        json += "\"state\":\"" + String(transferStateToString(rows[i].state)) + "\"}";
+    }
+    json += "],";
+
+    // Storage (IMG-05): honest computed state — OK / UNAVAILABLE (no card,
+    // mount failed) / FULL (mid-flight write failure, storing stopped);
+    // never a hardcoded OK
+    SdStorageStatus sd = SDStorage().getStatus();
+    const char* sdState = sd.available ? "OK"
+                        : (sd.initFailed ? "UNAVAILABLE" : "FULL");
+    json += "\"storage\":{";
+    json += "\"available\":" + String(sd.available ? "true" : "false") + ",";
+    json += "\"state\":\"" + String(sdState) + "\"},";
+
     // D-16: one entry per occupied queue slot, same vocabulary as lastState
     json += "\"queue\":[";
     for (uint8_t i = 0; i < entryCount; i++) {
@@ -1169,20 +1353,27 @@ void handleStatus() {
     server.send(200, "application/json", json);
 }
 
-// GET /img/{id}_t.jpg — serves the retained newest CRC-verified thumbnail
-// (IMG-01). The WebServer matches registered routes by exact path, so the
-// parameterized image path is dispatched from handleNotFound instead of
-// server.on(); the id is parsed strictly numeric before any comparison.
+// GET /img/{id}_t.jpg (thumbnail) and GET /img/{id} (full image, IMG-04).
+// Thumbnails serve from the retained newest verified copy first, then fall
+// back to the SD copy for older ids; fulls stream straight from SD. The
+// WebServer matches registered routes by exact path, so the parameterized
+// image paths are dispatched from handleNotFound instead of server.on();
+// the id is parsed strictly numeric before any comparison, and absence is
+// reported honestly (404) — never fabricated.
 void handleImage(const String& uri) {
     static const char PREFIX[] = "/img/";
-    static const char SUFFIX[] = "_t.jpg";
+    static const char THUMB_SUFFIX[] = "_t.jpg";
 
-    if (!uri.startsWith(PREFIX) || !uri.endsWith(SUFFIX)) {
+    if (!uri.startsWith(PREFIX)) {
         sendResponse(404, "Not Found", "Unknown image path");
         return;
     }
 
-    String idStr = uri.substring(strlen(PREFIX), uri.length() - strlen(SUFFIX));
+    String idStr = uri.substring(strlen(PREFIX));
+    bool isThumb = idStr.endsWith(THUMB_SUFFIX);
+    if (isThumb) {
+        idStr = idStr.substring(0, idStr.length() - strlen(THUMB_SUFFIX));
+    }
     if (idStr.length() == 0) {
         sendResponse(404, "Not Found", "Missing image id");
         return;
@@ -1195,25 +1386,52 @@ void handleImage(const String& uri) {
     }
 
     long id = strtol(idStr.c_str(), nullptr, 10);
-    if (id <= 0 || static_cast<uint32_t>(id) != ImageRx().getLatestThumbId()
-            || ImageRx().getLatestThumbData() == nullptr) {
-        // Only the retained image is served — anything else (older ids,
-        // never-received ids) is honestly absent, not fabricated
+    if (id <= 0 || id > 0xFFFF) {
         sendResponse(404, "Not Found", "Image not available");
         return;
     }
 
-    // This WebServer core has no raw-pointer send overload — set the length,
-    // emit headers, then stream the binary body (binary-safe sendContent)
-    server.setContentLength(ImageRx().getLatestThumbLength());
-    server.send(200, "image/jpeg", "");
-    server.sendContent(reinterpret_cast<const char*>(ImageRx().getLatestThumbData()),
-                       ImageRx().getLatestThumbLength());
+    if (isThumb) {
+        // IMG-01: the retained newest CRC-verified thumbnail serves from RAM
+        if (static_cast<uint32_t>(id) == ImageRx().getLatestThumbId()
+                && ImageRx().getLatestThumbData() != nullptr) {
+            // This WebServer core has no raw-pointer send overload — set the
+            // length, emit headers, then stream the binary body
+            server.setContentLength(ImageRx().getLatestThumbLength());
+            server.send(200, "image/jpeg", "");
+            server.sendContent(reinterpret_cast<const char*>(ImageRx().getLatestThumbData()),
+                               ImageRx().getLatestThumbLength());
+            return;
+        }
+
+        // Older verified thumbnails: SD fallback (the file exists only if
+        // the transfer verified and storage was healthy at finalize)
+        File f = SDStorage().serveFile(static_cast<uint16_t>(id),
+                                       static_cast<uint8_t>(ImageKind::THUMBNAIL));
+        if (f) {
+            server.streamFile(f, "image/jpeg");
+            f.close();
+            return;
+        }
+        sendResponse(404, "Not Found", "Image not available");
+        return;
+    }
+
+    // Full image (IMG-04): streamed from SD only — a full exists on disk
+    // exactly when its window pull verified end-to-end (D-23)
+    File f = SDStorage().serveFile(static_cast<uint16_t>(id),
+                                   static_cast<uint8_t>(ImageKind::FULL_IMAGE));
+    if (f) {
+        server.streamFile(f, "image/jpeg");
+        f.close();
+        return;
+    }
+    sendResponse(404, "Not Found", "Image not available");
 }
 
 void handleNotFound() {
-    // /img/{id}_t.jpg routes here (exact-match routing cannot express the
-    // parameter) — dispatch before the generic 404
+    // /img/{id} and /img/{id}_t.jpg route here (exact-match routing cannot
+    // express the parameter) — dispatch before the generic 404
     String uri = server.uri();
     if (server.method() == HTTP_GET && uri.startsWith("/img/")) {
         handleImage(uri);
