@@ -124,7 +124,6 @@ bool checkHardwareStatus();
 // Main Loop Functions
 void updateSystemState();
 void processSensors();
-void processCamera();
 void processCommunications();
 void processPowerManagement();
 void processPacketHandling();
@@ -139,7 +138,6 @@ bool shouldUpdatePerformance();
 void sendTelemetryData();
 void sendHeartbeatPacket();
 void sendStatusReport();
-void processIncomingCommands();
 
 // Utility Functions
 void printSystemInfo();
@@ -250,7 +248,6 @@ void loop() {
         
         // Process main subsystems
         processSensors();
-        processCamera();
         processCommunications();
         processPowerManagement();
         processPacketHandling();
@@ -271,9 +268,6 @@ void loop() {
         if (shouldUpdatePerformance()) {
             updatePerformanceMetrics(millis() - loopStartTime);
         }
-        
-        // Process incoming commands
-        processIncomingCommands();
         
         // Update loop statistics
         appState.loopCounter++;
@@ -652,42 +646,8 @@ void processSensors() {
     }
     
     if (sensorData.pressure < 200.0f) {
-        SYS_INFO("Low pressure detected: %.1f hPa (altitude: %.1f m)", 
+        SYS_INFO("Low pressure detected: %.1f hPa (altitude: %.1f m)",
                 sensorData.pressure, gpsData.altitude);
-    }
-}
-
-void processCamera() {
-    if (!appState.cameraActive) {
-        return;
-    }
-    
-    // Camera manager doesn't have update() method
-    // Check if it's time to capture an image
-    if (Camera().isTimeToCapture(30000)) {  // 30 second interval
-        if (Camera().captureImage()) {
-            SYS_INFO("Camera image captured");
-            
-            // Get camera data
-            const ImageData& imageData = Camera().getCurrentImage();
-            
-            // Convert to CameraData format
-            CameraData cameraData;
-            static uint16_t nextImageId = 1;
-            cameraData.imageId = nextImageId++; // Simple counter for image ID
-            cameraData.imageSize = imageData.length;
-            cameraData.timestamp = imageData.timestamp;
-            cameraData.compression = 1; // Default compression
-            cameraData.brightness = 0.0f; // Default brightness
-            cameraData.contrast = 0.0f; // Default contrast
-            cameraData.faceCount = 0; // Default face count
-            cameraData.objectCount = 0; // Default object count
-            
-            // Create camera packet
-            if (PacketMgr().createCameraPacket(cameraData)) {
-                SYS_LOG("Camera packet created successfully");
-            }
-        }
     }
 }
 
@@ -881,11 +841,6 @@ void sendStatusReport() {
     } else {
         SYS_WARNING("Failed to create status report packet");
     }
-}
-
-void processIncomingCommands() {
-    // This would process any received commands
-    // For now, it's a placeholder
 }
 
 // ===========================
