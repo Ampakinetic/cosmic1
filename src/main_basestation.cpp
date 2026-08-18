@@ -67,7 +67,19 @@ struct BaseStationState {
     uint32_t commandsAcked;
     uint32_t commandsFailed;
     char lastStatus[64];
+    // LED truth (IN-03): link state derived from real ACK activity
+    uint32_t lastAckTime;
+    uint16_t ackedAtLastPoll;
+    bool lastOutcomeBad;
+    uint32_t lastTerminalFailTime;
+    // Auto-capture chip: latched from the newest ACKed auto-capture command
+    bool autoCaptureOn;
+    uint16_t autoCaptureAckSeq;
+    uint16_t autoCaptureIntervalAckSec;
 } appState;
+
+// Link considered stale after this long without an ACK (LED truth, IN-03)
+static constexpr uint32_t LINK_STALE_MS = 30000;
 
 // ===========================
 // Function Declarations
@@ -98,6 +110,9 @@ void handleAutoCaptureEnable();
 void handleAutoCaptureDisable();
 void handleStatus();
 void handleNotFound();
+
+String commandStateToString(CommandState state, uint8_t retryCount);
+const char* commandDisplayName(uint8_t commandType);
 
 void sendResponse(int code, const char* status, const char* message = nullptr);
 void sendHTML(const char* html);
@@ -150,7 +165,7 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             border-radius: 8px;
             margin-bottom: 20px;
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
             gap: 8px;
         }
         .status-item {
@@ -280,6 +295,15 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
 const char HTML_FOOTER[] PROGMEM = R"rawliteral(
     </div>
     <script>
+        // Locked status vocabulary -> message class mapping (shared by the
+        // pinned last-command row and every queue row)
+        function stateClass(s) {
+            if (s === 'ACK Received') return 'success';
+            if (s === 'Sent') return 'info';
+            if (s.indexOf('Failed') === 0 || s === 'Timeout') return 'error';
+            return 'info';
+        }
+
         function updateStatus() {
             fetch('/status')
                 .then(r => r.json())
@@ -289,8 +313,40 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                     document.getElementById('cmd-failed').textContent = data.failed;
                     document.getElementById('cmd-pending').textContent = data.pending;
 
+                    // LED truth (IN-03): green only on recent ACKed activity,
+                    // red after terminal failure with no ACK since, else yellow
                     const led = document.getElementById('status-led');
-                    led.className = 'led ' + (data.connected ? 'green' : 'red');
+                    led.className = 'led ' + (data.connected ? 'green' : (data.linkText === 'No link' ? 'red' : 'yellow'));
+                    document.getElementById('link-text').textContent = data.linkText;
+
+                    // Auto-capture chip — display-only until the command ACKs
+                    const chip = document.getElementById('autocapture-chip');
+                    chip.textContent = data.autoCapture ? ('ON · every ' + data.autoCaptureInterval + 's') : 'OFF';
+                    chip.className = 'message ' + (data.autoCapture ? 'success' : 'info');
+
+                    // Pinned last-command row (empty state before any command)
+                    const nameEl = document.getElementById('lastcmd-name');
+                    const stateEl = document.getElementById('lastcmd-state');
+                    if (data.lastSeq === 0) {
+                        nameEl.textContent = 'No commands yet';
+                        stateEl.textContent = 'Trigger a capture or change a setting — the result of your last command appears here.';
+                        stateEl.className = 'message info';
+                    } else {
+                        nameEl.textContent = data.lastCmd + ' · #' + data.lastSeq;
+                        stateEl.textContent = data.lastState;
+                        stateEl.className = 'message ' + stateClass(data.lastState);
+                    }
+
+                    // D-16: one row per remaining occupied queue slot
+                    const list = document.getElementById('cmd-queue-list');
+                    list.innerHTML = '';
+                    (data.queue || []).forEach(function (e) {
+                        if (e.seq === data.lastSeq) return;
+                        const row = document.createElement('div');
+                        row.className = 'message ' + stateClass(e.state);
+                        row.textContent = e.cmd + ' · #' + e.seq + ' — ' + e.state;
+                        list.appendChild(row);
+                    });
                 })
                 .catch(err => console.error(err));
         }
@@ -430,6 +486,25 @@ void processLoRa() {
     appState.commandsSent = CmdSender().getCommandsSent();
     appState.commandsAcked = CmdSender().getCommandsAcked();
     appState.commandsFailed = CmdSender().getCommandsFailed();
+
+    // LED truth (IN-03): latch the moment the last issued command reaches a
+    // terminal bad outcome; a newer command in flight or a success clears it
+    if (appState.lastCommandSequence > 0) {
+        CommandState st = CmdSender().getCommandState(appState.lastCommandSequence);
+        if ((st == CommandState::TIMEOUT || st == CommandState::FAILED) && !appState.lastOutcomeBad) {
+            appState.lastOutcomeBad = true;
+            appState.lastTerminalFailTime = millis();
+        } else if (st == CommandState::ACKED || st == CommandState::PENDING || st == CommandState::SENT) {
+            appState.lastOutcomeBad = false;
+        }
+    }
+
+    // LED truth (IN-03): record when the latest ACK arrived
+    uint32_t acked = CmdSender().getCommandsAcked();
+    if (static_cast<uint16_t>(acked) > appState.ackedAtLastPoll) {
+        appState.lastAckTime = millis();
+    }
+    appState.ackedAtLastPoll = static_cast<uint16_t>(acked);
 }
 
 void updateStatus() {
@@ -456,7 +531,7 @@ void handleRoot() {
     html += "<div class=\"status-bar\">";
     html += "<div class=\"status-item\">";
     html += "<div class=\"status-label\">Status</div>";
-    html += "<div class=\"status-value\"><span id=\"status-led\" class=\"led green\"></span>Ready</div>";
+    html += "<div class=\"status-value\"><span id=\"status-led\" class=\"led yellow\"></span><span id=\"link-text\">Unknown</span></div>";
     html += "</div>";
     html += "<div class=\"status-item\">";
     html += "<div class=\"status-label\">Sent</div>";
@@ -467,9 +542,22 @@ void handleRoot() {
     html += "<div class=\"status-value\" id=\"cmd-acked\">0</div>";
     html += "</div>";
     html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Failed</div>";
+    html += "<div class=\"status-value\" id=\"cmd-failed\">0</div>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
     html += "<div class=\"status-label\">Pending</div>";
     html += "<div class=\"status-value\" id=\"cmd-pending\">0</div>";
     html += "</div>";
+    html += "</div>";
+
+    // Command Queue card (D-16: pinned last command + one row per remaining
+    // occupied slot; server-rendered empty state replaced by the poll script)
+    html += "<div class=\"card\">";
+    html += "<h2>📡 Command Queue</h2>";
+    html += "<div class=\"status-value\" id=\"lastcmd-name\">No commands yet</div>";
+    html += "<div class=\"message info\" id=\"lastcmd-state\">Trigger a capture or change a setting — the result of your last command appears here.</div>";
+    html += "<div id=\"cmd-queue-list\"></div>";
     html += "</div>";
 
     // Capture card
@@ -878,14 +966,122 @@ void handleAutoCaptureDisable() {
     }
 }
 
+// LOCKED status vocabulary (UI-SPEC Copywriting Contract) — the single
+// CommandState-to-string mapping shared by lastState and every queue row,
+// so the pinned row and the queue can never diverge
+String commandStateToString(CommandState state, uint8_t retryCount) {
+    switch (state) {
+        case CommandState::PENDING:
+        case CommandState::SENT:
+            return "Sent";
+        case CommandState::ACKED:
+            return "ACK Received";
+        case CommandState::FAILED:
+            return "Failed (retry " + String(retryCount) + ")";
+        case CommandState::TIMEOUT:
+            return "Timeout";
+        case CommandState::IDLE:
+        default:
+            return "";
+    }
+}
+
+// Display names — the same names the handlers record in lastCommandName,
+// plus "Get Status" for GET_STATUS queue rows
+const char* commandDisplayName(uint8_t commandType) {
+    switch (static_cast<CameraCommand>(commandType)) {
+        case CameraCommand::CAPTURE_NOW:          return "Capture";
+        case CameraCommand::SET_RESOLUTION:       return "Set Resolution";
+        case CameraCommand::SET_QUALITY:          return "Set Quality";
+        case CameraCommand::SET_BRIGHTNESS:       return "Set Brightness";
+        case CameraCommand::SET_CONTRAST:         return "Set Contrast";
+        case CameraCommand::SET_SATURATION:       return "Set Saturation";
+        case CameraCommand::SET_EXPOSURE:         return "Set Exposure";
+        case CameraCommand::SET_WB_MODE:          return "Set White Balance";
+        case CameraCommand::AUTO_CAPTURE_ENABLE:  return "Auto-Capture On";
+        case CameraCommand::AUTO_CAPTURE_DISABLE: return "Auto-Capture Off";
+        case CameraCommand::GET_STATUS:           return "Get Status";
+    }
+    return "Command";
+}
+
 void handleStatus() {
+    // D-16: live queue snapshot — every occupied slot of the command table
+    CommandQueueEntry entries[MAX_PENDING_COMMANDS];
+    uint8_t entryCount = CmdSender().getCommandQueue(entries, MAX_PENDING_COMMANDS);
+
     String json = "{";
-    json += "\"connected\":true,";
     json += "\"sent\":" + String(appState.commandsSent) + ",";
     json += "\"acked\":" + String(appState.commandsAcked) + ",";
     json += "\"failed\":" + String(appState.commandsFailed) + ",";
-    json += "\"pending\":" + String(CmdSender().hasPendingCommands() ? 1 : 0);
-    json += "}";
+    json += "\"pending\":" + String(CmdSender().hasPendingCommands() ? 1 : 0) + ",";
+
+    // Last command outcome (SC-4: locked status vocabulary)
+    CommandState lastState = CommandState::IDLE;
+    uint8_t lastRetry = 0;
+    if (appState.lastCommandSequence > 0) {
+        lastState = CmdSender().getCommandState(appState.lastCommandSequence);
+        lastRetry = CmdSender().getCommandRetryCount(appState.lastCommandSequence);
+    }
+    json += "\"lastCmd\":\"" + String(appState.lastCommandName) + "\",";
+    json += "\"lastSeq\":" + String(appState.lastCommandSequence) + ",";
+    json += "\"lastState\":\"" + commandStateToString(lastState, lastRetry) + "\",";
+    json += "\"lastRetry\":" + String(lastRetry) + ",";
+
+    // LED truth (IN-03): connected is COMPUTED from ack activity and terminal
+    // outcomes — never a hardcoded value. Yellow "Unknown" before any command
+    // completes or when the link is stale, red "No link" when the last
+    // terminal outcome is bad and no ACK has arrived since, green "Ready"
+    // only while an ACK was seen within LINK_STALE_MS.
+    uint32_t finished = CmdSender().getCommandsAcked() + CmdSender().getCommandsFailed()
+                      + CmdSender().getCommandsTimeout();
+    bool ackRecent = (appState.lastAckTime != 0)
+                  && (millis() - appState.lastAckTime <= LINK_STALE_MS);
+    bool failIsLatest = appState.lastOutcomeBad
+                     && (appState.lastAckTime == 0
+                         || appState.lastAckTime < appState.lastTerminalFailTime);
+    bool connected = false;
+    const char* linkText;
+    if (finished == 0) {
+        linkText = "Unknown";
+    } else if (failIsLatest) {
+        linkText = "No link";
+    } else if (ackRecent) {
+        connected = true;
+        linkText = "Ready";
+    } else {
+        linkText = "Unknown";
+    }
+    json += "\"connected\":" + String(connected ? "true" : "false") + ",";
+    json += "\"linkText\":\"" + String(linkText) + "\",";
+
+    // Auto-capture chip: display-only until the command reaches ACK — latch
+    // the newest ACKed auto-capture command so the state survives slot reuse
+    for (uint8_t i = 0; i < entryCount; i++) {
+        CameraCommand cmd = static_cast<CameraCommand>(entries[i].commandType);
+        if ((cmd == CameraCommand::AUTO_CAPTURE_ENABLE || cmd == CameraCommand::AUTO_CAPTURE_DISABLE)
+                && entries[i].state == CommandState::ACKED
+                && entries[i].sequenceNumber > appState.autoCaptureAckSeq) {
+            appState.autoCaptureAckSeq = entries[i].sequenceNumber;
+            appState.autoCaptureOn = (cmd == CameraCommand::AUTO_CAPTURE_ENABLE);
+            appState.autoCaptureIntervalAckSec = appState.autoCaptureIntervalSec;
+        }
+    }
+    json += "\"autoCapture\":" + String(appState.autoCaptureOn ? "true" : "false") + ",";
+    json += "\"autoCaptureInterval\":" + String(appState.autoCaptureIntervalAckSec) + ",";
+
+    // D-16: one entry per occupied queue slot, same vocabulary as lastState
+    json += "\"queue\":[";
+    for (uint8_t i = 0; i < entryCount; i++) {
+        if (i > 0) {
+            json += ",";
+        }
+        json += "{\"cmd\":\"" + String(commandDisplayName(entries[i].commandType)) + "\",";
+        json += "\"seq\":" + String(entries[i].sequenceNumber) + ",";
+        json += "\"state\":\"" + commandStateToString(entries[i].state, entries[i].retryCount) + "\",";
+        json += "\"retry\":" + String(entries[i].retryCount) + "}";
+    }
+    json += "]}";
 
     server.send(200, "application/json", json);
 }
