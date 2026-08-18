@@ -30,6 +30,9 @@
 #include "command_handler.h"
 #include "auto_capture.h"
 
+// Phase 2: Image Transmission
+#include "image_tx_manager.h"
+
 // Forward declarations for missing types
 struct PowerData {
     float batteryVoltage;
@@ -389,6 +392,13 @@ bool initializeSubsystems() {
     } else {
         SYS_INFO("Auto-capture module initialized");
     }
+
+    // Phase 2: image transfer push module (thumbnail stream after each capture)
+    if (!ImageTx().begin(&E32LoRaModule())) {
+        SYS_WARNING("Image TX module initialization failed");
+    } else {
+        SYS_INFO("Image TX module initialized");
+    }
     appState.communicationActive = true;
 
     SYS_INFO("All subsystems initialized successfully");
@@ -726,6 +736,13 @@ void processPacketHandling() {
 
     // Run the interval auto-capture timer (Phase 1, CTRL-03/CTRL-04)
     AutoCap().process();
+
+    // Push captured-image thumbnails over the E32 link (Phase 2, IMG-01 push
+    // half). Ordering is the first half of PRI-01 arbitration: command
+    // responses (sent inside CmdHandler().process() above) always get the
+    // transmit opportunity before image traffic — at most one chunk transmit
+    // can ever sit between a response and the radio.
+    ImageTx().process();
 
     // Update subsystem state
     // SysState().setSubsystemState("lora", SubsystemState::ACTIVE);

@@ -197,6 +197,10 @@ CommandResult CommandHandler::handleCaptureNow(const CommandPacket& cmd) {
         Serial.println("CommandHandler: CAPTURE_NOW");
     }
 
+    // Stamp the manual capture source BEFORE capturing so the enqueued image
+    // carries it (interval captures keep the CaptureSource::INTERVAL default)
+    camera->setLastCaptureSource(static_cast<uint8_t>(CaptureSource::MANUAL));
+
     // Capture image
     if (camera->captureImage()) {
         result.success = true;
@@ -649,6 +653,18 @@ void CommandHandler::processIncomingByte(uint8_t byte) {
 
     if (receiveIndex < CMD_HEADER_SIZE) {
         return;
+    }
+
+    // WR-12 fix (Phase 2): dispatch on the packet-type byte BEFORE any body
+    // arithmetic. The balloon accepts COMMAND frames (0x10) only — a
+    // CRC-valid RESPONSE, manifest, chunk, or beacon heard by the balloon
+    // must never execute as a command, nor be parsed with command arithmetic.
+    switch (receiveBuffer[2]) {
+        case static_cast<uint8_t>(PACKET_TYPE_COMMAND):
+            break; // the only frame type this receiver handles
+        default:
+            resetReceiveState(); // foreign or unknown type — discard the frame
+            return;
     }
 
     // Big-endian body length from header offsets 4-5 (payloadLength for commands)
