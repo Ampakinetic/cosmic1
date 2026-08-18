@@ -5,12 +5,12 @@ milestone_name: milestone
 current_phase: 1
 current_phase_name: command-protocol-control
 status: executing
-stopped_at: Gap-closure re-verification: gaps_found (CR-05 legacy timer)
-last_updated: "2026-08-18T03:49:52.000Z"
+stopped_at: "Gap-closure re-verification: gaps_found (CR-05 legacy timer)"
+last_updated: "2026-08-18T04:19:53.122Z"
 progress:
   total_phases: 1
   completed_phases: 0
-  total_plans: 4
+  total_plans: 5
   completed_plans: 4
 ---
 
