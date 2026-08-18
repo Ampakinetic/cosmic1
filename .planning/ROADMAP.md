@@ -101,7 +101,7 @@ Plans:
 - SD card storage implementation
 - Event-based capture triggers
 
-**Plans:** 4/4 plans executed
+**Plans:** 4/5 plans executed (02-05 gap closure pending — 02-VERIFICATION.md gaps_found, 18/27)
 
 Plans:
 **Wave 1**
@@ -116,6 +116,10 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 02-04-PLAN.md — CTRL-05 event triggers: altitude/distance/flight-phase capture inside AutoCapture (D-25/D-27/D-28), UI-configurable thresholds (D-26)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 02-05-PLAN.md — Gap closure (02-VERIFICATION.md): kind-addressable window requests + thumbnail heal (Gap 2/D-22), bounded push/window interleaving + completion-aware eviction (Gap 1/D-19/D-24), passCount reset on progress + slot-pressure full reset (Gaps 1/3/D-20), kind-suffixed sidecars IMG_{id}_T.JSON (Gap 4/D-30) (IMG-02, IMG-03, IMG-04, IMG-05, PRI-01, PRI-03)
 
 ### Phase 3: Enhanced Web Interface
 
