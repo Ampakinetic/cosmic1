@@ -327,6 +327,16 @@ void CommandSender::handleResponse(const ResponsePacket& response) {
         return;
     }
 
+    // Duplicate or late response — retryCommand retransmits with the SAME
+    // sequenceNumber, so at the D-05 window edge a late first ACK and the
+    // re-execution's second ACK can both arrive; the first one already
+    // performed the counted transition and this one must be discarded (a
+    // second decrement underflows the uint8 pendingCommandCount from 0 to
+    // 255 and latches hasPendingCommands() true forever)
+    if (cmd->state == CommandState::ACKED || cmd->state == CommandState::FAILED || cmd->state == CommandState::TIMEOUT) {
+        return;
+    }
+
     // Store response
     cmd->response = response;
     cmd->hasResponse = true;
