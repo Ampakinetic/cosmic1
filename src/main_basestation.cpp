@@ -62,6 +62,7 @@ struct BaseStationState {
     uint32_t lastCommandTime;
     uint16_t lastCommandSequence;
     char lastCommandName[32];
+    uint16_t autoCaptureIntervalSec;
     uint32_t commandsSent;
     uint32_t commandsAcked;
     uint32_t commandsFailed;
@@ -93,6 +94,8 @@ void handleSetResolution();
 void handleSetSaturation();
 void handleSetExposure();
 void handleSetWBMode();
+void handleAutoCaptureEnable();
+void handleAutoCaptureDisable();
 void handleStatus();
 void handleNotFound();
 
@@ -408,6 +411,8 @@ void initWebServer() {
     server.on("/set-saturation", HTTP_POST, handleSetSaturation);
     server.on("/set-exposure", HTTP_POST, handleSetExposure);
     server.on("/set-wb", HTTP_POST, handleSetWBMode);
+    server.on("/auto-capture", HTTP_POST, handleAutoCaptureEnable);
+    server.on("/auto-capture-stop", HTTP_POST, handleAutoCaptureDisable);
     server.on("/status", HTTP_GET, handleStatus);
     server.onNotFound(handleNotFound);
 
@@ -569,6 +574,29 @@ void handleRoot() {
     html += "</div>";
     html += "<button type=\"submit\">Set White Balance</button>";
     html += "</form>";
+
+    html += "</div>";
+
+    // Auto-Capture card
+    html += "<div class=\"card\">";
+    html += "<h2>⏱ Auto-Capture</h2>";
+
+    html += "<form action=\"/auto-capture\" method=\"POST\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>Interval (1-3600 seconds):</label>";
+    html += "<input type=\"number\" name=\"interval\" min=\"1\" max=\"3600\" value=\"10\">";
+    html += "</div>";
+    html += "<button type=\"submit\">Enable Auto-Capture</button>";
+    html += "</form>";
+
+    html += "<form action=\"/auto-capture-stop\" method=\"POST\">";
+    html += "<div class=\"form-group\">";
+    html += "<button type=\"submit\" class=\"danger\">Disable Auto-Capture</button>";
+    html += "</div>";
+    html += "</form>";
+
+    // Display-only until the enable/disable command reaches ACK — no optimistic ON
+    html += "<div class=\"message info\" id=\"autocapture-chip\">OFF</div>";
 
     html += "</div>";
 
@@ -795,6 +823,58 @@ void handleSetWBMode() {
         Serial.printf("  Set white balance command sent (seq=%d)\n", seq);
     } else {
         sendResponse(500, "Error", "Failed to send white balance command");
+    }
+}
+
+void handleAutoCaptureEnable() {
+    if (!server.hasArg("interval")) {
+        sendResponse(400, "Error", "Missing interval parameter");
+        return;
+    }
+
+    // WR-07: range-check the full long (seconds) before narrowing/multiplication
+    long intervalSec = server.arg("interval").toInt();
+
+    if (intervalSec < 1 || intervalSec > 3600) {
+        sendResponse(400, "Error", "Invalid interval value (1-3600 seconds)");
+        return;
+    }
+
+    uint32_t intervalMs = static_cast<uint32_t>(intervalSec) * 1000UL;
+
+    // Balloon reads this payload with CommandProtocol::readUint32 — encode
+    // big-endian; do NOT memcpy the native little-endian struct
+    uint8_t payload[4];
+    CommandProtocol::writeUint32(payload, intervalMs);
+
+    Serial.printf("Auto-capture enable command: every %ld seconds\n", intervalSec);
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::AUTO_CAPTURE_ENABLE, payload, 4);
+
+    if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Auto-Capture On", sizeof(appState.lastCommandName) - 1);
+        appState.autoCaptureIntervalSec = static_cast<uint16_t>(intervalSec);
+        String message = "Auto-capture enabled — capturing every " + String(intervalSec) + "s";
+        sendResponse(200, "OK", message.c_str());
+        Serial.printf("  Auto-capture enable command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send auto-capture enable command");
+    }
+}
+
+void handleAutoCaptureDisable() {
+    Serial.println("Auto-capture disable command");
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::AUTO_CAPTURE_DISABLE);
+
+    if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Auto-Capture Off", sizeof(appState.lastCommandName) - 1);
+        sendResponse(200, "OK", "Auto-capture disabled");
+        Serial.printf("  Auto-capture disable command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send auto-capture disable command");
     }
 }
 
