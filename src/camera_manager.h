@@ -122,8 +122,7 @@ public:
     // Timing methods
     uint32_t getLastCaptureTime() const { return lastCaptureTime; }
     uint32_t getCaptureDuration() const;
-    bool isTimeToCapture(uint32_t intervalMs) const;
-    
+
     // Error handling
     uint32_t getCaptureErrorCount() const { return captureErrorCount; }
     uint32_t getInitErrorCount() const { return initErrorCount; }

@@ -491,13 +491,6 @@ uint32_t CameraManager::getCaptureDuration() const {
     return lastCaptureTime - captureStartTime;
 }
 
-bool CameraManager::isTimeToCapture(uint32_t intervalMs) const {
-    if (lastCaptureTime == 0) {
-        return true; // First capture
-    }
-    return (millis() - lastCaptureTime) >= intervalMs;
-}
-
 // ===========================
 // Power Management
 // ===========================

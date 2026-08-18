@@ -89,7 +89,7 @@ void AutoCapture::process() {
     }
 
     // Wraparound-safe interval idiom (millis() difference, never absolute
-    // time comparison) - same as CameraManager::isTimeToCapture
+    // time comparison)
     if (millis() - lastCaptureTime >= intervalMs) {
         // Baseline updates BEFORE the attempt (T-01-09): a failed capture
         // does not reset the baseline early, preventing a tight failure loop
