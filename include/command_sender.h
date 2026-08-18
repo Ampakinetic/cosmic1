@@ -35,6 +35,16 @@ struct TrackedCommand {
     bool hasResponse;
 };
 
+// Live command-queue snapshot entry (D-16: full-queue view for the
+// base-station UI — pending/in-progress state for every command, not just
+// the last one)
+struct CommandQueueEntry {
+    uint16_t sequenceNumber;
+    uint8_t commandType;   // CameraCommand value of the slot's stored packet
+    CommandState state;
+    uint8_t retryCount;
+};
+
 // ===========================
 // Command Sender Class
 // ===========================
@@ -58,7 +68,12 @@ public:
 
     // State query
     CommandState getCommandState(uint16_t sequenceNumber) const;
+    uint8_t getCommandRetryCount(uint16_t sequenceNumber) const;
     bool hasPendingCommands() const { return pendingCommandCount > 0; }
+
+    // Live command-queue snapshot (D-16): fills out with one entry per
+    // non-IDLE slot of the command table in slot order; returns the entry count
+    uint8_t getCommandQueue(CommandQueueEntry* out, uint8_t maxEntries) const;
 
     // Statistics
     uint32_t getCommandsSent() const { return commandsSent; }
@@ -69,7 +84,6 @@ public:
 
     // Configuration
     void setMaxRetries(uint8_t maxRetries) { this->maxRetries = maxRetries; }
-    void setAckTimeout(uint32_t timeoutMs) { this->ackTimeoutMs = timeoutMs; }
 
     // Debug
     void printStatus() const;
@@ -88,8 +102,6 @@ private:
 
     // Retry configuration
     uint8_t maxRetries;
-    uint32_t ackTimeoutMs;
-    uint32_t retryDelayMs;
 
     // Statistics
     uint32_t commandsSent;

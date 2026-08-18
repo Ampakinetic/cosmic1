@@ -15,6 +15,37 @@ CommandSender& CmdSender() {
 }
 
 // ===========================
+// Per-Command ACK Timeout (D-05)
+// ===========================
+
+// ACK-timeout window for a tracked command's stored CameraCommand value:
+// TRIGGER 2000ms (CAPTURE_NOW), SETTINGS 5000ms (SET_* + auto-capture
+// config), COMPLEX 10000ms (GET_STATUS).
+static uint32_t ackTimeoutFor(uint8_t commandType) {
+    switch (static_cast<CameraCommand>(commandType)) {
+        case CameraCommand::CAPTURE_NOW:
+            return CMD_ACK_TIMEOUT_TRIGGER_MS;
+
+        case CameraCommand::SET_RESOLUTION:
+        case CameraCommand::SET_QUALITY:
+        case CameraCommand::SET_BRIGHTNESS:
+        case CameraCommand::SET_CONTRAST:
+        case CameraCommand::SET_SATURATION:
+        case CameraCommand::SET_EXPOSURE:
+        case CameraCommand::SET_WB_MODE:
+        case CameraCommand::AUTO_CAPTURE_ENABLE:
+        case CameraCommand::AUTO_CAPTURE_DISABLE:
+            return CMD_ACK_TIMEOUT_SETTINGS_MS;
+
+        case CameraCommand::GET_STATUS:
+            return CMD_ACK_TIMEOUT_COMPLEX_MS;
+
+        default:
+            return CMD_ACK_TIMEOUT_SETTINGS_MS;
+    }
+}
+
+// ===========================
 // Constructor/Destructor
 // ===========================
 
@@ -24,8 +55,6 @@ CommandSender::CommandSender()
     , nextSequenceNumber(1)
     , pendingCommandCount(0)
     , maxRetries(3)
-    , ackTimeoutMs(2000)
-    , retryDelayMs(100)
     , commandsSent(0)
     , commandsAcked(0)
     , commandsFailed(0)
@@ -122,9 +151,14 @@ bool CommandSender::cancelCommand(uint16_t sequenceNumber) {
         return false;
     }
 
-    // Remove from tracking
+    // Decrement only when leaving a counted state — cancelling an
+    // already-terminal command (ACKED/FAILED/TIMEOUT) must not decrement
+    // the pending count a second time (WR-03)
+    if (cmd->state == CommandState::PENDING || cmd->state == CommandState::SENT) {
+        pendingCommandCount--;
+    }
+
     cmd->state = CommandState::FAILED;
-    pendingCommandCount--;
 
     if (DEBUG_COMMAND_SENDER) {
         Serial.printf("CommandSender: Cancelled command seq=%d\n", sequenceNumber);
@@ -159,6 +193,21 @@ void CommandSender::process() {
             continue;
         }
 
+        // Pace retries with exponential backoff (D-07: 2000/4000/8000ms before
+        // retries 1/2/3). This check guards the PENDING and SENT branches below
+        // so transmit attempts can never stack or fire back-to-back (WR-04).
+        if ((cmd->state == CommandState::PENDING || cmd->state == CommandState::SENT) &&
+            cmd->retryCount > 0) {
+            // retryCount was incremented by the previous (failed or un-ACKed)
+            // attempt, so it is the retry attempt about to run (1..maxRetries)
+            uint8_t attempt = cmd->retryCount;
+            uint8_t shift = (attempt - 1 > 2) ? 2 : static_cast<uint8_t>(attempt - 1); // clamp the shift at 2
+            uint32_t backoffMs = CMD_RETRY_BACKOFF_BASE_MS << shift;
+            if (currentTime - cmd->lastRetryTime < backoffMs) {
+                continue; // Still pacing the upcoming retry attempt
+            }
+        }
+
         // Check if command needs to be sent
         if (cmd->state == CommandState::PENDING) {
             if (transmitCommand(cmd)) {
@@ -169,12 +218,29 @@ void CommandSender::process() {
                 if (DEBUG_COMMAND_SENDER) {
                     Serial.printf("CommandSender: Sent command seq=%d\n", cmd->sequenceNumber);
                 }
+            } else {
+                // Transmit failed: count the attempt, then either terminate
+                // or stay PENDING so the backoff check above paces the next
+                // attempt (CR-04) — never retry back-to-back forever
+                cmd->retryCount++;
+                cmd->lastRetryTime = currentTime;
+
+                if (cmd->retryCount >= maxRetries) {
+                    cmd->state = CommandState::FAILED;
+                    pendingCommandCount--;
+                    commandsFailed++;
+
+                    if (DEBUG_COMMAND_SENDER) {
+                        Serial.printf("CommandSender: Command seq=%d FAILED after %d transmit attempts\n",
+                                     cmd->sequenceNumber, maxRetries);
+                    }
+                }
             }
         }
 
-        // Check for ACK timeout
+        // Check for ACK timeout (D-05: window selected per command type)
         if (cmd->state == CommandState::SENT) {
-            if (currentTime - cmd->sendTime > ackTimeoutMs) {
+            if (currentTime - cmd->sendTime > ackTimeoutFor(static_cast<uint8_t>(cmd->packet.cmd))) {
                 // Check if we should retry
                 if (cmd->retryCount < maxRetries) {
                     retryCommand(cmd);
@@ -189,13 +255,6 @@ void CommandSender::process() {
                                      cmd->sequenceNumber, maxRetries);
                     }
                 }
-            }
-        }
-
-        // Check for retry delay
-        if (cmd->state == CommandState::SENT && cmd->retryCount > 0) {
-            if (currentTime - cmd->lastRetryTime < retryDelayMs) {
-                continue; // Still waiting for retry delay
             }
         }
     }
@@ -370,9 +429,11 @@ void CommandSender::retryCommand(TrackedCommand* cmd) {
     cmd->retryCount++;
     cmd->lastRetryTime = millis();
 
-    if (transmitCommand(cmd)) {
-        cmd->sendTime = cmd->lastRetryTime;
+    // Restart the ACK-timeout window from this attempt on BOTH outcomes, so
+    // a failed retransmit does not leave an instantly-expired window
+    cmd->sendTime = cmd->lastRetryTime;
 
+    if (transmitCommand(cmd)) {
         if (DEBUG_COMMAND_SENDER) {
             Serial.printf("CommandSender: Retrying command seq=%d (attempt %d/%d)\n",
                          cmd->sequenceNumber, cmd->retryCount + 1, maxRetries);
@@ -408,6 +469,38 @@ CommandState CommandSender::getCommandState(uint16_t sequenceNumber) const {
     return CommandState::IDLE;
 }
 
+uint8_t CommandSender::getCommandRetryCount(uint16_t sequenceNumber) const {
+    for (uint8_t i = 0; i < MAX_PENDING_COMMANDS; i++) {
+        const TrackedCommand* cmd = &pendingCommands[i];
+        if (cmd->state != CommandState::IDLE && cmd->sequenceNumber == sequenceNumber) {
+            return cmd->retryCount;
+        }
+    }
+    return 0;
+}
+
+uint8_t CommandSender::getCommandQueue(CommandQueueEntry* out, uint8_t maxEntries) const {
+    if (!out || maxEntries == 0) {
+        return 0;
+    }
+
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < MAX_PENDING_COMMANDS && count < maxEntries; i++) {
+        const TrackedCommand* cmd = &pendingCommands[i];
+        if (cmd->state == CommandState::IDLE) {
+            continue;
+        }
+
+        out[count].sequenceNumber = cmd->sequenceNumber;
+        out[count].commandType = static_cast<uint8_t>(cmd->packet.cmd);
+        out[count].state = cmd->state;
+        out[count].retryCount = cmd->retryCount;
+        count++;
+    }
+
+    return count;
+}
+
 // ===========================
 // Statistics
 // ===========================
@@ -432,7 +525,10 @@ void CommandSender::printStatus() const {
     Serial.printf("Commands Failed: %lu\n", commandsFailed);
     Serial.printf("Commands Timeout: %lu\n", commandsTimeout);
     Serial.printf("Max Retries: %d\n", maxRetries);
-    Serial.printf("ACK Timeout: %lu ms\n", ackTimeoutMs);
+    Serial.printf("ACK Timeout (D-05): TRIGGER %lu ms / SETTINGS %lu ms / COMPLEX %lu ms\n",
+                 CMD_ACK_TIMEOUT_TRIGGER_MS, CMD_ACK_TIMEOUT_SETTINGS_MS, CMD_ACK_TIMEOUT_COMPLEX_MS);
+    Serial.printf("Retry Backoff (D-07): %lu/%lu/%lu ms\n",
+                 CMD_RETRY_BACKOFF_BASE_MS, CMD_RETRY_BACKOFF_BASE_MS * 2, CMD_RETRY_BACKOFF_BASE_MS * 4);
 }
 
 void CommandSender::printPendingCommands() const {

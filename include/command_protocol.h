@@ -177,6 +177,14 @@ static constexpr size_t CMD_MAX_PAYLOAD_SIZE = 200;
 static constexpr size_t CMD_MAX_PACKET_SIZE = 240; // LoRa packet limit (shared by sender/handler buffers)
 static constexpr size_t CMD_MAX_RESPONSE_DATA = 50;
 
+// ACK-timeout windows by command class (D-05, replacing the flat 2000ms constant)
+static constexpr uint32_t CMD_ACK_TIMEOUT_TRIGGER_MS = 2000;   // CAPTURE_NOW (fast capture)
+static constexpr uint32_t CMD_ACK_TIMEOUT_SETTINGS_MS = 5000;  // SET_* commands + auto-capture config
+static constexpr uint32_t CMD_ACK_TIMEOUT_COMPLEX_MS = 10000;  // GET_STATUS (multi-setting query)
+
+// Exponential retry backoff base (D-07): 2000/4000/8000ms before retries 1/2/3
+static constexpr uint32_t CMD_RETRY_BACKOFF_BASE_MS = 2000;
+
 // Serialized header size in bytes (PacketHeader struct is padded to 8 by the compiler)
 static constexpr size_t CMD_HEADER_SIZE = 7;
 
@@ -191,7 +199,6 @@ static constexpr uint8_t CMD_END_BYTE2 = 0x0A;
 
 // Retry settings
 static constexpr uint8_t CMD_MAX_RETRIES = 3;
-static constexpr uint32_t CMD_ACK_TIMEOUT_MS = 2000;
 
 // ===========================
 // Command Protocol Class
