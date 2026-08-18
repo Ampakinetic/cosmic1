@@ -3,8 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_plan: 5
-status: verifying
-stopped_at: Completed 01-05-PLAN.md (CR-05 gap closure)
+status: executing
+stopped_at: Re-verification #2: gaps_found (3 response-path criticals; CR-05 closed)
 last_updated: "2026-08-18T05:24:47.909Z"
 progress:
   total_phases: 1
@@ -22,15 +22,15 @@ current_phase_name: command-protocol-control
 ## Current Status
 
 **Project:** Cosmic1 Base Station Camera Control Extension
-**Phase:** Phase 1 — all 5 plans executed (tracer + 01-02..01-05); zero open code gaps; phase ready for verification (security gate + hardware UAT outstanding)
+**Phase:** Phase 1 — all 5 plans executed (tracer + 01-02..01-05); CR-05 verified closed; re-verification #2 gaps_found: 3 new response-path criticals → next gap cycle (plus security gate + hardware UAT outstanding)
 **Milestone:** v1.0
 
 ## Current Position
 
 **Current Plan:** 5
 **Total Plans in Phase:** 5
-**Status:** Phase complete — ready for verification
-**Progress:** [████████░░] 80% (tooling count 4/5 — all 5 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
+**Status:** Re-verification #2 gaps_found — 3 response-path criticals open (CR-05 closed); next: gap cycle
+**Progress:** [████████░░] 80% (all 5 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
 
 ## Progress
 
@@ -39,7 +39,7 @@ current_phase_name: command-protocol-control
 - ✅ Roadmap created (3 phases)
 - ✅ Phase 1 plan created
 - ✅ Phase 1 plan 01-01 executed (T1–T8 tracer, committed via closeout — see 01-01-SUMMARY.md)
-- ⏳ Phase 1 re-verification complete: gaps_found (2026-08-18) — all prior gaps closed and verified; 1 new code gap CR-05, 3 must-haves routed to hardware UAT
+- ⏳ Phase 1 re-verification #2: gaps_found (2026-08-18) — CR-05 verified closed; 3 new criticals confirmed (success responses type 0x00; GET_STATUS enum miscast; pending-count underflow) → `/gsd-plan-phase 1 --gaps`
 - ✅ Phase 1 gap-closure plan 01-02 executed — protocol defects CR-01..CR-04 + WR-03/04/05 closed, D-05/D-07/D-16-support encoded (see 01-02-SUMMARY.md)
 - ✅ Phase 1 gap-closure plan 01-03 executed — all 7 settings forms + auto-capture UI (WR-07 long-first validation), D-16 Command Queue panel, IN-03 computed link LED (see 01-03-SUMMARY.md)
 - ✅ Phase 1 gap-closure plan 01-04 executed — real sensor setters for saturation/exposure/WB, AutoCapture interval timer module, truthful GET_STATUS, shared image-ID sequence, main-loop wiring (see 01-04-SUMMARY.md)
@@ -50,7 +50,7 @@ current_phase_name: command-protocol-control
 
 **Phase 1: Command Protocol & Control**
 
-- Status: verifying — all 5 plans executed (01-05 closed CR-05, the last code gap); zero open code gaps; remaining before phase complete: security gate (`/gsd-secure-phase 1`) + hardware UAT (SC-2/3/4 + 01-VERIFICATION.md item 4)
+- Status: gap-closure cycle #2 — all 5 plans executed; CR-05 verified closed; 3 new criticals (01-REVIEW.md ca682b4, confirmed by verifier in 01-VERIFICATION.md 11ca491); after closure: security gate (`/gsd-secure-phase 1`) + hardware UAT (SC-2/3/4 + UAT item 4)
 - Requirements: 6 (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02)
 - Goal: Establish bidirectional LoRa communication for camera control
 
@@ -74,11 +74,11 @@ current_phase_name: command-protocol-control
 - CR-03 fixed by length-driven framing (header body-length field announces the packet length; end marker tested only at the framed position) rather than byte escaping — symmetric fix in both receivers
 - Host regression harness transcribes the wire format as an executable spec, including the defective pre-CR-01 serializer variant so the sweep provably has teeth (255/65535 accepted)
 
-### Known Gaps (post 01-05, 2026-08-18)
+### Known Gaps (post re-verification #2, 2026-08-18)
 
-- **CR-05: CLOSED** by plan 01-05 (commit 352b195 + b5726b3) — legacy 30 s capture timer removed; AutoCapture is the sole capture/image-ID authority; CTRL-03/CTRL-04 Complete marks in REQUIREMENTS.md now accurate
-- No hardware tests run yet (T9/E5/A5 require radios + camera); SC-2 (RF round-trip), SC-3 (sensor acceptance), SC-4 (runtime retry/TIMEOUT transitions), SC-5 runtime half (auto-capture cadence + disable over RF — 01-VERIFICATION.md UAT item 4, unblocked by CR-05 fix) are code-proven only until UAT
-- Code review advisories: WR-10 serializer length-window (201-224-byte payloads emit malformed packets; harness clause (b) locks in the 224-byte case), WR-01 E32 blocking transmit/AUX race, WR-02/06/08/09 carried — see `01-REVIEW.md`
+- **CR-05: CLOSED** by plan 01-05 (commits 352b195 + b5726b3) — independently verified by re-verification (grep gates, wiring, builds, harness); CTRL-03/CTRL-04 Complete marks in REQUIREMENTS.md accurate
+- **Open code gaps (verifier-confirmed, all response-path, code-only fixes):** (1) `createResponsePacket` never sets `packet.type` — every ACK/STATUS goes on the wire as 0x00 (spec: 0x11); harness masks it by hardcoding 0x11. (2) GET_STATUS raw-casts between differently-numbered FrameSize enums — QVGA reported as 160x120. (3) `handleResponse` lacks a terminal-state guard — duplicate ACK after retry underflows `pendingCommandCount` (0→255), UI shows pending forever. CTRL-06/PRI-02 satisfied-with-defect (gap 3). See 01-VERIFICATION.md (11ca491) + 01-REVIEW.md (ca682b4: 3C/11W/8I)
+- No hardware tests run yet (T9/E5/A5 require radios + camera); SC-2 (RF round-trip), SC-3 (sensor acceptance), SC-4 (runtime retry/TIMEOUT transitions), SC-5 runtime half (auto-capture cadence + disable over RF — UAT item 4, unblocked by CR-05 fix) are code-proven only until UAT
 
 ## Project Reference
 
@@ -90,9 +90,11 @@ See: `.planning/PROJECT.md`
 
 ## Next Steps
 
-1. **Security gate (before phase complete):** `/gsd-secure-phase 1` — enforcement enabled, no SECURITY.md yet
-2. **Hardware UAT:** flash both units, run command-flow tests (`/gsd-verify-work 1`) — SC-2/SC-3/SC-4 and 01-VERIFICATION.md item 4 (auto-capture cadence + disable, now unblocked) remain behavior-unverified until the radio round-trip runs
-3. **Then:** `/gsd-progress` to advance toward phase transition and Phase 2 (Image Transmission)
+1. **Gap closure round 3:** `/gsd-plan-phase 1 --gaps` — reads the 3 structured gaps in 01-VERIFICATION.md (one response-path theme); then `/gsd-execute-phase 1 --gaps-only`
+2. **Optionally first:** `/gsd-code-review 1 --fix` — the 3 criticals are review findings #1-3; a fix plan may fold in the warnings
+3. **Security gate (before phase complete):** `/gsd-secure-phase 1` — enforcement enabled, no SECURITY.md yet
+4. **Hardware UAT (after gaps close):** flash both units, run command-flow tests (`/gsd-verify-work 1`) — SC-2/SC-3/SC-4 + UAT item 4 remain behavior-unverified until the radio round-trip runs
+5. **Then:** `/gsd-progress` to advance toward phase transition and Phase 2 (Image Transmission)
 
 ## Configuration
 
@@ -110,12 +112,12 @@ See: `.planning/PROJECT.md`
 **Git Tracking:** Enabled
 
 ---
-*State updated: 2026-08-18 - gap closure complete: 01-02..01-05 executed; CR-05 closed (zero open code gaps); phase ready for verification*
+*State updated: 2026-08-18 - 01-05 executed (CR-05 closed, verified); re-verification #2 gaps_found: 3 response-path criticals → gap cycle*
 
 ## Session
 
 **Last session:** 2026-08-18T05:22:35.241Z
-**Stopped at:** Completed 01-05-PLAN.md (CR-05 gap closure)
+**Stopped at:** Re-verification #2: gaps_found (3 response-path criticals; CR-05 closed)
 **Resume file:** None
 
 ## Performance Metrics
