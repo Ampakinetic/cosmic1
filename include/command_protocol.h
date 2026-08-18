@@ -174,6 +174,7 @@ struct ResponseStatusData {
 
 // Packet limits
 static constexpr size_t CMD_MAX_PAYLOAD_SIZE = 200;
+static constexpr size_t CMD_MAX_PACKET_SIZE = 240; // LoRa packet limit (shared by sender/handler buffers)
 static constexpr size_t CMD_MAX_RESPONSE_DATA = 50;
 
 // Serialized header size in bytes (PacketHeader struct is padded to 8 by the compiler)

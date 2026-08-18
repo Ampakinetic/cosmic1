@@ -49,7 +49,8 @@ bool CommandProtocol::serializeCommand(const CommandPacket& cmd, uint8_t* buffer
     size_t offset = 0;
     size_t packetLength = CMD_HEADER_SIZE + 5 + cmd.payloadLength + 4; // header + cmd+seq+payloadLen + payload + crc+end
 
-    if (packetLength > 240) { // LoRa packet limit
+    // LoRa packet limit (CR-02): header 7 + command block 5 + CRC 2 + end 2 = 16 overhead
+    if (packetLength > CMD_MAX_PACKET_SIZE || cmd.payloadLength > CMD_MAX_PACKET_SIZE - 16) {
         return false;
     }
 
@@ -57,10 +58,11 @@ bool CommandProtocol::serializeCommand(const CommandPacket& cmd, uint8_t* buffer
     buffer[offset++] = CMD_START_BYTE1;
     buffer[offset++] = CMD_START_BYTE2;
     buffer[offset++] = static_cast<uint8_t>(PACKET_TYPE_COMMAND);
-    buffer[offset++] = 0x00; // sequence placeholder (will be overwritten)
+    buffer[3] = static_cast<uint8_t>(cmd.sequenceNumber & 0xFF); // real sequence low byte at header offset 3 (CR-01) — CRC below covers it
+    offset++;
     writeUint16(buffer + offset, cmd.payloadLength);
     offset += 2;
-    buffer[offset++] = 0x00; // CRC8 placeholder (skip for now, use CRC16 only)
+    buffer[offset++] = 0x00; // CRC8 pad byte (skip for now, use CRC16 only)
 
     // Write command data
     buffer[offset++] = static_cast<uint8_t>(cmd.cmd);
@@ -83,9 +85,6 @@ bool CommandProtocol::serializeCommand(const CommandPacket& cmd, uint8_t* buffer
     // Write end bytes
     buffer[offset++] = CMD_END_BYTE1;
     buffer[offset++] = CMD_END_BYTE2;
-
-    // Fix sequence number in header
-    buffer[3] = static_cast<uint8_t>(cmd.sequenceNumber & 0xFF);
 
     length = offset;
     return true;
@@ -150,7 +149,7 @@ bool CommandProtocol::serializeResponse(const ResponsePacket& resp, uint8_t* buf
     size_t offset = 0;
     size_t packetLength = CMD_HEADER_SIZE + 4 + resp.dataLength + 4;
 
-    if (packetLength > 240) {
+    if (packetLength > CMD_MAX_PACKET_SIZE) {
         return false;
     }
 

@@ -98,7 +98,7 @@ private:
     uint32_t commandsTimeout;
 
     // Response reception
-    uint8_t receiveBuffer[128];
+    uint8_t receiveBuffer[CMD_MAX_PACKET_SIZE];
     size_t receiveIndex;
     bool inPacket;
 

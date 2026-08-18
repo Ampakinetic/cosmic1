@@ -334,7 +334,7 @@ bool CommandSender::transmitCommand(TrackedCommand* cmd) {
         return false;
     }
 
-    uint8_t buffer[128];
+    uint8_t buffer[CMD_MAX_PACKET_SIZE];
     size_t length = 0;
 
     if (!CommandProtocol::serializeCommand(cmd->packet, buffer, length)) {
