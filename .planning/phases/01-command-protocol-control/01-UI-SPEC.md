@@ -1,7 +1,8 @@
 ---
 phase: 1
 slug: command-protocol-control
-status: draft
+status: approved
+reviewed_at: 2026-08-18
 shadcn_initialized: false
 preset: none
 created: 2026-08-18
@@ -42,6 +43,8 @@ created: 2026-08-18
 2. **Auto-Capture card** (`⏱ Auto-Capture`) — interval number input + `Enable Auto-Capture` (accent) / `Disable Auto-Capture` (danger) buttons + ON/OFF state chip. Closes the CTRL-03/04 UI gap.
 3. **Four settings forms** appended to the existing Camera Settings card: Resolution (`<select>`), Saturation (number), Exposure (number), White Balance (`<select>`). Closes the CTRL-02 gap (3 of 7 → 7 of 7).
 4. `<select>` styling = same rules as `input[type=number]`: `#334155` bg, 1px `#475569` border, radius 5px, 14px text, 8px padding.
+
+**Primary focal point:** the **Trigger Camera Capture** button in the Camera card is the control panel's single visual anchor; every other card (settings, auto-capture, last command) is secondary to it.
 
 ---
 
@@ -146,20 +149,25 @@ Client-side `min`/`max` mirror firmware validation, but firmware must re-validat
 
 ## UI Considerations
 
-> Populated per the ui-consideration probe taxonomy. Empty-state and error-state COPY lives in `## Copywriting Contract` above — this section covers state coverage and references those rows.
+> Populated by the ui-consideration probe (8 surfaces, 41 applicable considerations; element kinds confirmed by developer 2026-08-18). Empty-state and error-state COPY lives in `## Copywriting Contract` above — this section covers shape-rooted STATE coverage and references those rows.
+>
+> Resolution summary: 7 resolved (verification: explicit), 1 resolved (verification: backstop), 0 unresolved.
 
-Applicable state considerations resolved: 7 covered, 1 backstop, 0 unresolved
+**Resolved — explicit truths:**
 
-| Category | Element(s) | Status | Resolution / Reason |
-|----------|------------|--------|---------------------|
-| empty | last-command panel, settings forms, auto-capture form | ✅ covered | Before any command the Last Command panel renders the documented "No commands yet" copy (Copywriting Contract); every form renders a complete documented default value, so no form is ever shown unfilled |
-| loading | last-command panel, action buttons | ✅ covered | In-flight command shows the locked "Sent" state string immediately after POST; the 1s `/status` poll (existing footer script, extended) advances the panel to a terminal state — status-line model per CONTEXT decision, no spinners/skeletons |
-| error | last-command panel, message callouts | 🧪 backstop | Terminal "Timeout" / "Failed (retry N)" with documented error copy must render after retries are exhausted — held-out verification is the hardware UAT degraded-link test (power balloon off → 3 retries → TIMEOUT surfaced); the `CommandState`→string mapping itself is code-verifiable without hardware |
-| populated | status-bar counters | ✅ covered | Sent/Acked/Failed/Pending counters advance as commands process; 4-column grid on desktop, 2×2 below 480px (see overflow) |
-| partial | settings forms, auto-capture form | ✅ covered | Each setting is an independent single-field form — a multi-field partial state cannot occur; forms always display a complete value (default or last entered) |
-| overflow | status-bar, last-command panel | ✅ covered | Status bar collapses 4→2 columns under a 480px media query (new rule, same tokens); counter cells never truncate; Last Command text wraps within card width — no clipping |
-| zero-one-many | status-bar counters | ✅ covered | Numeric readouts only — no singular/plural copy; layout identical at 0, 1, and many |
-| long-text | error/status messages, form labels | ✅ covered | `.message` and label text wrap at 14px/1.5 inside the card; no ellipsis or truncation anywhere in the Phase 1 UI |
+1. **empty** — Before any command, the Last Command panel renders the documented "No commands yet" copy (Copywriting Contract); every form renders a complete documented default value, so no form is ever shown unfilled.
+2. **loading** — An in-flight command shows the locked "Sent" state string immediately after POST; the 1s `/status` poll (existing footer script, extended) advances the panel to a terminal state — status-line model per CONTEXT decision, no spinners/skeletons.
+3. **populated** — Sent/Acked/Failed/Pending counters advance as commands process; 4-column grid on desktop, 2×2 below 480px (see overflow).
+4. **partial** — Each setting is an independent single-field form — a multi-field partial state cannot occur; forms always display a complete value (default or last entered).
+5. **overflow** — Status bar collapses 4→2 columns under a 480px media query (new rule, same tokens); counter cells never truncate; Last Command text wraps within card width — no clipping.
+6. **zero-one-many** — Numeric readouts only — no singular/plural copy; layout identical at 0, 1, and many.
+7. **long-text** — `.message` and label text wrap at 14px/1.5 inside the card; no ellipsis or truncation anywhere in the Phase 1 UI.
+
+**Resolved — backstop (flat-scalar marker):**
+
+- { statement: "Terminal 'Timeout' / 'Failed (retry N)' with documented error copy renders after retries are exhausted — held-out verification is the hardware UAT degraded-link test (power balloon off → 3 retries → TIMEOUT surfaced); the CommandState→string mapping itself is code-verifiable without hardware", verification: backstop }
+
+**Unresolved:** none (0). Three probe `unclassified` rows (message callouts, link LED) are presentation primitives whose state coverage is subsumed by the explicit categories above.
 
 ---
 
@@ -174,11 +182,11 @@ Applicable state considerations resolved: 7 covered, 1 backstop, 0 unresolved
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS
-- [ ] Dimension 5 Spacing: PASS
-- [ ] Dimension 6 Registry Safety: PASS
+- [x] Dimension 1 Copywriting: PASS
+- [x] Dimension 2 Visuals: PASS (FLAG resolved — primary focal point declared in Design System)
+- [x] Dimension 3 Color: PASS
+- [x] Dimension 4 Typography: PASS
+- [x] Dimension 5 Spacing: PASS
+- [x] Dimension 6 Registry Safety: PASS
 
-**Approval:** pending
+**Approval:** approved — gsd-ui-checker verdict 2026-08-18 (5 PASS + 1 non-blocking FLAG, recommendation applied)
