@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 6 plans (01-01 tracer + 01-02..01-05 gap closure executed; 01-06 response-path gap closure pending — 3 verifier-confirmed criticals; security gate + hardware UAT before phase complete)
+**Plans:** 5/6 plans executed (01-01 tracer + 01-02..01-05 gap closure executed; 01-06 response-path gap closure pending — 3 verifier-confirmed criticals; security gate + hardware UAT before phase complete)
 
 Plans:
 **Wave 1**
@@ -64,7 +64,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 01-06-PLAN.md — Response-path gap closure: 0x11 type on all ACK/STATUS via createResponsePacket + faithful harness clause (CR-01/WR-05), name-based GET_STATUS resolution mapping + CIF relabel (CR-02/WR-01), terminal-state guard against duplicate-ACK count underflow (CR-03) (CTRL-01/CTRL-02/CTRL-06/PRI-02)
+- [x] 01-06-PLAN.md — Response-path gap closure: 0x11 type on all ACK/STATUS via createResponsePacket + faithful harness clause (CR-01/WR-05), name-based GET_STATUS resolution mapping + CIF relabel (CR-02/WR-01), terminal-state guard against duplicate-ACK count underflow (CR-03) (CTRL-01/CTRL-02/CTRL-06/PRI-02)
 
 ### Phase 2: Image Transmission
 

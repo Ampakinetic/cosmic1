@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 5
+current_plan: 2
 status: executing
-stopped_at: "Re-verification #2: gaps_found (3 response-path criticals; CR-05 closed)"
-last_updated: "2026-08-18T06:25:59.388Z"
+stopped_at: Completed 01-06-PLAN.md (response-path criticals CR-01/CR-02/CR-03 closed)
+last_updated: "2026-08-18T11:00:40.915Z"
 progress:
   total_phases: 1
   completed_phases: 0
@@ -27,10 +27,10 @@ current_phase_name: command-protocol-control
 
 ## Current Position
 
-**Current Plan:** 5
+**Current Plan:** 2
 **Total Plans in Phase:** 6
-**Status:** Re-verification #2 gaps_found — 3 response-path criticals open (CR-05 closed); next: gap cycle
-**Progress:** [████████░░] 80% (all 5 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
+**Status:** Ready to execute
+**Progress:** [████████░░] 83% (all 5 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
 
 ## Progress
 
@@ -116,8 +116,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-18T05:22:35.241Z
-**Stopped at:** Re-verification #2: gaps_found (3 response-path criticals; CR-05 closed)
+**Last session:** 2026-08-18T11:00:40.879Z
+**Stopped at:** Completed 01-06-PLAN.md (response-path criticals CR-01/CR-02/CR-03 closed)
 **Resume file:** None
 
 ## Performance Metrics
@@ -127,9 +127,13 @@ See: `.planning/PROJECT.md`
 | Phase 01 P03 | 19 min | 3 tasks | 1 files |
 | Phase 01 P04 | 14 min | 2 tasks | 7 files |
 | Phase 01 P05 | 7 min | 2 tasks | 4 files |
+| Phase 01 P06 | 11 min | 3 tasks | 7 files |
 
 ## Decisions
 
 - [Phase 01]: 01-03: chip and LED state latched server-side — auto-capture chip state latched from the newest ACKed AUTO_CAPTURE_ENABLE/DISABLE queue entry by sequence number (survives command-slot reuse); link LED red state requires lastTerminalFailTime newer than lastAckTime so a late ACK for an older command cannot mask a fresh TIMEOUT/FAILED — Plan 01-03 specifies ACK-gated chip semantics and the IN-03 prohibition on green-when-failed; slot reuse and ACK ordering are the two cases a naive per-poll derivation gets wrong
 - [Phase 01]: 01-04: image IDs unified — AutoCapture owns the single uint16 ID sequence (allocateImageId pre-increments), shared by CAPTURE_NOW and interval captures so GET_STATUS lastImageId is truthful across both modes; enable() resets the baseline so the first capture fires one full interval after enable, and process() advances the baseline before the attempt so a failed capture cannot drive a tight failure loop (T-01-09 mitigation); interval bounds re-validated inside the module so a bypassed handler cannot drive the timer below 1 Hz (T-01-08)
 - [Phase 01]: 01-05: legacy 30 s capture timer fully removed (not debug-gated) — AutoCapture is the balloon's sole automatic capture trigger and sole image-ID sequence; its packets were never transmitted so the block's only live effects were the CR-05 harms (post-disable captures, >30 s cadence pollution, ID collision, frame-buffer churn). Single-authority invariant enforced by recursive negative-grep source gates, not just build passes
+- [Phase ?]: 01-06: packet type owned by the factory, not the serializer — createResponsePacket/createCommandPacket assign packet.type as the first field (0x11/0x10) so every construction path emits the documented byte; the wire harness now transcribes the factory (zero-init + defective variant), not just the serializer (WR-05)
+- [Phase ?]: 01-06: FrameSize translation is by NAME in both directions — framesizeFromInt forward, frameSizeFromEsp reverse (real QVGA=5 -> project code 6); value-8 wire code relabeled FRAMESIZE_CIF (real 400x296 mode, reachable on OV2640); real sizes without a protocol code report boot-default QVGA
+- [Phase ?]: 01-06: terminal-state guard in CommandSender::handleResponse only — duplicate/late responses for ACKED/FAILED/TIMEOUT slots return before response storage and counter changes; findTrackedCommand still matches terminal slots because cancelCommand (own WR-03 decrement guard) and UI queries legitimately resolve them

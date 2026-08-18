@@ -164,6 +164,10 @@ None - no external service configuration required.
 - Remaining before phase complete: security gate (`/gsd-secure-phase 1`) and hardware UAT items 1-4 (01-VERIFICATION.md) — UAT item 2 (degraded-link retry) is now meaningful with the duplicate-ACK guard in place, per the verifier's note to run it after this fix
 - Known carried warnings (out of scope for this plan, recorded in 01-VERIFICATION.md): WR-06 ACK-edge truncation, WR-07 E32 config API, WR-10 auto-capture chip latch, WR-11 thumbnail estimate — deferred to their noted phases
 
+## Self-Check: PASSED
+
+All 8 created/modified files present on disk; all 4 commit hashes (75b8514, 36674ff, 56704e2, 36fbf05) found in git log.
+
 ---
 *Phase: 01-command-protocol-control*
 *Completed: 2026-08-18*
