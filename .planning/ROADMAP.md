@@ -101,6 +101,22 @@ Plans:
 - SD card storage implementation
 - Event-based capture triggers
 
+**Plans:** 4 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 02-01-PLAN.md — Tracer: CR-04/WR-11 thumbnail fix + full Phase 2 wire contract (0x12/0x13/0x14, window/threshold commands) + WR-12 type dispatch; thumbnail pushed balloon→base→web UI end-to-end (IMG-01, IMG-02, IMG-04)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 02-02-PLAN.md — Balloon full pipeline: full-image announce + FIFO window servicing (D-17/D-19), TX arbitration + 5 s telemetry beacon (PRI-01/SC-5) (IMG-01, IMG-03, PRI-01, PRI-03)
+- [ ] 02-03-PLAN.md — Base full pipeline: windowed ARQ with bounded retries (D-21/D-24), end-to-end CRC32 (D-23), SD storage + sidecars (D-29..D-32), transfer progress UI (D-20) (IMG-03, IMG-04, IMG-05, PRI-03)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 02-04-PLAN.md — CTRL-05 event triggers: altitude/distance/flight-phase capture inside AutoCapture (D-25/D-27/D-28), UI-configurable thresholds (D-26)
+
 ### Phase 3: Enhanced Web Interface
 
 **Goal:** Full base station control panel with telemetry, maps, and gallery
