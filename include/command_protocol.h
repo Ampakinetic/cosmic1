@@ -55,12 +55,15 @@ enum class WhiteBalanceMode : uint8_t {
     WB_HOME = 4
 };
 
-// Frame size values (matching esp_camera.h framesize_t)
+// Frame size wire codes — protocol-internal values whose numbering DELIBERATELY
+// DIFFERS from the esp32-camera framesize_t enum; the two are translated BY NAME
+// in CommandHandler (framesizeFromInt forward, frameSizeFromEsp reverse). Never
+// reinterpret one as the other numerically.
 enum class FrameSize : uint8_t {
     FRAMESIZE_QQVGA = 5,   // 160x120
     FRAMESIZE_QVGA = 6,    // 320x240
     FRAMESIZE_HQVGA = 7,   // 240x176
-    FRAMESIZE_QXGA = 8,    // 400x296
+    FRAMESIZE_CIF = 8,     // 400x296 (real CIF mode; the real QXGA is 2048x1536, unreachable on the OV2640)
     FRAMESIZE_VGA = 9,     // 640x480
     FRAMESIZE_SVGA = 10,   // 800x600
     FRAMESIZE_XGA = 11,    // 1024x768

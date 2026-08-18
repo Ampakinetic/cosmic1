@@ -613,7 +613,7 @@ void handleRoot() {
     html += "<option value=\"5\">QQVGA 160x120</option>";
     html += "<option value=\"6\" selected>QVGA 320x240</option>";
     html += "<option value=\"7\">HQVGA 240x176</option>";
-    html += "<option value=\"8\">QXGA 400x296</option>";
+    html += "<option value=\"8\">CIF 400x296</option>";
     html += "<option value=\"9\">VGA 640x480</option>";
     html += "<option value=\"10\">SVGA 800x600</option>";
     html += "<option value=\"11\">XGA 1024x768</option>";

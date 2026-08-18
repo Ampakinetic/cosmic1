@@ -576,7 +576,7 @@ CommandResult CommandHandler::handleGetStatus(const CommandPacket& cmd) {
     status.imageId = AutoCap().getLastImageId();
     status.autoCaptureEnabled = AutoCap().isEnabled() ? 1 : 0;
     status.autoCaptureInterval = AutoCap().getInterval();
-    status.currentResolution = static_cast<FrameSize>(camera->getFrameSize());
+    status.currentResolution = frameSizeFromEsp(camera->getFrameSize());
     status.currentQuality = static_cast<uint8_t>(camera->getQuality());
     status.currentBrightness = static_cast<int8_t>(camera->getBrightness());
     status.currentContrast = static_cast<int8_t>(camera->getContrast());
@@ -711,8 +711,8 @@ bool CommandHandler::framesizeFromInt(FrameSize fs, framesize_t& espFramesize) {
         case FrameSize::FRAMESIZE_HQVGA:
             espFramesize = FRAMESIZE_HQVGA;
             return true;
-        case FrameSize::FRAMESIZE_QXGA:
-            espFramesize = FRAMESIZE_QXGA;
+        case FrameSize::FRAMESIZE_CIF:
+            espFramesize = FRAMESIZE_CIF;
             return true;
         case FrameSize::FRAMESIZE_VGA:
             espFramesize = FRAMESIZE_VGA;
@@ -731,6 +731,37 @@ bool CommandHandler::framesizeFromInt(FrameSize fs, framesize_t& espFramesize) {
             return true;
         default:
             return false;
+    }
+}
+
+// Reverse mapping: real esp32-camera framesize_t -> project FrameSize wire code,
+// matched BY NAME (the two enums number identical names differently — e.g. real
+// QVGA is 5 while the project QVGA code is 6, so a numeric reinterpretation
+// reports the wrong resolution).
+FrameSize CommandHandler::frameSizeFromEsp(framesize_t espFrameSize) const {
+    switch (espFrameSize) {
+        case FRAMESIZE_QQVGA:
+            return FrameSize::FRAMESIZE_QQVGA;
+        case FRAMESIZE_QVGA:
+            return FrameSize::FRAMESIZE_QVGA;
+        case FRAMESIZE_HQVGA:
+            return FrameSize::FRAMESIZE_HQVGA;
+        case FRAMESIZE_CIF:
+            return FrameSize::FRAMESIZE_CIF;
+        case FRAMESIZE_VGA:
+            return FrameSize::FRAMESIZE_VGA;
+        case FRAMESIZE_SVGA:
+            return FrameSize::FRAMESIZE_SVGA;
+        case FRAMESIZE_XGA:
+            return FrameSize::FRAMESIZE_XGA;
+        case FRAMESIZE_SXGA:
+            return FrameSize::FRAMESIZE_SXGA;
+        case FRAMESIZE_UXGA:
+            return FrameSize::FRAMESIZE_UXGA;
+        default:
+            // Real sizes with no protocol code (96x96, QCIF, 240x240, HVGA, HD)
+            // report as the boot default QVGA instead of a bogus numeric cast
+            return FrameSize::FRAMESIZE_QVGA;
     }
 }
 

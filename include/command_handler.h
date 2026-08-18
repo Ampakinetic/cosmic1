@@ -96,6 +96,7 @@ private:
 
     // Camera helpers
     bool framesizeFromInt(FrameSize fs, framesize_t& espFramesize);
+    FrameSize frameSizeFromEsp(framesize_t espFrameSize) const;
 };
 
 // ===========================
