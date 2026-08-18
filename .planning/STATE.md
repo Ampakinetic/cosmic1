@@ -5,8 +5,8 @@ milestone_name: milestone
 current_phase: 1
 current_phase_name: command-protocol-control
 status: executing
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-08-18T03:17:13.000Z"
+stopped_at: Gap-closure re-verification: gaps_found (CR-05 legacy timer)
+last_updated: "2026-08-18T03:49:52.000Z"
 progress:
   total_phases: 1
   completed_phases: 0
@@ -21,7 +21,7 @@ progress:
 ## Current Status
 
 **Project:** Cosmic1 Base Station Camera Control Extension
-**Phase:** Phase 1 — plans 01-01 through 01-04 executed (gap closure complete); verification pending
+**Phase:** Phase 1 — gap closure executed (01-02..01-04); re-verification: gaps_found (1 code gap: CR-05)
 **Milestone:** v1.0
 
 ## Progress
@@ -31,7 +31,7 @@ progress:
 - ✅ Roadmap created (3 phases)
 - ✅ Phase 1 plan created
 - ✅ Phase 1 plan 01-01 executed (T1–T8 tracer, committed via closeout — see 01-01-SUMMARY.md)
-- ⏳ Phase 1 verification (verifier + hardware UAT)
+- ⏳ Phase 1 re-verification complete: gaps_found (2026-08-18) — all prior gaps closed and verified; 1 new code gap CR-05, 3 must-haves routed to hardware UAT
 - ✅ Phase 1 gap-closure plan 01-02 executed — protocol defects CR-01..CR-04 + WR-03/04/05 closed, D-05/D-07/D-16-support encoded (see 01-02-SUMMARY.md)
 - ✅ Phase 1 gap-closure plan 01-03 executed — all 7 settings forms + auto-capture UI (WR-07 long-first validation), D-16 Command Queue panel, IN-03 computed link LED (see 01-03-SUMMARY.md)
 - ✅ Phase 1 gap-closure plan 01-04 executed — real sensor setters for saturation/exposure/WB, AutoCapture interval timer module, truthful GET_STATUS, shared image-ID sequence, main-loop wiring (see 01-04-SUMMARY.md)
@@ -41,7 +41,7 @@ progress:
 
 **Phase 1: Command Protocol & Control**
 
-- Status: executing — all 4 plans executed (01-01 tracer, 01-02 protocol closure, 01-03 base station UI, 01-04 balloon gap closure); code review + verification pending
+- Status: executing — all 4 plans executed; code review done (19 findings: CR-05 critical + 6 warnings, report `01-REVIEW.md`); re-verification gaps_found — SC-5 disable semantics failed (CR-05), SC-2/3/4 behavior-unverified (hardware UAT)
 - Requirements: 6 (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02)
 - Goal: Establish bidirectional LoRa communication for camera control
 
@@ -64,10 +64,11 @@ progress:
 - CR-03 fixed by length-driven framing (header body-length field announces the packet length; end marker tested only at the framed position) rather than byte escaping — symmetric fix in both receivers
 - Host regression harness transcribes the wire format as an executable spec, including the defective pre-CR-01 serializer variant so the sweep provably has teeth (255/65535 accepted)
 
-### Known Gaps (code-complete as of 01-04; all remaining gaps are hardware-UAT-only)
+### Known Gaps (post re-verification 2026-08-18)
 
-- No hardware tests run yet (T9/E5/A5 require radios + camera); the Command Queue panel, LED truth, auto-capture UI, sensor setters, and interval timing are code-proven only until UAT (item 4 in 01-VERIFICATION.md)
-- Mode coexistence assumption: manual CAPTURE_NOW while auto-capture is enabled interleaves on the shared camera/ID sequence; a manual capture does not reset the auto-capture baseline (may cause back-to-back captures) — UAT item
+- **CR-05 (code gap, blocking CTRL-03/CTRL-04):** legacy 30 s capture timer in `src/main_balloon.cpp` `processCamera()` (lines ~658-691) still runs beside the commanded AutoCapture module — after an ACKed AUTO_CAPTURE_DISABLE the balloon keeps capturing every 30 s; its independent `static nextImageId` collides with `AutoCapture::allocateImageId()`; frame-buffer churn can destroy a commanded capture. Fix: remove or debug-gate the legacy block; route any kept periodic capture through `AutoCap().allocateImageId()`. Code-only fix. NOTE: REQUIREMENTS.md marks CTRL-03/CTRL-04 Complete — overstated until CR-05 closes (verifier finding).
+- No hardware tests run yet (T9/E5/A5 require radios + camera); SC-2 (RF round-trip), SC-3 (sensor acceptance), SC-4 (runtime retry/TIMEOUT transitions) are code-proven only until UAT (`01-VERIFICATION.md` behavior_unverified_items)
+- Code review advisories: WR-10 serializer length-window (201-224-byte payloads emit malformed packets; harness clause (b) locks in the 224-byte case), WR-01 E32 blocking transmit/AUX race, WR-02/06/08/09 carried — see `01-REVIEW.md`
 
 ## Project Reference
 
@@ -79,9 +80,10 @@ See: `.planning/PROJECT.md`
 
 ## Next Steps
 
-1. **Code review gate:** `/gsd-code-review 1` (auto-invoked by execute-phase)
-2. **Phase verification:** verifier re-runs after gap closure
-3. **Hardware UAT:** flash both units, run command-flow tests (`/gsd-verify-work 1`) — CR-level fixes, sensor setters, and interval timing are code-proven only until the radio round-trip runs
+1. **Gap closure round 2:** `/gsd-plan-phase 1 --gaps` — reads the structured gap in 01-VERIFICATION.md (CR-05), creates a gap plan; then `/gsd-execute-phase 1 --gaps-only`
+2. **Optionally first:** `/gsd-code-review 1 --fix` — CR-05 is also review finding #1; a fix plan may fold WR-10 in
+3. **Security gate (before phase complete):** `/gsd-secure-phase 1` — enforcement enabled, no SECURITY.md yet
+4. **Hardware UAT (after CR-05 closes):** flash both units, run command-flow tests (`/gsd-verify-work 1`) — SC-2/SC-3/SC-4 remain behavior-unverified until the radio round-trip runs
 
 ## Configuration
 
@@ -99,12 +101,12 @@ See: `.planning/PROJECT.md`
 **Git Tracking:** Enabled
 
 ---
-*State updated: 2026-08-18 - plan 01-04 (balloon auto-capture + camera setters) complete; all Phase 1 plans executed*
+*State updated: 2026-08-18 - gap closure 01-02..01-04 executed; code review + re-verification done (gaps_found: CR-05)*
 
 ## Session
 
-**Last session:** 2026-08-18T03:17:13.000Z
-**Stopped at:** Completed 01-04-PLAN.md
+**Last session:** 2026-08-18T03:49:52.000Z
+**Stopped at:** Gap-closure re-verification: gaps_found (CR-05 legacy timer)
 **Resume file:** None
 
 ## Performance Metrics
