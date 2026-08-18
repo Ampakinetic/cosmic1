@@ -1,7 +1,8 @@
 ---
 phase: 2
 slug: image-transmission
-status: draft
+status: approved
+reviewed_at: 2026-08-19
 shadcn_initialized: false
 preset: none
 created: 2026-08-19
@@ -194,20 +195,23 @@ Accent is NOT for: form labels, body copy, input borders, dividers, backgrounds,
 
 ## UI Considerations
 
-> Populated by the ui-consideration probe against this phase's surfaces: Image Transfers panel (list-collection), Latest Capture thumbnail (media), Event Capture form (form + interactive-control), storage/telemetry/event/auto-capture chips (static-content), status bar (static-content). Empty/error COPY lives in `## Copywriting Contract` — this section covers shape-rooted STATE coverage. Resolution: 9 covered, 2 backstop, 0 unresolved.
+> Populated by the ui-consideration probe (2026-08-19) post checker approval (6/6 PASS, iteration 2), then user-confirmed. Element kinds tightened to the spec's own annotations over the heuristic's over-detection: E1 transfer list (list-collection) · E2 thumbnail (media) · E3 event form (form + interactive-control) · E4 status bar (static-content) · E5 chips (static-content). Coverage: 20/20 applicable considerations resolved — all `verification: explicit`; 0 dismissed; 0 unresolved; plus 2 backstop gap-closure acceptance conditions carried from the researcher draft. Empty/error COPY lives in `## Copywriting Contract` — rows below reference it rather than restate (de-dup).
 
-| Category | Element(s) | Status | Resolution / Reason |
-|----------|------------|--------|---------------------|
-| empty | transfer-list; thumb-img; event-chip; telemetry-chip; storage value | ✅ covered | Zero transfers render the documented "No image transfers yet" copy; thumbnail hidden with "Waiting for first image..."; every chip has a documented honest-null string; storage renders "Unknown" pre-poll. Forms always render complete defaults — never unfilled. |
-| loading | transfer-list; event-form | ✅ covered | In-flight = QUEUED/RECEIVING state pill + accent progress bar (server-computed percent); Event form inputs disable while Set Event Thresholds is `Sent`. No spinners/skeletons — status-line model per Phase 1 decision. |
-| error | transfer-list; storage chip; link LED; POST routes | ✅ covered | RETRYING (amber) = degraded link recovering; INCOMPLETE (red) = terminal failure after bounded passes; storage UNAVAILABLE/FULL amber; poll failure → LED yellow "Unknown"; 400/500 JSON responses carry documented copy. |
-| populated | transfer-list; thumb-img | ✅ covered | Up to `RX_TRANSFER_SLOTS` (8) rows, each: id link, kind badge, bar, chunks, state pill; verified thumbnail at max-width 320px (mirrors IMG-02's ≤320px bound). |
-| partial | transfer-list | ✅ covered | D-24: an image finalized incomplete stays on SD and renders INCOMPLETE with truthful partial percent/chunks — partial is a displayed, honest terminal state, never rounded up to COMPLETE. |
-| overflow | transfer-row; status-bar; chips | ✅ covered | `.transfer-row` is flex-wrap (row reflows, never clips); status-bar auto-fit grid collapses to 2 columns ≤480px; chips wrap at 14px/1.5; thumbnail scales width 100% capped at 320px. |
-| zero-one-many | transfer-list | ✅ covered | 0 → documented empty copy; 1..8 rows render identically (numeric-only content, no singular/plural copy). |
-| long-text | chips; labels; transfer-chunks | ✅ covered | Chip/label text wraps at 14px/1.5; `.transfer-chunks` is `white-space: nowrap` by design — bounded numeric string ("123/456 chunks · 27%") cannot overflow its wrapping flex row. |
-| truthful accounting | transfer rows under slot recycle | 🧪 backstop | { statement: "After any slot recycle (including the CR-02 eviction path), a transfer row shows only the NEW image's accounting — 0/{totalChunks} at QUEUED/RECEIVING — never the previous occupant's receivedCount/percent/state", verification: backstop } |
-| thumbnail recovery display | THUMB-kind rows | 🧪 backstop | { statement: "Once the D-22 gap closes (kind-addressable re-request), a THUMB row can pass through RETRYING to COMPLETE (healed) or INCOMPLETE (3-pass bound) using only the locked five-state vocabulary — no UI change required", verification: backstop } |
+| Category | Element(s) | Status | Resolution |
+|----------|------------|--------|------------|
+| empty | E1 transfer list · E2 thumbnail · E3 event form/chip | ✅ resolved (explicit) | Documented in Copywriting Contract: zero-transfers copy; "Waiting for first image..." with image hidden; event chip honest-null; storage "Unknown" pre-poll; form always renders complete defaults — never unfilled |
+| loading | E1 · E2 · E3 | ✅ resolved (explicit) | QUEUED/RECEIVING state pill + accent progress bar at server-computed percent (no spinners/skeletons — status-line model); thumbnail hidden until a NEW CRC-verified id arrives; Event form inputs disable while its command is `Sent` |
+| error | E1 · E2 · E3 | ✅ resolved (explicit) | RETRYING (amber) = recovering, INCOMPLETE (red) = terminal after bounded passes; unverified bytes never linked/displayed, 404 honesty rule; exact 400/500 copy per Copywriting Contract |
+| populated | E1 · E2 | ✅ resolved (explicit) | Up to `RX_TRANSFER_SLOTS` (8) rows — id link, THUMB/FULL badge, bar, chunks, state pill; verified thumbnail at ≤320px with success copy |
+| partial | E1 · E3 | ✅ resolved (explicit) | D-24: INCOMPLETE stays on SD rendering truthful partial percent/chunks — never rounded up to COMPLETE; form has no partial state (always complete defaults) |
+| overflow | E1 rows · E4 status bar · E5 chips | ✅ resolved (explicit) | `.transfer-row` flex-wrap — reflows, never clips; status-bar auto-fit grid collapses to 2 columns ≤480px; chip text wraps at 14px/1.5 |
+| zero-one-many | E1 | ✅ resolved (explicit) | 0 → documented empty copy; 1..8 rows render identically — numeric-only content, no singular/plural copy divergence |
+| long-text | E3 labels · E4 status values · E5 chips | ✅ resolved (explicit) | Label/value/chip text wraps at 14px/1.5; no truncation, ellipsis, or nowrap anywhere in the locked contract |
+
+**Backstop truths (gap-closure acceptance conditions, carried from researcher draft):**
+
+- { statement: "After any slot recycle (including the CR-02 eviction path), a transfer row shows only the NEW image's accounting — 0/{totalChunks} at QUEUED/RECEIVING — never the previous occupant's receivedCount/percent/state", verification: backstop }
+- { statement: "Once the D-22 gap closes (kind-addressable re-request), a THUMB row can pass through RETRYING to COMPLETE (healed) or INCOMPLETE (3-pass bound) using only the locked five-state vocabulary — no UI change required", verification: backstop }
 
 **Unresolved:** none (0). Hardware-timing surfaces (thumbnail within 10 s, telemetry age during transfer) are UAT items in `02-VERIFICATION.md`, not UI-state gaps — the UI states themselves are fully specified above.
 
@@ -224,11 +228,11 @@ Accent is NOT for: form labels, body copy, input borders, dividers, backgrounds,
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS (primary focal point declared in Design System)
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS (exactly 4 sizes locked: 14/16/18/24; shipped 11/12/13px transfer-panel text moved fully into the off-scale deviation table with explicit 14px harmonization targets; no sizes outside the four permitted)
-- [ ] Dimension 5 Spacing: PASS (locked scale standard-set-only; `lg` = 24px, shipped 20px retired to the off-grid table with 24px target; off-grid shipped values documented with harmonization targets; no new off-grid values permitted)
-- [ ] Dimension 6 Registry Safety: PASS
+- [x] Dimension 1 Copywriting: PASS
+- [x] Dimension 2 Visuals: PASS (primary focal point declared in Design System)
+- [x] Dimension 3 Color: PASS
+- [x] Dimension 4 Typography: PASS (exactly 4 sizes locked: 14/16/18/24; shipped 11/12/13px transfer-panel text moved fully into the off-scale deviation table with explicit 14px harmonization targets; no sizes outside the four permitted)
+- [x] Dimension 5 Spacing: PASS (locked scale standard-set-only; `lg` = 24px, shipped 20px retired to the off-grid table with 24px target; off-grid shipped values documented with harmonization targets; no new off-grid values permitted)
+- [x] Dimension 6 Registry Safety: PASS
 
-**Approval:** pending
+**Approval:** approved 2026-08-19 (gsd-ui-checker, iteration 2 — after one revision round; non-blocking recommendations: harmonize 15px card-h2/message surfaces and 13/12/11px transfer-panel text to 14px when next touched)
