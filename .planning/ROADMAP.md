@@ -48,8 +48,13 @@
 **Plans:** 4 plans (01-01 executed; 01-02..01-04 are gap closure from 01-VERIFICATION.md)
 
 Plans:
+**Wave 1**
+
 - [x] PLAN.md — executed tracer (non-standard filename; summary at 01-01-SUMMARY.md)
 - [ ] 01-02-PLAN.md — Protocol integrity: CRC/sequence fix, 240-byte limits, length-driven framing, retry terminal states
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 01-03-PLAN.md — Base station UI: all 7 settings forms, auto-capture controls, per-command outcome panel, real link LED
 - [ ] 01-04-PLAN.md — Balloon execution: camera sensor setters, AutoCapture interval module, real GET_STATUS, loop wiring
 
