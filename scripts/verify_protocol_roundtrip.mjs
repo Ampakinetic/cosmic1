@@ -38,8 +38,10 @@
 //       while accepting the 200 boundary
 //   (img-e) telemetry beacon round-trip preserves every field including
 //       negative int32/int16 values
-//   (img-f) window-request and event-threshold command payloads encode and
-//       decode symmetrically (big-endian)
+//   (img-f) window-request payload is 6 bytes (imageId BE16, imageKind u8,
+//       startChunk BE16, count u8 — the kind byte at offset 2) and round-trips
+//       symmetrically for boundary values of both kinds; event-threshold
+//       payloads encode/decode symmetrically (big-endian)
 //   (img-g) the receiver type-dispatch rule (WR-12): the balloon accepts
 //       0x10 only; the base accepts 0x11/0x12/0x13/0x14; frames of any
 //       other type are discarded before body arithmetic
@@ -929,20 +931,29 @@ function makeTypeDispatchReceiver(acceptedTypes) {
 
 // (img-f) Window-request and threshold payloads encode/decode symmetrically
 {
+    // Exact wire layout (02-05 / CR-01): imageId BE16, imageKind u8 at
+    // offset 2, startChunk BE16, count u8 — 6 bytes total
+    const exact = encodeWindowRequest({ imageId: 42, imageKind: 1, startChunk: 7, count: 16 });
+    assert(exact.length === 6 &&
+           exact[0] === 0x00 && exact[1] === 0x2A && exact[2] === 0x01 &&
+           exact[3] === 0x00 && exact[4] === 0x07 && exact[5] === 0x10,
+        '(img-f) window request encodes exactly 00 2A 01 00 07 10 (imageId BE16, imageKind u8, startChunk BE16, count u8)');
+
     const windows = [
-        { imageId: 1, startChunk: 0, count: 1 },
-        { imageId: 0xFFFF, startChunk: 0xFFFF, count: 16 },
-        { imageId: 0x1234, startChunk: 240, count: 16 },
+        { imageId: 0, imageKind: 0, startChunk: 0, count: 1 },
+        { imageId: 0xFFFF, imageKind: 1, startChunk: 0xFFFF, count: 16 },
+        { imageId: 0x1234, imageKind: 0, startChunk: 240, count: 16 },
     ];
     let windowsOk = 0;
     for (const w of windows) {
         const round = decodeWindowRequest(encodeWindowRequest(w));
-        if (round.imageId === w.imageId && round.startChunk === w.startChunk && round.count === w.count) {
+        if (round.imageId === w.imageId && round.imageKind === w.imageKind &&
+            round.startChunk === w.startChunk && round.count === w.count) {
             windowsOk += 1;
         }
     }
-    assert(windowsOk === windows.length && encodeWindowRequest(windows[0]).length === 5,
-        '(img-f) window-request payload (5 bytes) round-trips symmetrically for boundary values');
+    assert(windowsOk === windows.length && encodeWindowRequest(windows[0]).length === 6,
+        '(img-f) window-request payload (6 bytes) round-trips symmetrically for boundary values (both kinds)');
 
     const thresholds = [
         { altDeltaM: 150, distDeltaM: 500, minSpacingSec: 20, flags: 1 },
