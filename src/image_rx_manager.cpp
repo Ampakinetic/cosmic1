@@ -1,6 +1,8 @@
 #include "image_rx_manager.h"
 #include <esp_rom_crc.h>
 #include "base_station_config.h"   // MAX_IMAGE_SIZE — allocation bound (Pitfall 11)
+#include "command_sender.h"        // window requests ride the Phase 1 machinery
+#include "sd_storage.h"            // stream-to-SD persistence (Pattern 5)
 
 // Debug configuration
 #ifndef DEBUG_IMAGE_RX
@@ -17,16 +19,37 @@ ImageRxManager& ImageRx() {
 }
 
 // ===========================
+// Locked State Vocabulary (D-20)
+// ===========================
+
+// The SINGLE state-to-string mapping every consumer shares (/status JSON,
+// the transfer panel). The UI never invents or defaults a state — it only
+// maps these strings to presentation (chip label/color).
+const char* transferStateToString(TransferDisplayState state) {
+    switch (state) {
+        case TransferDisplayState::QUEUED:     return "QUEUED";
+        case TransferDisplayState::RECEIVING:  return "RECEIVING";
+        case TransferDisplayState::RETRYING:   return "RETRYING";
+        case TransferDisplayState::COMPLETE:   return "COMPLETE";
+        case TransferDisplayState::INCOMPLETE: return "INCOMPLETE";
+        default:                               return "INCOMPLETE";
+    }
+}
+
+// ===========================
 // Constructor/Destructor
 // ===========================
 
 ImageRxManager::ImageRxManager()
     : initialized(false)
+    , nextArrivalSeq(0)
     , latestThumbId(0)
     , latestThumbBuffer(nullptr)
     , latestThumbLength(0)
 {
-    memset(&transfer, 0, sizeof(transfer));
+    for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+        transfers[i] = ImageRxTransfer{};
+    }
     memset(&telemetry, 0, sizeof(telemetry));
 }
 
@@ -50,12 +73,15 @@ bool ImageRxManager::begin() {
 
 void ImageRxManager::end() {
     initialized = false;
-    clearTransfer();
+    for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+        releaseSlotWork(transfers[i]);
+        transfers[i] = ImageRxTransfer{};
+    }
     freeLatest();
 }
 
 // ===========================
-// Main Processing
+// Main Processing (window driver + stall fallback)
 // ===========================
 
 void ImageRxManager::process() {
@@ -63,14 +89,103 @@ void ImageRxManager::process() {
         return;
     }
 
-    // Stall watchdog: an in-flight transfer with no chunk progress within
-    // IMG_WINDOW_STALL_MS is dropped. Holes left by lost chunks are healed by
-    // the SAME windowed-pull re-request path (D-22) wired in 02-03 — this
-    // plan only prevents a dead manifest from squatting on memory forever.
-    if (transfer.active && (millis() - transfer.lastActivityMs > IMG_WINDOW_STALL_MS)) {
-        Serial.printf("ImageRx: image %u transfer stalled (no chunk for %u ms); dropped\n",
-                      transfer.imageId, static_cast<unsigned>(IMG_WINDOW_STALL_MS));
-        clearTransfer();
+    // D-21: drive the ONE active full-image pull. The base speaks only on
+    // window completion, stall, or manifest-while-idle (Pitfall 5) — every
+    // issueWindowRequest call below sits on one of those three triggers.
+    ImageRxTransfer* pull = findActivePull();
+    if (pull != nullptr) {
+        // Safety net: completion normally finalizes inline in acceptChunk
+        if (pull->receivedCount == pull->totalChunks) {
+            finalizeTransfer(*pull);
+        } else if (pull->windowActive && windowSliceComplete(*pull)) {
+            // Window completed: advance to the next missing span. All chunks
+            // before the span are present by construction (windows complete
+            // before advancing), so the span starts at the global first miss.
+            uint16_t fm = firstMissingChunk(*pull, 0);
+            if (fm >= pull->totalChunks) {
+                finalizeTransfer(*pull);
+            } else {
+                uint16_t count = pull->totalChunks - fm;
+                if (count > IMG_WINDOW_MAX_CHUNKS) {
+                    count = IMG_WINDOW_MAX_CHUNKS;
+                }
+                issueWindowRequest(*pull, fm, count);
+            }
+        } else if (millis() - pull->lastProgressMs > IMG_WINDOW_STALL_MS) {
+            // Stalled stream. windowActive == false means the previous issue
+            // never queued (command table full) — this is the FIRST real
+            // attempt for the span, so no pass is charged; otherwise the
+            // balloon failed to deliver and a retransmit pass begins.
+            if (pull->windowActive && pull->passCount >= IMG_RETRANSMIT_MAX_PASSES) {
+                // D-24: bounded passes exhausted — finalize incomplete, keep
+                // what is on SD, free the slot for the next queued pull
+                finalizeIncomplete(*pull, "retransmit passes exhausted");
+            } else {
+                if (pull->windowActive) {
+                    pull->passCount++;
+                }
+                // Re-request ONLY the missing region of the current scope.
+                // The wire format names ONE contiguous span, so the span runs
+                // first-missing..last-missing inside the scope; already-
+                // present indices inside the span are re-sent by the balloon
+                // and dropped idempotently by the bitmap.
+                uint16_t scopeFrom = pull->windowActive ? pull->windowBase : 0;
+                uint16_t scopeTo = pull->totalChunks;
+                if (pull->windowActive &&
+                    static_cast<uint32_t>(pull->windowBase) + pull->windowCount < scopeTo) {
+                    scopeTo = pull->windowBase + pull->windowCount;
+                }
+                uint16_t fm = firstMissingChunk(*pull, scopeFrom);
+                uint16_t lm = lastMissingChunk(*pull, fm, scopeTo);
+                uint16_t count = lm - fm + 1;
+                if (count > IMG_WINDOW_MAX_CHUNKS) {
+                    count = IMG_WINDOW_MAX_CHUNKS;
+                }
+                issueWindowRequest(*pull, fm, count);
+            }
+        }
+    } else {
+        // FIFO advance (D-19): no active pull — activate the earliest
+        // manifest-arrival queued full (issues its first window request =
+        // the manifest-while-idle trigger)
+        activateNextPull();
+    }
+
+    // D-22: thumbnail hole fallback — a pushed thumbnail with holes runs the
+    // SAME stall/re-request path (a thumbnail is just another pullable
+    // image; no parallel best-effort mechanism exists)
+    for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+        ImageRxTransfer& t = transfers[i];
+        if (!t.used || t.terminal ||
+            t.imageKind != static_cast<uint8_t>(ImageKind::THUMBNAIL)) {
+            continue;
+        }
+        if (t.receivedCount == t.totalChunks) {
+            finalizeTransfer(t);   // safety net
+            continue;
+        }
+        if (millis() - t.lastProgressMs <= IMG_WINDOW_STALL_MS) {
+            continue;
+        }
+        if (t.windowActive && t.passCount >= IMG_RETRANSMIT_MAX_PASSES) {
+            finalizeIncomplete(t, "thumbnail push stalled; passes exhausted");
+            continue;
+        }
+        if (t.windowActive) {
+            t.passCount++;
+        }
+        // Scope: the whole thumbnail from its first hole (capped at one
+        // window per request — the balloon arms a single span)
+        uint16_t fm = firstMissingChunk(t, 0);
+        if (fm >= t.totalChunks) {
+            finalizeTransfer(t);
+            continue;
+        }
+        uint16_t count = t.totalChunks - fm;
+        if (count > IMG_WINDOW_MAX_CHUNKS) {
+            count = IMG_WINDOW_MAX_CHUNKS;
+        }
+        issueWindowRequest(t, fm, count);
     }
 }
 
@@ -98,73 +213,34 @@ void ImageRxManager::onChunkFrame(const uint8_t* frame, size_t length) {
         return;
     }
 
-    if (!transfer.active) {
-        if (DEBUG_IMAGE_RX) {
-            Serial.println("ImageRx: chunk with no active manifest ignored");
-        }
-        return;
-    }
-
     const ImageChunkBody& c = pkt.body;
 
-    if (c.imageId != transfer.imageId) {
-        // Chunk for an older/other image than the one being reassembled
+    // Routing by (imageId, kind). Wire-order fact from the balloon state
+    // machine: thumbnail chunks are only ever sent BEFORE the full manifest
+    // of the same id (the push completes before the announcement), and after
+    // it every chunk on the wire for that id is a window-pull answer. So a
+    // non-terminal FULL slot takes precedence; otherwise the chunk belongs
+    // to the thumbnail push.
+    ImageRxTransfer* t = findTransfer(c.imageId, static_cast<uint8_t>(ImageKind::FULL_IMAGE));
+    if (t == nullptr || t->terminal) {
+        t = findTransfer(c.imageId, static_cast<uint8_t>(ImageKind::THUMBNAIL));
+    }
+    if (t == nullptr) {
         if (DEBUG_IMAGE_RX) {
-            Serial.printf("ImageRx: chunk for image %u while reassembling %u; ignored\n",
-                          c.imageId, transfer.imageId);
+            Serial.printf("ImageRx: chunk for image %u with no matching manifest ignored\n",
+                          c.imageId);
+        }
+        return;
+    }
+    if (t->terminal) {
+        if (DEBUG_IMAGE_RX) {
+            Serial.printf("ImageRx: chunk for finalized image %u kind %u ignored\n",
+                          c.imageId, t->imageKind);
         }
         return;
     }
 
-    if (c.chunkIndex >= transfer.totalChunks) {
-        if (DEBUG_IMAGE_RX) {
-            Serial.printf("ImageRx: chunk index %u out of range (%u total); ignored\n",
-                          c.chunkIndex, transfer.totalChunks);
-        }
-        return;
-    }
-
-    // The chunk must carry exactly the bytes its slot spans — full
-    // chunkSize, or the remainder for the final partial chunk
-    size_t offset = static_cast<size_t>(c.chunkIndex) * transfer.chunkSize;
-    size_t expectedLen = transfer.totalSize - offset;
-    if (expectedLen > transfer.chunkSize) {
-        expectedLen = transfer.chunkSize;
-    }
-    if (c.dataLen != expectedLen) {
-        if (DEBUG_IMAGE_RX) {
-            Serial.printf("ImageRx: chunk %u of image %u carries %u B, expected %u; ignored\n",
-                          c.chunkIndex, transfer.imageId, c.dataLen,
-                          static_cast<unsigned>(expectedLen));
-        }
-        return;
-    }
-
-    if (transfer.chunkPresent[c.chunkIndex]) {
-        // Duplicate — retransmissions can double-deliver; drop idempotently
-        if (DEBUG_IMAGE_RX) {
-            Serial.printf("ImageRx: duplicate chunk %u of image %u dropped\n",
-                          c.chunkIndex, transfer.imageId);
-        }
-        return;
-    }
-
-    memcpy(transfer.buffer + offset, c.data, c.dataLen);
-    transfer.chunkPresent[c.chunkIndex] = 1;
-    transfer.receivedCount++;
-    transfer.lastActivityMs = millis();
-
-    if (DEBUG_IMAGE_RX) {
-        Serial.printf("ImageRx: image %u chunk %u/%u (%u B)\n",
-                      transfer.imageId,
-                      static_cast<unsigned>(transfer.receivedCount),
-                      static_cast<unsigned>(transfer.totalChunks),
-                      c.dataLen);
-    }
-
-    if (transfer.receivedCount == transfer.totalChunks) {
-        finalizeTransfer();
-    }
+    acceptChunk(*t, c);
 }
 
 void ImageRxManager::onTelemetryBeaconFrame(const uint8_t* frame, size_t length) {
@@ -196,11 +272,104 @@ void ImageRxManager::onTelemetryBeaconFrame(const uint8_t* frame, size_t length)
 }
 
 // ===========================
+// Slot Handling
+// ===========================
+
+ImageRxTransfer* ImageRxManager::findTransfer(uint16_t imageId, uint8_t kind) {
+    for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+        ImageRxTransfer& t = transfers[i];
+        if (t.used && t.imageId == imageId && t.imageKind == kind) {
+            return &t;
+        }
+    }
+    return nullptr;
+}
+
+ImageRxTransfer* ImageRxManager::findActivePull() {
+    for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+        ImageRxTransfer& t = transfers[i];
+        if (t.used && !t.terminal && t.pullActive) {
+            return &t;
+        }
+    }
+    return nullptr;
+}
+
+ImageRxTransfer* ImageRxManager::allocateSlot(uint8_t kind) {
+    // 1. A free slot
+    for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+        if (!transfers[i].used) {
+            return &transfers[i];
+        }
+    }
+
+    // 2. Recycle the OLDEST terminal slot — finished history yields to live
+    //    work (the D-20 rows it fed are gone; its files stay on SD)
+    ImageRxTransfer* oldestTerminal = nullptr;
+    for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+        ImageRxTransfer& t = transfers[i];
+        if (t.used && t.terminal &&
+            (oldestTerminal == nullptr || t.arrivalSeq < oldestTerminal->arrivalSeq)) {
+            oldestTerminal = &t;
+        }
+    }
+    if (oldestTerminal != nullptr) {
+        Serial.printf("ImageRx: slot pressure — recycling terminal row image %u kind %u\n",
+                      oldestTerminal->imageId, oldestTerminal->imageKind);
+        releaseSlotWork(*oldestTerminal);
+        *oldestTerminal = ImageRxTransfer{};
+        return oldestTerminal;
+    }
+
+    // 3. Evict the oldest non-terminal slot that is NOT the active pull —
+    //    finalize it incomplete (D-24-style bound under slot pressure,
+    //    logged, never silent). Evicting the in-flight pull mid-stream is
+    //    never an option.
+    ImageRxTransfer* oldest = nullptr;
+    for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+        ImageRxTransfer& t = transfers[i];
+        if (t.used && !t.terminal && !t.pullActive &&
+            (oldest == nullptr || t.arrivalSeq < oldest->arrivalSeq)) {
+            oldest = &t;
+        }
+    }
+    if (oldest != nullptr) {
+        Serial.printf("ImageRx: slot pressure — evicting pending transfer image %u kind %u "
+                      "(finalized incomplete)\n",
+                      oldest->imageId, oldest->imageKind);
+        finalizeIncomplete(*oldest, "slot pressure");
+        return oldest;
+    }
+
+    // 4. Every slot is the active pull or otherwise un-evictable — reject
+    Serial.println("ImageRx: no transfer slot available; manifest rejected");
+    return nullptr;
+}
+
+void ImageRxManager::releaseSlotWork(ImageRxTransfer& t) {
+    if (t.buffer != nullptr) {
+        // The retained latest thumbnail owns its buffer (ownership moved at
+        // finalize) — terminal slots carry buffer == nullptr, so a non-null
+        // buffer here is always working memory safe to free
+        free(t.buffer);
+        t.buffer = nullptr;
+    }
+    if (t.chunkPresent != nullptr) {
+        free(t.chunkPresent);
+        t.chunkPresent = nullptr;
+    }
+}
+
+// ===========================
 // Transfer Handling
 // ===========================
 
 void ImageRxManager::startTransfer(const ImageManifestBody& m) {
-    // Pitfall 11: validate EVERYTHING before allocating a single byte.
+    // Pitfall 11: validate EVERYTHING before allocating a single byte
+    // (T-02-07: a pathological manifest cannot pre-allocate or seek past
+    // bounds — sizes, counts, and indices are all bounded here and in
+    // acceptChunk, and the D-24 pass bound keeps a loss-flooding sender from
+    // holding a slot forever)
     if (m.totalSize == 0 || m.totalSize > MAX_IMAGE_SIZE) {
         Serial.printf("ImageRx: manifest image %u totalSize %u out of bounds (1..%d); rejected\n",
                       m.imageId, static_cast<unsigned>(m.totalSize), MAX_IMAGE_SIZE);
@@ -227,46 +396,72 @@ void ImageRxManager::startTransfer(const ImageManifestBody& m) {
         return;
     }
 
-    // A new manifest supersedes any in-flight transfer — the base follows the
-    // balloon's push stream, so the newest image wins the reassembly slot
-    if (transfer.active) {
-        Serial.printf("ImageRx: manifest image %u supersedes in-flight image %u (%u/%u chunks)\n",
-                      m.imageId, transfer.imageId,
-                      static_cast<unsigned>(transfer.receivedCount),
-                      static_cast<unsigned>(transfer.totalChunks));
-        clearTransfer();
+    // Same (id, kind) manifest again: restart that slot's reassembly (02-01
+    // semantics — a same-id re-push restarts cleanly; D-19 keeps OTHER
+    // transfers running: a new capture never abandons an in-progress pull)
+    ImageRxTransfer* t = findTransfer(m.imageId, m.imageKind);
+    if (t == nullptr) {
+        t = allocateSlot(m.imageKind);
+        if (t == nullptr) {
+            return; // logged inside allocateSlot
+        }
+    } else {
+        Serial.printf("ImageRx: re-manifest for image %u kind %u — restarting reassembly "
+                      "(had %u/%u chunks)\n",
+                      m.imageId, m.imageKind,
+                      static_cast<unsigned>(t->receivedCount),
+                      static_cast<unsigned>(t->totalChunks));
+        releaseSlotWork(*t);
+        bool wasPull = t->pullActive;
+        *t = ImageRxTransfer{};
+        t->pullActive = wasPull;   // an active pull re-arms on the same slot
     }
 
-    transfer.active = true;
-    transfer.imageId = m.imageId;
-    transfer.imageKind = m.imageKind;
-    transfer.captureSource = m.captureSource;
-    transfer.totalSize = m.totalSize;
-    transfer.chunkSize = m.chunkSize;
-    transfer.totalChunks = m.totalChunks;
-    transfer.crc32 = m.crc32;   // D-23: CRC over THIS kind's payload bytes
-    transfer.captureTimeMs = m.captureTimeMs;
-    transfer.resolution = m.resolution;
-    transfer.quality = m.quality;
-    transfer.brightness = m.brightness;
-    transfer.contrast = m.contrast;
-    transfer.saturation = m.saturation;
-    transfer.exposure = m.exposure;
-    transfer.wbMode = m.wbMode;
+    t->used = true;
+    t->arrivalSeq = nextArrivalSeq++;
+    t->imageId = m.imageId;
+    t->imageKind = m.imageKind;
+    t->captureSource = m.captureSource;
+    t->totalSize = m.totalSize;
+    t->chunkSize = m.chunkSize;
+    t->totalChunks = m.totalChunks;
+    t->crc32 = m.crc32;   // D-23: CRC over THIS kind's payload bytes
+    t->captureTimeMs = m.captureTimeMs;
+    t->resolution = m.resolution;
+    t->quality = m.quality;
+    t->brightness = m.brightness;
+    t->contrast = m.contrast;
+    t->saturation = m.saturation;
+    t->exposure = m.exposure;
+    t->wbMode = m.wbMode;
+    t->lastProgressMs = millis();
 
-    transfer.buffer = (uint8_t*)malloc(m.totalSize);
-    transfer.chunkPresent = (uint8_t*)calloc(m.totalChunks, 1);
-    transfer.receivedCount = 0;
-    transfer.lastActivityMs = millis();
-
-    if (transfer.buffer == nullptr || transfer.chunkPresent == nullptr) {
-        Serial.printf("ImageRx: allocation failed for image %u (%u B + %u flags); rejected\n",
-                      m.imageId,
-                      static_cast<unsigned>(m.totalSize),
-                      m.totalChunks);
-        clearTransfer();
+    t->chunkPresent = (uint8_t*)calloc(m.totalChunks, 1);
+    if (t->chunkPresent == nullptr) {
+        Serial.printf("ImageRx: bitmap allocation failed for image %u (%u flags); rejected\n",
+                      m.imageId, m.totalChunks);
+        *t = ImageRxTransfer{};
         return;
     }
+
+    // Fulls stream straight to SD (Pattern 5 — no whole-image RAM buffer on
+    // this PSRAM-less build; the untrusted totalSize is never allocated).
+    // Thumbnails additionally reassemble in RAM for the 02-01 retention
+    // path (serving robustness when SD is degraded).
+    if (m.imageKind == static_cast<uint8_t>(ImageKind::THUMBNAIL)) {
+        t->buffer = (uint8_t*)malloc(m.totalSize);
+        if (t->buffer == nullptr) {
+            Serial.printf("ImageRx: buffer allocation failed for image %u (%u B); rejected\n",
+                          m.imageId, static_cast<unsigned>(m.totalSize));
+            releaseSlotWork(*t);
+            *t = ImageRxTransfer{};
+            return;
+        }
+    }
+
+    // SD transfer file (degrades internally when storage is unavailable —
+    // accounting continues, nothing persisted)
+    SDStorage().openTransfer(m.imageId, m.imageKind, m.totalSize);
 
     if (DEBUG_IMAGE_RX) {
         Serial.printf("ImageRx: manifest image %u kind %u (%u B, %u chunks of %u, CRC %08X)\n",
@@ -275,52 +470,422 @@ void ImageRxManager::startTransfer(const ImageManifestBody& m) {
                       m.totalChunks, m.chunkSize,
                       static_cast<unsigned int>(m.crc32));
     }
+
+    if (m.imageKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) && !t->pullActive) {
+        // QUEUED (D-19 FIFO). If no pull is active this manifest arrived
+        // while idle — the one trigger that starts a pull immediately.
+        if (findActivePull() == nullptr) {
+            t->pullActive = true;
+            uint16_t fm = firstMissingChunk(*t, 0);
+            uint16_t count = t->totalChunks - fm;
+            if (count > IMG_WINDOW_MAX_CHUNKS) {
+                count = IMG_WINDOW_MAX_CHUNKS;
+            }
+            issueWindowRequest(*t, fm, count);
+        }
+    }
+    // THUMBNAIL: the push stream follows the manifest on the wire; holes
+    // heal through the stall path above (D-22 — same machinery)
 }
 
-void ImageRxManager::finalizeTransfer() {
-    // D-23: end-to-end CRC32 over the reassembled bytes must match the
-    // manifest's CRC for this kind before anything is exposed
-    uint32_t crc = esp_rom_crc32_le(0, transfer.buffer, transfer.totalSize);
-    if (crc != transfer.crc32) {
-        // Keep the PREVIOUS verified thumbnail; never fabricate success
-        Serial.printf("ImageRx: image %u CRC mismatch (got %08X, manifest says %08X); dropped\n",
-                      transfer.imageId,
-                      static_cast<unsigned int>(crc),
-                      static_cast<unsigned int>(transfer.crc32));
-        clearTransfer();
+bool ImageRxManager::acceptChunk(ImageRxTransfer& t, const ImageChunkBody& c) {
+    if (c.chunkIndex >= t.totalChunks) {
+        if (DEBUG_IMAGE_RX) {
+            Serial.printf("ImageRx: chunk index %u out of range (%u total); ignored\n",
+                          c.chunkIndex,
+                          static_cast<unsigned>(t.totalChunks));
+        }
+        return false;
+    }
+
+    // The chunk must carry exactly the bytes its slot spans — full
+    // chunkSize, or the remainder for the final partial chunk
+    size_t offset = static_cast<size_t>(c.chunkIndex) * t.chunkSize;
+    size_t expectedLen = t.totalSize - offset;
+    if (expectedLen > t.chunkSize) {
+        expectedLen = t.chunkSize;
+    }
+    if (c.dataLen != expectedLen) {
+        if (DEBUG_IMAGE_RX) {
+            Serial.printf("ImageRx: chunk %u of image %u carries %u B, expected %u; ignored\n",
+                          c.chunkIndex, t.imageId, c.dataLen,
+                          static_cast<unsigned>(expectedLen));
+        }
+        return false;
+    }
+
+    if (t.chunkPresent[c.chunkIndex]) {
+        // Duplicate — retransmissions can double-deliver; drop idempotently
+        if (DEBUG_IMAGE_RX) {
+            Serial.printf("ImageRx: duplicate chunk %u of image %u dropped\n",
+                          c.chunkIndex, t.imageId);
+        }
+        return false;
+    }
+
+    // Commit: RAM (thumbnails only) + SD stream (Pattern 5: seek to the
+    // chunk's fixed offset — out-of-order arrival lands correctly)
+    if (t.buffer != nullptr) {
+        memcpy(t.buffer + offset, c.data, c.dataLen);
+    }
+    SDStorage().writeChunk(t.imageId, t.imageKind, c.chunkIndex, t.chunkSize,
+                           c.data, c.dataLen);
+    t.chunkPresent[c.chunkIndex] = 1;
+    t.receivedCount++;
+    t.bytesReceived += c.dataLen;
+    t.lastProgressMs = millis();
+
+    if (DEBUG_IMAGE_RX) {
+        Serial.printf("ImageRx: image %u kind %u chunk %u/%u (%u B)\n",
+                      t.imageId, t.imageKind,
+                      static_cast<unsigned>(t.receivedCount),
+                      static_cast<unsigned>(t.totalChunks),
+                      c.dataLen);
+    }
+
+    if (t.receivedCount == t.totalChunks) {
+        finalizeTransfer(t);
+    }
+    return true;
+}
+
+// ===========================
+// Finalization
+// ===========================
+
+void ImageRxManager::finalizeTransfer(ImageRxTransfer& t) {
+    // D-23: an image is COMPLETE only after the end-to-end CRC32 over its
+    // bytes matches the manifest. Thumbnail bytes live in RAM (the 02-01
+    // reassembly); full-image bytes live only on SD, so their CRC is
+    // computed by reading the stored file back (chunks arrived out of
+    // order, so the CRC cannot stream; the read-back is bounded by
+    // MAX_IMAGE_SIZE).
+    bool complete = false;
+    bool crcMismatch = false;
+    bool notStored = false;
+
+    if (t.imageKind == static_cast<uint8_t>(ImageKind::THUMBNAIL) && t.buffer != nullptr) {
+        uint32_t crc = esp_rom_crc32_le(0, t.buffer, t.totalSize);
+        complete = (crc == t.crc32);
+        crcMismatch = !complete;
+        if (!complete) {
+            Serial.printf("ImageRx: image %u CRC mismatch (got %08X, manifest says %08X)\n",
+                          t.imageId,
+                          static_cast<unsigned int>(crc),
+                          static_cast<unsigned int>(t.crc32));
+        }
+    } else {
+        uint32_t storedCrc = 0;
+        if (verifyStoredCrc32(t, storedCrc)) {
+            complete = (storedCrc == t.crc32);
+            crcMismatch = !complete;
+            if (!complete) {
+                Serial.printf("ImageRx: image %u stored-bytes CRC mismatch (got %08X, manifest %08X)\n",
+                              t.imageId,
+                              static_cast<unsigned int>(storedCrc),
+                              static_cast<unsigned int>(t.crc32));
+            }
+        } else {
+            // SD degraded/absent or the stored file is short: the bytes
+            // cannot be verified, so the image is NOT complete — never a
+            // fabricated success (a fully-received full with no storage
+            // still reports INCOMPLETE)
+            notStored = true;
+        }
+    }
+
+    t.terminal = true;
+    t.complete = complete;
+    t.crcMismatch = crcMismatch;
+    t.notStored = notStored;
+
+    Serial.printf("ImageRx: image %u kind %u finalized %s (%u/%u chunks, %u B)%s\n",
+                  t.imageId, t.imageKind,
+                  complete ? "COMPLETE" : "INCOMPLETE",
+                  static_cast<unsigned>(t.receivedCount),
+                  static_cast<unsigned>(t.totalChunks),
+                  static_cast<unsigned>(t.bytesReceived),
+                  notStored ? " — not stored (SD degraded)" : "");
+
+    // Sidecar ONCE at finalization with honest flags (Pitfall 8)
+    writeSidecarFor(t, complete, crcMismatch, notStored);
+
+    // Thumbnail retention: only a CRC-VERIFIED thumbnail replaces the
+    // latest — ownership moves into the latest* slot (02-01 discipline)
+    if (complete && t.imageKind == static_cast<uint8_t>(ImageKind::THUMBNAIL)
+            && t.buffer != nullptr) {
+        freeLatest();
+        latestThumbId = t.imageId;
+        latestThumbBuffer = t.buffer;
+        latestThumbLength = t.totalSize;
+        t.buffer = nullptr;
+    }
+
+    releaseSlotWork(t);
+
+    if (t.pullActive) {
+        t.pullActive = false;
+        activateNextPull();   // FIFO: the next queued pull starts now
+    }
+}
+
+void ImageRxManager::finalizeIncomplete(ImageRxTransfer& t, const char* reason) {
+    // D-24: bounded degradation — keep what is on SD, flag it in the
+    // sidecar, free the transfer slot for the next queued pull. Never
+    // loops forever (PRI-03).
+    t.terminal = true;
+    t.complete = false;
+    t.crcMismatch = false;
+    t.notStored = false;
+
+    Serial.printf("ImageRx: image %u kind %u finalized INCOMPLETE (%s): %u/%u chunks after %u passes\n",
+                  t.imageId, t.imageKind, reason,
+                  static_cast<unsigned>(t.receivedCount),
+                  static_cast<unsigned>(t.totalChunks),
+                  t.passCount);
+
+    writeSidecarFor(t, false, false, false);
+    releaseSlotWork(t);
+
+    if (t.pullActive) {
+        t.pullActive = false;
+        activateNextPull();
+    }
+}
+
+void ImageRxManager::writeSidecarFor(const ImageRxTransfer& t, bool complete,
+                                     bool crcMismatch, bool notStored) {
+    SdImageMetadata meta{};
+    meta.imageId = t.imageId;
+    meta.kind = t.imageKind;
+    meta.captureSource = t.captureSource;
+    meta.captureTimeMs = t.captureTimeMs;
+    meta.receiptTimeMs = millis();
+
+    // Latest beacon at finalize (D-30); invalid-flagged, never fabricated
+    meta.telemetryValid = telemetry.valid;
+    meta.altitudeM = telemetry.altitudeM;
+    meta.lat = telemetry.lat;
+    meta.lon = telemetry.lon;
+
+    meta.resolution = t.resolution;
+    meta.quality = t.quality;
+    meta.brightness = t.brightness;
+    meta.contrast = t.contrast;
+    meta.saturation = t.saturation;
+    meta.exposure = t.exposure;
+    meta.wbMode = t.wbMode;
+
+    meta.chunksReceived = t.receivedCount;
+    meta.chunksTotal = t.totalChunks;
+    meta.bytesReceived = t.bytesReceived;
+    meta.complete = complete;
+    meta.crcMismatch = crcMismatch || notStored;   // sidecar note for either cause
+    (void)notStored;
+
+    SDStorage().finalizeImage(meta);   // storedToSd computed inside (truth)
+}
+
+// ===========================
+// Window Driver (D-21)
+// ===========================
+
+void ImageRxManager::activateNextPull() {
+    // FIFO by manifest arrival order (D-19 base side): the earliest queued
+    // full becomes the active pull and issues its first window request
+    ImageRxTransfer* best = nullptr;
+    for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+        ImageRxTransfer& t = transfers[i];
+        if (t.used && !t.terminal && !t.pullActive &&
+            t.imageKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) &&
+            (best == nullptr || t.arrivalSeq < best->arrivalSeq)) {
+            best = &t;
+        }
+    }
+    if (best == nullptr) {
         return;
     }
 
-    Serial.printf("ImageRx: image %u complete and CRC-verified (%u bytes)\n",
-                  transfer.imageId,
-                  static_cast<unsigned>(transfer.totalSize));
-
-    if (transfer.imageKind == static_cast<uint8_t>(ImageKind::THUMBNAIL)) {
-        // Retain as the newest verified thumbnail — buffer ownership moves
-        // into the latest* slot; clearTransfer frees only the rest
-        freeLatest();
-        latestThumbId = transfer.imageId;
-        latestThumbBuffer = transfer.buffer;
-        latestThumbLength = transfer.totalSize;
-        transfer.buffer = nullptr;
+    best->pullActive = true;
+    uint16_t fm = firstMissingChunk(*best, 0);
+    if (fm >= best->totalChunks) {
+        finalizeTransfer(*best);   // already complete (e.g. re-push)
+        return;
     }
-    // FULL_IMAGE completions are verified + logged here; retention and
-    // serving of full images arrive in 02-02's windowed-pull extension
-
-    clearTransfer();
+    uint16_t count = best->totalChunks - fm;
+    if (count > IMG_WINDOW_MAX_CHUNKS) {
+        count = IMG_WINDOW_MAX_CHUNKS;
+    }
+    issueWindowRequest(*best, fm, count);
 }
 
-void ImageRxManager::clearTransfer() {
-    if (transfer.buffer != nullptr) {
-        free(transfer.buffer);
-        transfer.buffer = nullptr;
+void ImageRxManager::issueWindowRequest(ImageRxTransfer& t, uint16_t startChunk,
+                                        uint16_t count) {
+    // PayloadImageWindowRequest on the Phase 1 tracked-command machinery:
+    // the ACK resolves the slot, duplicate/terminal guards apply unchanged,
+    // and the CMD_ACK_TIMEOUT_WINDOW_MS class bounds the whole 16-chunk
+    // exchange (Pitfall 4). sendCommand only QUEUES — the transmit happens
+    // in CmdSender().process(), after the RX buffer is fully drained.
+    uint8_t payload[5];
+    CommandProtocol::writeUint16(payload, t.imageId);
+    CommandProtocol::writeUint16(payload + 2, startChunk);
+    payload[4] = static_cast<uint8_t>(count);
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::IMAGE_WINDOW_REQUEST, payload, 5);
+    if (seq == 0) {
+        // Command table full — nothing queued, so no window is in flight.
+        // NOT retried on a timer (Pitfall 5): the stall path re-issues this
+        // span after IMG_WINDOW_STALL_MS without charging a pass.
+        Serial.printf("ImageRx: window request for image %u (%u..%u) could not queue; "
+                      "will retry on stall\n",
+                      t.imageId, startChunk,
+                      static_cast<unsigned>(startChunk) + count - 1);
+        t.windowActive = false;
+        t.lastProgressMs = millis();
+        return;
     }
-    if (transfer.chunkPresent != nullptr) {
-        free(transfer.chunkPresent);
-        transfer.chunkPresent = nullptr;
+
+    t.windowActive = true;
+    t.windowBase = startChunk;
+    t.windowCount = count;
+    t.lastProgressMs = millis();   // the stall clock starts at the request
+
+    if (DEBUG_IMAGE_RX) {
+        Serial.printf("ImageRx: window request queued for image %u kind %u "
+                      "(chunks %u..%u, seq %u, pass %u)\n",
+                      t.imageId, t.imageKind, startChunk,
+                      static_cast<unsigned>(startChunk) + count - 1,
+                      seq, t.passCount);
     }
-    transfer = ImageRxTransfer{};
 }
+
+bool ImageRxManager::windowSliceComplete(const ImageRxTransfer& t) const {
+    uint16_t end = t.windowBase + t.windowCount;
+    if (end > t.totalChunks) {
+        end = t.totalChunks;
+    }
+    for (uint16_t i = t.windowBase; i < end; i++) {
+        if (!t.chunkPresent[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+uint16_t ImageRxManager::firstMissingChunk(const ImageRxTransfer& t, uint16_t from) const {
+    for (uint16_t i = from; i < t.totalChunks; i++) {
+        if (!t.chunkPresent[i]) {
+            return i;
+        }
+    }
+    return t.totalChunks;   // == totalChunks means "nothing missing from here"
+}
+
+uint16_t ImageRxManager::lastMissingChunk(const ImageRxTransfer& t, uint16_t from,
+                                          uint16_t to) const {
+    uint16_t last = from;
+    for (uint16_t i = from; i < to && i < t.totalChunks; i++) {
+        if (!t.chunkPresent[i]) {
+            last = i;
+        }
+    }
+    return last;
+}
+
+bool ImageRxManager::verifyStoredCrc32(const ImageRxTransfer& t, uint32_t& crcOut) {
+    // D-23 for fulls: CRC over the STORED bytes, read back in bounded
+    // pieces (esp_rom_crc32_le chains: pass the previous result, 0 first —
+    // documented in the ROM header). Returns false when the bytes cannot be
+    // read (SD degraded/absent) or the file length disagrees with the
+    // manifest — never fabricates a verdict.
+    File f = SDStorage().serveFile(t.imageId, t.imageKind);
+    if (!f) {
+        return false;
+    }
+
+    uint32_t crc = 0;
+    uint32_t total = 0;
+    uint8_t piece[256];
+    while (f.available() > 0) {
+        size_t n = f.read(piece, sizeof(piece));
+        if (n == 0) {
+            f.close();
+            return false;
+        }
+        crc = esp_rom_crc32_le(crc, piece, n);
+        total += n;
+    }
+    f.close();
+
+    if (total != t.totalSize) {
+        Serial.printf("ImageRx: stored file for image %u is %u B, manifest says %u; cannot verify\n",
+                      t.imageId, static_cast<unsigned>(total),
+                      static_cast<unsigned>(t.totalSize));
+        return false;
+    }
+    crcOut = crc;
+    return true;
+}
+
+// ===========================
+// Snapshot (D-20)
+// ===========================
+
+uint8_t ImageRxManager::getTransferSnapshot(TransferRow* rows, uint8_t maxRows) const {
+    if (rows == nullptr || maxRows == 0) {
+        return 0;
+    }
+
+    // Fill in manifest-arrival order (stable FIFO view) — 8 slots, so a
+    // small selection loop over arrivalSeq keeps it sorted without state
+    uint8_t count = 0;
+    uint32_t lastSeq = 0;
+    for (uint8_t n = 0; n < RX_TRANSFER_SLOTS; n++) {
+        const ImageRxTransfer* best = nullptr;
+        for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+            const ImageRxTransfer& t = transfers[i];
+            if (!t.used || (n > 0 && t.arrivalSeq <= lastSeq)) {
+                continue;
+            }
+            if (best == nullptr || t.arrivalSeq < best->arrivalSeq) {
+                best = &t;
+            }
+        }
+        if (best == nullptr || count >= maxRows) {
+            break;
+        }
+        lastSeq = best->arrivalSeq;
+
+        TransferRow& row = rows[count++];
+        row.imageId = best->imageId;
+        row.kind = best->imageKind;
+        row.receivedChunks = best->receivedCount;
+        row.totalChunks = best->totalChunks;
+        row.percent = (best->totalChunks > 0)
+                          ? static_cast<uint8_t>(
+                                (static_cast<uint32_t>(best->receivedCount) * 100)
+                                / best->totalChunks)
+                          : 0;
+
+        // Locked vocabulary, DERIVED from bitmap/pass/terminal truth only
+        if (best->terminal) {
+            row.state = best->complete ? TransferDisplayState::COMPLETE
+                                       : TransferDisplayState::INCOMPLETE;
+        } else if (best->imageKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE)
+                   && !best->pullActive) {
+            row.state = TransferDisplayState::QUEUED;
+        } else if (best->passCount > 0) {
+            row.state = TransferDisplayState::RETRYING;
+        } else {
+            row.state = TransferDisplayState::RECEIVING;
+        }
+    }
+    return count;
+}
+
+// ===========================
+// Retained Thumbnail
+// ===========================
 
 void ImageRxManager::freeLatest() {
     if (latestThumbBuffer != nullptr) {

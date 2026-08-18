@@ -41,6 +41,14 @@ static uint32_t ackTimeoutFor(uint8_t commandType) {
         case CameraCommand::GET_STATUS:
             return CMD_ACK_TIMEOUT_COMPLEX_MS;
 
+        // WINDOW 15000ms (IMAGE_WINDOW_REQUEST) — the ACK bounds only the
+        // arm handshake; the 16-chunk stream itself is watched by the
+        // ImageRxManager stall clock (IMG_WINDOW_STALL_MS), so the class
+        // stays generous (Pitfall 4: a whole-window timeout on the
+        // command's arm ACK would abandon healthy streams)
+        case CameraCommand::IMAGE_WINDOW_REQUEST:
+            return CMD_ACK_TIMEOUT_WINDOW_MS;
+
         default:
             return CMD_ACK_TIMEOUT_SETTINGS_MS;
     }
