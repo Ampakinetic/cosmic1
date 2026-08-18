@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 5 plans (01-01 tracer + 01-02..01-04 gap closure executed; 01-05 CR-05 gap closure from 01-VERIFICATION.md re-verification)
+**Plans:** 5/5 plans executed (01-01 tracer + 01-02..01-05 gap closure executed; 01-05 closed CR-05 — zero open code gaps; security gate + hardware UAT before phase complete)
 
 Plans:
 **Wave 1**
@@ -60,7 +60,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-05-PLAN.md — CR-05 gap closure: remove the legacy 30 s capture timer running beside commanded auto-capture; AutoCapture becomes the sole capture/image-ID authority (CTRL-01/CTRL-03/CTRL-04)
+- [x] 01-05-PLAN.md — CR-05 gap closure: remove the legacy 30 s capture timer running beside commanded auto-capture; AutoCapture becomes the sole capture/image-ID authority (CTRL-01/CTRL-03/CTRL-04)
 
 ### Phase 2: Image Transmission
 
