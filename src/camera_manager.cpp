@@ -31,7 +31,11 @@ CameraManager::CameraManager() {
     // Initialize buffer management
     imageBuffer = nullptr;
     imageBufferSize = 0;
-    
+
+    // Capture-source tracking: 1 = CaptureSource::INTERVAL (constants live in
+    // include/image_protocol.h — not redefined here)
+    lastCaptureSource = 1;
+
     // Configure camera settings
     configureCameraForBalloon();
 }
@@ -279,65 +283,66 @@ bool CameraManager::captureImageToBuffer() {
 }
 
 bool CameraManager::createThumbnail(const ImageData& source, ThumbnailData& thumbnail) {
-    // Define thumbnail dimensions (quarter size)
-    uint16_t thumbWidth = source.width / 4;
-    uint16_t thumbHeight = source.height / 4;
-    
-    // Ensure minimum dimensions
-    if (thumbWidth < 80) thumbWidth = 80;
-    if (thumbHeight < 60) thumbHeight = 60;
-    
-    // Estimate thumbnail size
-    size_t estimatedSize = estimateImageSize(FRAMESIZE_QQVGA, 15); // Higher quality for thumbnail
-    
-    // Allocate thumbnail buffer
-    thumbnail.buffer = (uint8_t*)malloc(estimatedSize);
-    if (!thumbnail.buffer) {
-        if (DEBUG_CAMERA) {
-            Serial.println("Camera: Failed to allocate memory for thumbnail");
-        }
-        return false;
-    }
-    
-    // For simplicity, we'll create a thumbnail by recapturing with smaller frame size
+    // CR-04/WR-11 fix (Phase 2, must-fix-before-first-caller):
+    // capture the QQVGA frame FIRST, then allocate exactly fb->len.
+    // The old path allocated a fixed pre-capture estimate (4000 bytes) that
+    // QQVGA JPEGs routinely exceed, and both of its failure paths freed
+    // thumbnail.buffer WITHOUT nulling the member — a dangling pointer the
+    // next freeCurrentThumbnail() would double-free. The estimate is gone
+    // from this path entirely; every early return nulls the member and
+    // clears the valid flag.
+    (void)source; // recapture path: thumbnail dimensions come from the QQVGA frame itself
+
+    // Remember settings so every path can restore them
     framesize_t originalSize = currentFrameSize;
     int originalQuality = currentQuality;
-    
-    // Temporarily set thumbnail settings
+
+    // Thumbnail capture settings: QQVGA at quality 20 keeps the pushed
+    // thumbnail inside the IMG-02 10-second airtime window (research A3)
     setFrameSize(FRAMESIZE_QQVGA);
-    setQuality(15); // Better quality for thumbnail
-    
-    // Capture thumbnail
+    setQuality(20);
+
+    // Capture the thumbnail frame — BEFORE any allocation
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb) {
-        free(thumbnail.buffer);
+        if (DEBUG_CAMERA) {
+            Serial.println("Camera: Failed to get thumbnail frame buffer");
+        }
+        thumbnail.buffer = nullptr;  // CR-04: no dangling member on ANY failure path
+        thumbnail.valid = false;
         setFrameSize(originalSize);
         setQuality(originalQuality);
         return false;
     }
-    
-    // Copy thumbnail data
-    if (fb->len <= estimatedSize) {
-        memcpy(thumbnail.buffer, fb->buf, fb->len);
-        thumbnail.length = fb->len;
-        thumbnail.width = fb->width;
-        thumbnail.height = fb->height;
-        thumbnail.quality = 15;  // Use our thumbnail quality setting
-        thumbnail.timestamp = millis();
-        thumbnail.valid = true;
-    } else {
-        free(thumbnail.buffer);
+
+    // Allocate exactly the captured size — after the bytes exist
+    thumbnail.buffer = (uint8_t*)malloc(fb->len);
+    if (!thumbnail.buffer) {
+        if (DEBUG_CAMERA) {
+            Serial.printf("Camera: Failed to allocate %u bytes for thumbnail\n",
+                         static_cast<unsigned>(fb->len));
+        }
         esp_camera_fb_return(fb);
+        thumbnail.buffer = nullptr;  // malloc already returned null; keep it explicit
+        thumbnail.valid = false;
         setFrameSize(originalSize);
         setQuality(originalQuality);
         return false;
     }
-    
+
+    memcpy(thumbnail.buffer, fb->buf, fb->len);
+    thumbnail.length = fb->len;
+    thumbnail.width = fb->width;
+    thumbnail.height = fb->height;
+    thumbnail.quality = 20;  // thumbnail quality constant (IMG-02 airtime math)
+    thumbnail.timestamp = millis();
+    thumbnail.valid = true;
+
     // Return frame buffer and restore settings
     esp_camera_fb_return(fb);
     setFrameSize(originalSize);
     setQuality(originalQuality);
-    
+
     return true;
 }
 
@@ -709,28 +714,6 @@ bool validateImageBuffer(const uint8_t* buffer, size_t length) {
     }
     
     return true;
-}
-
-size_t estimateImageSize(framesize_t size, int quality) {
-    // Rough estimates for JPEG image sizes
-    switch (size) {
-        case FRAMESIZE_QQVGA:  // 160x120
-            return quality * 200 + 1000;
-        case FRAMESIZE_QVGA:   // 320x240
-            return quality * 800 + 2000;
-        case FRAMESIZE_VGA:    // 640x480
-            return quality * 3000 + 5000;
-        case FRAMESIZE_SVGA:   // 800x600
-            return quality * 5000 + 8000;
-        case FRAMESIZE_XGA:    // 1024x768
-            return quality * 8000 + 12000;
-        case FRAMESIZE_SXGA:   // 1280x1024
-            return quality * 12000 + 18000;
-        case FRAMESIZE_UXGA:   // 1600x1200
-            return quality * 20000 + 25000;
-        default:
-            return quality * 1000 + 5000;
-    }
 }
 
 framesize_t getOptimalFrameSize(size_t maxSizeBytes) {

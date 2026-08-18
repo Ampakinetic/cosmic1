@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <stdint.h>
 #include "common_types.h"
+#include "image_protocol.h" // Phase 2 image/telemetry wire contract (packet structs + payloads)
 
 // ===========================
 // Camera Command Protocol
@@ -43,7 +44,11 @@ enum class CameraCommand : uint8_t {
     AUTO_CAPTURE_DISABLE = 0x11,
 
     // Status query
-    GET_STATUS = 0x20
+    GET_STATUS = 0x20,
+
+    // Image transfer (Phase 2) — payloads defined in image_protocol.h
+    IMAGE_WINDOW_REQUEST = 0x30,     // base pulls a window of chunks (PayloadImageWindowRequest)
+    SET_EVENT_THRESHOLDS = 0x31      // event-trigger thresholds (PayloadSetEventThresholds)
 };
 
 // White balance modes
@@ -161,6 +166,12 @@ struct ResponseCaptureData {
 };
 
 // GET_STATUS response data
+// NOTE: this struct is memcpy'd little-endian on BOTH ends — a documented
+// island (same-platform pair, internally consistent). Do NOT mix
+// big-endian-encoded fields into it; new wire fields use writeUint16/writeUint32
+// in their own bodies. The Phase 2 event-threshold fields below were consumed
+// from the old reserved pad: reserved shrank 17 -> 10, field-sum stays 28
+// bytes (compiler padding keeps sizeof at 32, still <= CMD_MAX_RESPONSE_DATA).
 struct ResponseStatusData {
     uint16_t imageId;      // Last captured image ID
     uint8_t autoCaptureEnabled;
@@ -169,7 +180,12 @@ struct ResponseStatusData {
     uint8_t currentQuality;
     int8_t currentBrightness;
     int8_t currentContrast;
-    uint8_t reserved[17]; // Pad to structure
+    // Event-trigger thresholds (Phase 2, reported by 02-04)
+    uint16_t eventThresholdAltM;   // altitude-delta trigger threshold (m)
+    uint16_t eventThresholdDistM;  // horizontal-distance delta threshold (m)
+    uint16_t eventMinSpacingSec;   // D-28 global minimum capture spacing (s)
+    uint8_t eventFlags;            // bit0 eventsEnabled
+    uint8_t reserved[10]; // Pad to structure
 };
 
 // ===========================
@@ -185,6 +201,10 @@ static constexpr size_t CMD_MAX_RESPONSE_DATA = 50;
 static constexpr uint32_t CMD_ACK_TIMEOUT_TRIGGER_MS = 2000;   // CAPTURE_NOW (fast capture)
 static constexpr uint32_t CMD_ACK_TIMEOUT_SETTINGS_MS = 5000;  // SET_* commands + auto-capture config
 static constexpr uint32_t CMD_ACK_TIMEOUT_COMPLEX_MS = 10000;  // GET_STATUS (multi-setting query)
+static constexpr uint32_t CMD_ACK_TIMEOUT_WINDOW_MS = 15000;   // IMAGE_WINDOW_REQUEST — a 16-chunk
+                                                              // stream costs ~4-6.5 s of airtime, so
+                                                              // neither SETTINGS 5000 nor COMPLEX 10000
+                                                              // fits (Phase 2, Pitfall 4)
 
 // Exponential retry backoff base (D-07): 2000/4000/8000ms before retries 1/2/3
 static constexpr uint32_t CMD_RETRY_BACKOFF_BASE_MS = 2000;
@@ -221,6 +241,22 @@ public:
 
     // Deserialize response from byte buffer
     static bool deserializeResponse(const uint8_t* buffer, size_t length, ResponsePacket& resp);
+
+    // --- Image/telemetry packets (Phase 2; bodies in image_protocol.h) ---
+    // All emit/expect the complete framed packet (7-byte header + body +
+    // CRC16 + 0x0D 0x0A) with the packet's own type field at byte 2.
+
+    // Manifest (0x12): header bodyLen = IMG_MANIFEST_BODY_SIZE (27)
+    static bool serializeManifest(const ImageManifestPacket& pkt, uint8_t* buffer, size_t& length);
+    static bool deserializeManifest(const uint8_t* buffer, size_t length, ImageManifestPacket& pkt);
+
+    // Chunk (0x13): header bodyLen carries dataLen (5-byte overhead + data)
+    static bool serializeChunk(const ImageChunkPacket& pkt, uint8_t* buffer, size_t& length);
+    static bool deserializeChunk(const uint8_t* buffer, size_t length, ImageChunkPacket& pkt);
+
+    // Telemetry beacon (0x14): header bodyLen = 17
+    static bool serializeTelemetryBeacon(const TelemetryBeaconPacket& pkt, uint8_t* buffer, size_t& length);
+    static bool deserializeTelemetryBeacon(const uint8_t* buffer, size_t length, TelemetryBeaconPacket& pkt);
 
     // Create ACK response
     static ResponsePacket createACK(uint16_t refSequence, const uint8_t* data = nullptr, uint16_t dataLen = 0);
@@ -259,5 +295,13 @@ CommandPacket createCommandPacket(CameraCommand cmd, uint16_t sequence, const vo
 
 // Create a response packet with proper initialization
 ResponsePacket createResponsePacket(ResponseType type, uint16_t refSequence, const void* data = nullptr, size_t dataLen = 0);
+
+// Create an image manifest packet — assigns PACKET_TYPE_IMAGE_MANIFEST (0x12)
+// as the FIRST field (CR-01 lesson: the factory owns the wire type byte)
+ImageManifestPacket createManifestPacket(const ImageManifestBody& body);
+
+// Create an image chunk packet — assigns PACKET_TYPE_IMAGE_CHUNK (0x13) as
+// the FIRST field and copies dataLen payload bytes
+ImageChunkPacket createChunkPacket(uint16_t imageId, uint16_t chunkIndex, const uint8_t* data, uint8_t dataLen);
 
 #endif // COMMAND_PROTOCOL_H

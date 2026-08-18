@@ -67,6 +67,12 @@ private:
     // Image buffer management
     uint8_t* imageBuffer;
     size_t imageBufferSize;
+
+    // Capture-source tracking for the image transfer path (Phase 2).
+    // Values are CaptureSource constants defined in include/image_protocol.h
+    // (0 manual, 1 interval, 2 event-altitude, 3 event-distance, 4 event-phase)
+    // — deliberately NOT redefined here.
+    uint8_t lastCaptureSource;
     
     // Private methods
     bool initCamera();
@@ -113,6 +119,10 @@ public:
     int getSaturation() const { return currentSaturation; }
     int getExposure() const { return currentExposure; }
     int getWBMode() const { return currentWBMode; }
+
+    // Capture-source tracking (values from CaptureSource in image_protocol.h)
+    uint8_t getLastCaptureSource() const { return lastCaptureSource; }
+    void setLastCaptureSource(uint8_t source) { lastCaptureSource = source; }
     
     // Status methods
     bool isReady() const { return initialized; }
@@ -161,7 +171,6 @@ extern CameraManager& Camera();
 // ===========================
 
 bool validateImageBuffer(const uint8_t* buffer, size_t length);
-size_t estimateImageSize(framesize_t size, int quality);
 framesize_t getOptimalFrameSize(size_t maxSizeBytes);
 
 #endif // CAMERA_MANAGER_H

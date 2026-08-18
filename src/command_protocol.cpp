@@ -286,6 +286,259 @@ ResponsePacket CommandProtocol::createStatus(uint16_t refSequence, const Respons
 }
 
 // ===========================
+// Image/Telemetry Packet Serialization (Phase 2)
+// ===========================
+// All bodies are encoded big-endian field-by-field via the helpers above —
+// never memcpy'd native structs (Pitfall 9 / IN-08). The serializers emit the
+// packet's own type field at byte 2, so the factory type assignment
+// (createManifestPacket/createChunkPacket) is what the wire actually carries.
+
+bool CommandProtocol::serializeManifest(const ImageManifestPacket& pkt, uint8_t* buffer, size_t& length) {
+    if (!buffer) {
+        return false;
+    }
+
+    size_t packetLength = CMD_HEADER_SIZE + IMG_MANIFEST_BODY_SIZE + 4; // 7 + 27 + 4 = 38
+    if (packetLength > CMD_MAX_PACKET_SIZE) {
+        return false;
+    }
+
+    size_t offset = 0;
+
+    // Header — bodyLen carries the fixed manifest body size
+    buffer[offset++] = CMD_START_BYTE1;
+    buffer[offset++] = CMD_START_BYTE2;
+    buffer[offset++] = static_cast<uint8_t>(pkt.type);
+    buffer[offset++] = static_cast<uint8_t>(pkt.body.imageId & 0xFF); // header seq echo: imageId low byte
+    writeUint16(buffer + offset, static_cast<uint16_t>(IMG_MANIFEST_BODY_SIZE));
+    offset += 2;
+    buffer[offset++] = 0x00; // CRC8 pad byte
+
+    // Body — 27 bytes, field-by-field
+    writeUint16(buffer + offset, pkt.body.imageId); offset += 2;
+    buffer[offset++] = pkt.body.imageKind;
+    buffer[offset++] = pkt.body.captureSource;
+    writeUint32(buffer + offset, pkt.body.totalSize); offset += 4;
+    writeUint16(buffer + offset, pkt.body.chunkSize); offset += 2;
+    writeUint16(buffer + offset, pkt.body.totalChunks); offset += 2;
+    writeUint32(buffer + offset, pkt.body.crc32); offset += 4;
+    writeUint32(buffer + offset, pkt.body.captureTimeMs); offset += 4;
+    buffer[offset++] = pkt.body.resolution;
+    buffer[offset++] = pkt.body.quality;
+    buffer[offset++] = static_cast<uint8_t>(pkt.body.brightness);
+    buffer[offset++] = static_cast<uint8_t>(pkt.body.contrast);
+    buffer[offset++] = static_cast<uint8_t>(pkt.body.saturation);
+    buffer[offset++] = static_cast<uint8_t>(pkt.body.exposure);
+    buffer[offset++] = pkt.body.wbMode;
+
+    // CRC16 + end bytes
+    uint16_t crc16 = calculateCRC16(buffer, offset);
+    writeUint16(buffer + offset, crc16);
+    offset += 2;
+    buffer[offset++] = CMD_END_BYTE1;
+    buffer[offset++] = CMD_END_BYTE2;
+
+    length = offset;
+    return true;
+}
+
+bool CommandProtocol::deserializeManifest(const uint8_t* buffer, size_t length, ImageManifestPacket& pkt) {
+    if (!buffer || length != CMD_HEADER_SIZE + IMG_MANIFEST_BODY_SIZE + 4) {
+        return false;
+    }
+
+    if (buffer[0] != CMD_START_BYTE1 || buffer[1] != CMD_START_BYTE2) {
+        return false;
+    }
+
+    if (buffer[length - 2] != CMD_END_BYTE1 || buffer[length - 1] != CMD_END_BYTE2) {
+        return false;
+    }
+
+    if (!validateCRC(buffer, length)) {
+        return false;
+    }
+
+    pkt.type = static_cast<PacketType>(buffer[2]);
+
+    size_t off = CMD_HEADER_SIZE;
+    pkt.body.imageId = readUint16(buffer + off); off += 2;
+    pkt.body.imageKind = buffer[off++];
+    pkt.body.captureSource = buffer[off++];
+    pkt.body.totalSize = readUint32(buffer + off); off += 4;
+    pkt.body.chunkSize = readUint16(buffer + off); off += 2;
+    pkt.body.totalChunks = readUint16(buffer + off); off += 2;
+    pkt.body.crc32 = readUint32(buffer + off); off += 4;
+    pkt.body.captureTimeMs = readUint32(buffer + off); off += 4;
+    pkt.body.resolution = buffer[off++];
+    pkt.body.quality = buffer[off++];
+    pkt.body.brightness = static_cast<int8_t>(buffer[off++]);
+    pkt.body.contrast = static_cast<int8_t>(buffer[off++]);
+    pkt.body.saturation = static_cast<int8_t>(buffer[off++]);
+    pkt.body.exposure = static_cast<int8_t>(buffer[off++]);
+    pkt.body.wbMode = buffer[off++];
+
+    return true;
+}
+
+bool CommandProtocol::serializeChunk(const ImageChunkPacket& pkt, uint8_t* buffer, size_t& length) {
+    if (!buffer) {
+        return false;
+    }
+
+    // Chunk payload bound — the transport cannot frame more
+    if (pkt.body.dataLen > IMG_CHUNK_PAYLOAD_SIZE) {
+        return false;
+    }
+
+    size_t packetLength = CMD_HEADER_SIZE + 5 + pkt.body.dataLen + 4;
+    if (packetLength > CMD_MAX_PACKET_SIZE) {
+        return false;
+    }
+
+    size_t offset = 0;
+
+    // Header — bodyLen carries dataLen so chunk framing uses the command
+    // arithmetic (7 + 5 + bodyLen + 4)
+    buffer[offset++] = CMD_START_BYTE1;
+    buffer[offset++] = CMD_START_BYTE2;
+    buffer[offset++] = static_cast<uint8_t>(pkt.type);
+    buffer[offset++] = static_cast<uint8_t>(pkt.body.chunkIndex & 0xFF); // header seq echo: chunkIndex low byte
+    writeUint16(buffer + offset, pkt.body.dataLen);
+    offset += 2;
+    buffer[offset++] = 0x00; // CRC8 pad byte
+
+    // Body — 5-byte overhead + data
+    writeUint16(buffer + offset, pkt.body.imageId); offset += 2;
+    writeUint16(buffer + offset, pkt.body.chunkIndex); offset += 2;
+    buffer[offset++] = pkt.body.dataLen;
+    if (pkt.body.dataLen > 0) {
+        memcpy(buffer + offset, pkt.body.data, pkt.body.dataLen);
+        offset += pkt.body.dataLen;
+    }
+
+    // CRC16 + end bytes
+    uint16_t crc16 = calculateCRC16(buffer, offset);
+    writeUint16(buffer + offset, crc16);
+    offset += 2;
+    buffer[offset++] = CMD_END_BYTE1;
+    buffer[offset++] = CMD_END_BYTE2;
+
+    length = offset;
+    return true;
+}
+
+bool CommandProtocol::deserializeChunk(const uint8_t* buffer, size_t length, ImageChunkPacket& pkt) {
+    if (!buffer || length < CMD_HEADER_SIZE + 5 + 4) {
+        return false;
+    }
+
+    if (buffer[0] != CMD_START_BYTE1 || buffer[1] != CMD_START_BYTE2) {
+        return false;
+    }
+
+    if (buffer[length - 2] != CMD_END_BYTE1 || buffer[length - 1] != CMD_END_BYTE2) {
+        return false;
+    }
+
+    if (!validateCRC(buffer, length)) {
+        return false;
+    }
+
+    pkt.type = static_cast<PacketType>(buffer[2]);
+
+    size_t off = CMD_HEADER_SIZE;
+    pkt.body.imageId = readUint16(buffer + off); off += 2;
+    pkt.body.chunkIndex = readUint16(buffer + off); off += 2;
+    pkt.body.dataLen = buffer[off++];
+
+    if (pkt.body.dataLen > IMG_CHUNK_PAYLOAD_SIZE) {
+        return false;
+    }
+
+    // Frame arithmetic must agree: the header bodyLen field carries dataLen
+    if (CMD_HEADER_SIZE + 5 + pkt.body.dataLen + 4 != length) {
+        return false;
+    }
+
+    if (pkt.body.dataLen > 0) {
+        memcpy(pkt.body.data, buffer + off, pkt.body.dataLen);
+    }
+
+    return true;
+}
+
+bool CommandProtocol::serializeTelemetryBeacon(const TelemetryBeaconPacket& pkt, uint8_t* buffer, size_t& length) {
+    if (!buffer) {
+        return false;
+    }
+
+    size_t packetLength = CMD_HEADER_SIZE + IMG_TELEMETRY_BEACON_BODY_SIZE + 4; // 7 + 17 + 4 = 28
+    if (packetLength > CMD_MAX_PACKET_SIZE) {
+        return false;
+    }
+
+    size_t offset = 0;
+
+    // Header
+    buffer[offset++] = CMD_START_BYTE1;
+    buffer[offset++] = CMD_START_BYTE2;
+    buffer[offset++] = static_cast<uint8_t>(pkt.type);
+    buffer[offset++] = static_cast<uint8_t>(pkt.body.seq & 0xFF); // header seq echo: beacon seq low byte
+    writeUint16(buffer + offset, static_cast<uint16_t>(IMG_TELEMETRY_BEACON_BODY_SIZE));
+    offset += 2;
+    buffer[offset++] = 0x00; // CRC8 pad byte
+
+    // Body — 17 bytes, field-by-field
+    writeUint16(buffer + offset, pkt.body.seq); offset += 2;
+    writeUint32(buffer + offset, static_cast<uint32_t>(pkt.body.altitudeCm)); offset += 4;
+    writeUint16(buffer + offset, static_cast<uint16_t>(pkt.body.tempCentiC)); offset += 2;
+    writeUint32(buffer + offset, static_cast<uint32_t>(pkt.body.latE6)); offset += 4;
+    writeUint32(buffer + offset, static_cast<uint32_t>(pkt.body.lonE6)); offset += 4;
+    buffer[offset++] = pkt.body.flags;
+
+    // CRC16 + end bytes
+    uint16_t crc16 = calculateCRC16(buffer, offset);
+    writeUint16(buffer + offset, crc16);
+    offset += 2;
+    buffer[offset++] = CMD_END_BYTE1;
+    buffer[offset++] = CMD_END_BYTE2;
+
+    length = offset;
+    return true;
+}
+
+bool CommandProtocol::deserializeTelemetryBeacon(const uint8_t* buffer, size_t length, TelemetryBeaconPacket& pkt) {
+    if (!buffer || length != CMD_HEADER_SIZE + IMG_TELEMETRY_BEACON_BODY_SIZE + 4) {
+        return false;
+    }
+
+    if (buffer[0] != CMD_START_BYTE1 || buffer[1] != CMD_START_BYTE2) {
+        return false;
+    }
+
+    if (buffer[length - 2] != CMD_END_BYTE1 || buffer[length - 1] != CMD_END_BYTE2) {
+        return false;
+    }
+
+    if (!validateCRC(buffer, length)) {
+        return false;
+    }
+
+    pkt.type = static_cast<PacketType>(buffer[2]);
+
+    size_t off = CMD_HEADER_SIZE;
+    pkt.body.seq = readUint16(buffer + off); off += 2;
+    pkt.body.altitudeCm = static_cast<int32_t>(readUint32(buffer + off)); off += 4;
+    pkt.body.tempCentiC = static_cast<int16_t>(readUint16(buffer + off)); off += 2;
+    pkt.body.latE6 = static_cast<int32_t>(readUint32(buffer + off)); off += 4;
+    pkt.body.lonE6 = static_cast<int32_t>(readUint32(buffer + off)); off += 4;
+    pkt.body.flags = buffer[off++];
+
+    return true;
+}
+
+// ===========================
 // Debug Helpers
 // ===========================
 
@@ -384,6 +637,28 @@ ResponsePacket createResponsePacket(ResponseType type, uint16_t refSequence, con
     packet.crc16 = 0; // Will be calculated during serialization
     packet.endByte1 = CMD_END_BYTE1;
     packet.endByte2 = CMD_END_BYTE2;
+
+    return packet;
+}
+
+ImageManifestPacket createManifestPacket(const ImageManifestBody& body) {
+    ImageManifestPacket packet{};
+    packet.type = PACKET_TYPE_IMAGE_MANIFEST; // CR-01 lesson: the factory owns the wire type byte — FIRST field assigned
+    packet.body = body;
+
+    return packet;
+}
+
+ImageChunkPacket createChunkPacket(uint16_t imageId, uint16_t chunkIndex, const uint8_t* data, uint8_t dataLen) {
+    ImageChunkPacket packet{};
+    packet.type = PACKET_TYPE_IMAGE_CHUNK; // CR-01 lesson: the factory owns the wire type byte — FIRST field assigned
+    packet.body.imageId = imageId;
+    packet.body.chunkIndex = chunkIndex;
+    packet.body.dataLen = (dataLen > IMG_CHUNK_PAYLOAD_SIZE) ? IMG_CHUNK_PAYLOAD_SIZE : dataLen;
+
+    if (data && packet.body.dataLen > 0) {
+        memcpy(packet.body.data, data, packet.body.dataLen);
+    }
 
     return packet;
 }
