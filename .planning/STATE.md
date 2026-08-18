@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 2
+current_plan: 6
 status: executing
-stopped_at: Completed 01-06-PLAN.md (response-path criticals CR-01/CR-02/CR-03 closed)
+stopped_at: "Re-verification #3: human_needed — all code gaps closed; 5 UAT items pending"
 last_updated: "2026-08-18T11:00:40.915Z"
 progress:
   total_phases: 1
@@ -22,15 +22,15 @@ current_phase_name: command-protocol-control
 ## Current Status
 
 **Project:** Cosmic1 Base Station Camera Control Extension
-**Phase:** Phase 1 — all 5 plans executed (tracer + 01-02..01-05); CR-05 verified closed; re-verification #2 gaps_found: 3 new response-path criticals → next gap cycle (plus security gate + hardware UAT outstanding)
+**Phase:** Phase 1 — all 6 plans executed (tracer + 01-02..01-06); re-verification #3 human_needed: zero open code gaps; 5 UAT items pending (4 hardware + 1 prohibition review); then security gate
 **Milestone:** v1.0
 
 ## Current Position
 
-**Current Plan:** 2
+**Current Plan:** 6
 **Total Plans in Phase:** 6
-**Status:** Ready to execute
-**Progress:** [████████░░] 83% (all 5 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
+**Status:** Verification — human_needed (`/gsd-verify-work 1`; 5 items in 01-UAT.md)
+**Progress:** [█████████░] 90% (all 6 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
 
 ## Progress
 
@@ -39,18 +39,19 @@ current_phase_name: command-protocol-control
 - ✅ Roadmap created (3 phases)
 - ✅ Phase 1 plan created
 - ✅ Phase 1 plan 01-01 executed (T1–T8 tracer, committed via closeout — see 01-01-SUMMARY.md)
-- ⏳ Phase 1 re-verification #2: gaps_found (2026-08-18) — CR-05 verified closed; 3 new criticals confirmed (success responses type 0x00; GET_STATUS enum miscast; pending-count underflow) → `/gsd-plan-phase 1 --gaps`
+- ✅ Phase 1 re-verification #3: human_needed (2026-08-18) — response-path criticals CR-01/02/03 verified closed by plan 01-06 (verifier's own reads/greps/harness/builds); zero open code gaps; 5 items routed to UAT (`01-UAT.md`)
 - ✅ Phase 1 gap-closure plan 01-02 executed — protocol defects CR-01..CR-04 + WR-03/04/05 closed, D-05/D-07/D-16-support encoded (see 01-02-SUMMARY.md)
 - ✅ Phase 1 gap-closure plan 01-03 executed — all 7 settings forms + auto-capture UI (WR-07 long-first validation), D-16 Command Queue panel, IN-03 computed link LED (see 01-03-SUMMARY.md)
 - ✅ Phase 1 gap-closure plan 01-04 executed — real sensor setters for saturation/exposure/WB, AutoCapture interval timer module, truthful GET_STATUS, shared image-ID sequence, main-loop wiring (see 01-04-SUMMARY.md)
 - ✅ Phase 1 gap-closure plan 01-05 executed — CR-05 closed: legacy 30 s capture timer removed, AutoCapture is the sole capture/image-ID authority; both targets green, wire harness 10/10 (see 01-05-SUMMARY.md)
+- ✅ Phase 1 gap-closure plan 01-06 executed — response-path criticals closed: packet.type set in both factories + faithful harness clause (f, 15/15); frameSizeFromEsp name-based GET_STATUS mapping + CIF relabel; handleResponse terminal-state guard (see 01-06-SUMMARY.md)
 - ⏳ Phase 2: Image Transmission (pending)
 
 ## Current Phase
 
 **Phase 1: Command Protocol & Control**
 
-- Status: gap-closure cycle #2 — all 5 plans executed; CR-05 verified closed; 3 new criticals (01-REVIEW.md ca682b4, confirmed by verifier in 01-VERIFICATION.md 11ca491); after closure: security gate (`/gsd-secure-phase 1`) + hardware UAT (SC-2/3/4 + UAT item 4)
+- Status: verification — human_needed. All 6 plans executed; zero open code gaps (re-verification #3 independently confirmed CR-01/02/03 closures; no regressions; all 6 requirements satisfied at code level). Remaining before phase complete: hardware UAT (`/gsd-verify-work 1`, 5 items) + security gate (`/gsd-secure-phase 1`)
 - Requirements: 6 (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02)
 - Goal: Establish bidirectional LoRa communication for camera control
 
@@ -66,6 +67,7 @@ current_phase_name: command-protocol-control
 - UI gap closure (01-03): all 7 camera settings forms + routes with WR-07 long-first validation (3 of 7 → 7 of 7); auto-capture card + `/auto-capture(-stop)` routes with 4-byte big-endian interval payload; D-16 Command Queue panel (pinned last command + every occupied slot, locked vocabulary, retry counts); IN-03 link LED computed from ACK activity (LINK_STALE_MS 30s); UI-SPEC spacing/typography harmonization + 480px collapse
 - Balloon gap closure (01-04): CameraManager setSaturation/setExposure/setWBMode sensor setters + cached getters (7 of 7 settings execute for real; failed sensor calls NACK_BUSY); AutoCapture module (`include/auto_capture.h` + `src/auto_capture.cpp`) — wraparound-safe millis timer, enable() re-validates 1000..3600000 ms and resets the baseline (first capture one full interval after enable), baseline advances before the attempt so a failed capture cannot spin; single uint16 image-ID sequence shared by CAPTURE_NOW and interval captures; GET_STATUS reports tracked state; main_balloon.cpp loop wiring; auto_capture.cpp excluded from the basestation build — both targets green
 - CR-05 gap closure (01-05): legacy 30 s capture timer deleted from `src/main_balloon.cpp` (processCamera definition/declaration/loop call + colliding static nextImageId + dead createCameraPacket site + vestigial processIncomingCommands placeholder); CameraManager::isTimeToCapture swept project-wide; AutoCapture is the balloon's ONLY automatic capture trigger and ONLY image-ID sequence — SC-5 disable semantics hold at code level (T-01-14/15/16 mitigated); both firmware targets green, wire-format harness 10/10
+- Response-path gap closure (01-06): `createResponsePacket`/`createCommandPacket` assign `packet.type` first-field (0x11/0x10), shared constant replaces inline casts, harness transcribes the real factory with defective-variant teeth (15/15); `frameSizeFromEsp` by-name reverse mapping makes GET_STATUS resolution truthful, value-8 enum relabeled FRAMESIZE_CIF + UI label fixed (WR-01 closed); `handleResponse` terminal-state guard before storage/counters ends the duplicate-ACK underflow (T-01-17/18/19 mitigated)
 
 ### Key Decisions (01-02)
 
@@ -74,11 +76,12 @@ current_phase_name: command-protocol-control
 - CR-03 fixed by length-driven framing (header body-length field announces the packet length; end marker tested only at the framed position) rather than byte escaping — symmetric fix in both receivers
 - Host regression harness transcribes the wire format as an executable spec, including the defective pre-CR-01 serializer variant so the sweep provably has teeth (255/65535 accepted)
 
-### Known Gaps (post re-verification #2, 2026-08-18)
+### Known Gaps (post re-verification #3, 2026-08-18)
 
-- **CR-05: CLOSED** by plan 01-05 (commits 352b195 + b5726b3) — independently verified by re-verification (grep gates, wiring, builds, harness); CTRL-03/CTRL-04 Complete marks in REQUIREMENTS.md accurate
-- **Open code gaps (verifier-confirmed, all response-path, code-only fixes):** (1) `createResponsePacket` never sets `packet.type` — every ACK/STATUS goes on the wire as 0x00 (spec: 0x11); harness masks it by hardcoding 0x11. (2) GET_STATUS raw-casts between differently-numbered FrameSize enums — QVGA reported as 160x120. (3) `handleResponse` lacks a terminal-state guard — duplicate ACK after retry underflows `pendingCommandCount` (0→255), UI shows pending forever. CTRL-06/PRI-02 satisfied-with-defect (gap 3). See 01-VERIFICATION.md (11ca491) + 01-REVIEW.md (ca682b4: 3C/11W/8I)
-- No hardware tests run yet (T9/E5/A5 require radios + camera); SC-2 (RF round-trip), SC-3 (sensor acceptance), SC-4 (runtime retry/TIMEOUT transitions), SC-5 runtime half (auto-capture cadence + disable over RF — UAT item 4, unblocked by CR-05 fix) are code-proven only until UAT
+- **All verifier-confirmed code gaps CLOSED:** CR-01/02/03 (response path) by plan 01-06 (commits 75b8514/36674ff/56704e2); CR-05 by plan 01-05. Verifier re-proved each with its own reads, greps, harness run (15/15), and dual-target builds; no regressions; all 6 phase requirements satisfied at code level
+- **CR-04 (review Critical, DORMANT):** `createThumbnail` failure paths leave `currentThumbnail.buffer` dangling → double-free risk on next `freeCurrentThumbnail()`. Verifier proved dormancy (zero callers in Phase 1; `captureBoth` unreachable; null-guarded frees). **Deferred to Phase 2** — IMG-02 (thumbnail generation) wires the first caller; must-fix-before-first-caller recorded in 01-VERIFICATION.md
+- **Open advisories (01-REVIEW.md fa921a7, 1C/11W/8I):** WR-12 receive-side packet-type validation (CRC-valid RESPONSE heard by balloon would execute as command), WR-13 balloon health-check logs failure on healthy boots (log-only), WR-02..11 carried. None block Phase 1 must-haves
+- **Hardware UAT outstanding (5 items, `01-UAT.md`):** radio round-trip, degraded-link retry incl. duplicate-ACK edge (meaningful only now, post-guard), physical-sensor settings incl. CIF option, auto-capture cadence/disable, prohibition review. SC-2/SC-3/SC-4/SC-5 runtime halves code-proven only until these run
 
 ## Project Reference
 
@@ -90,11 +93,9 @@ See: `.planning/PROJECT.md`
 
 ## Next Steps
 
-1. **Gap closure round 3:** `/gsd-plan-phase 1 --gaps` — reads the 3 structured gaps in 01-VERIFICATION.md (one response-path theme); then `/gsd-execute-phase 1 --gaps-only`
-2. **Optionally first:** `/gsd-code-review 1 --fix` — the 3 criticals are review findings #1-3; a fix plan may fold in the warnings
-3. **Security gate (before phase complete):** `/gsd-secure-phase 1` — enforcement enabled, no SECURITY.md yet
-4. **Hardware UAT (after gaps close):** flash both units, run command-flow tests (`/gsd-verify-work 1`) — SC-2/SC-3/SC-4 + UAT item 4 remain behavior-unverified until the radio round-trip runs
-5. **Then:** `/gsd-progress` to advance toward phase transition and Phase 2 (Image Transmission)
+1. **Hardware UAT:** `/gsd-verify-work 1` — flash both units and run the 5 items in `01-UAT.md` (UAT item 2, degraded-link duplicate-ACK, is meaningful only now that the guard landed)
+2. **Security gate (before phase complete):** `/gsd-secure-phase 1` — enforcement enabled, no SECURITY.md yet (WR-08 scope included)
+3. **Then:** `/gsd-progress` to advance toward phase transition and Phase 2 (Image Transmission — note CR-04 must-fix-before-first-caller rides IMG-02)
 
 ## Configuration
 
@@ -112,12 +113,12 @@ See: `.planning/PROJECT.md`
 **Git Tracking:** Enabled
 
 ---
-*State updated: 2026-08-18 - 01-05 executed (CR-05 closed, verified); re-verification #2 gaps_found: 3 response-path criticals → gap cycle*
+*State updated: 2026-08-18 - 01-06 executed (response-path criticals closed); re-verification #3 human_needed: zero open code gaps, 5 UAT items*
 
 ## Session
 
 **Last session:** 2026-08-18T11:00:40.879Z
-**Stopped at:** Completed 01-06-PLAN.md (response-path criticals CR-01/CR-02/CR-03 closed)
+**Stopped at:** Re-verification #3: human_needed — 5 UAT items pending (`/gsd-verify-work 1`)
 **Resume file:** None
 
 ## Performance Metrics
@@ -134,6 +135,6 @@ See: `.planning/PROJECT.md`
 - [Phase 01]: 01-03: chip and LED state latched server-side — auto-capture chip state latched from the newest ACKed AUTO_CAPTURE_ENABLE/DISABLE queue entry by sequence number (survives command-slot reuse); link LED red state requires lastTerminalFailTime newer than lastAckTime so a late ACK for an older command cannot mask a fresh TIMEOUT/FAILED — Plan 01-03 specifies ACK-gated chip semantics and the IN-03 prohibition on green-when-failed; slot reuse and ACK ordering are the two cases a naive per-poll derivation gets wrong
 - [Phase 01]: 01-04: image IDs unified — AutoCapture owns the single uint16 ID sequence (allocateImageId pre-increments), shared by CAPTURE_NOW and interval captures so GET_STATUS lastImageId is truthful across both modes; enable() resets the baseline so the first capture fires one full interval after enable, and process() advances the baseline before the attempt so a failed capture cannot drive a tight failure loop (T-01-09 mitigation); interval bounds re-validated inside the module so a bypassed handler cannot drive the timer below 1 Hz (T-01-08)
 - [Phase 01]: 01-05: legacy 30 s capture timer fully removed (not debug-gated) — AutoCapture is the balloon's sole automatic capture trigger and sole image-ID sequence; its packets were never transmitted so the block's only live effects were the CR-05 harms (post-disable captures, >30 s cadence pollution, ID collision, frame-buffer churn). Single-authority invariant enforced by recursive negative-grep source gates, not just build passes
-- [Phase ?]: 01-06: packet type owned by the factory, not the serializer — createResponsePacket/createCommandPacket assign packet.type as the first field (0x11/0x10) so every construction path emits the documented byte; the wire harness now transcribes the factory (zero-init + defective variant), not just the serializer (WR-05)
-- [Phase ?]: 01-06: FrameSize translation is by NAME in both directions — framesizeFromInt forward, frameSizeFromEsp reverse (real QVGA=5 -> project code 6); value-8 wire code relabeled FRAMESIZE_CIF (real 400x296 mode, reachable on OV2640); real sizes without a protocol code report boot-default QVGA
-- [Phase ?]: 01-06: terminal-state guard in CommandSender::handleResponse only — duplicate/late responses for ACKED/FAILED/TIMEOUT slots return before response storage and counter changes; findTrackedCommand still matches terminal slots because cancelCommand (own WR-03 decrement guard) and UI queries legitimately resolve them
+- [Phase 01]: 01-06: packet type owned by the factory, not the serializer — createResponsePacket/createCommandPacket assign packet.type as the first field (0x11/0x10) so every construction path emits the documented byte; the wire harness now transcribes the factory (zero-init + defective variant), not just the serializer (WR-05)
+- [Phase 01]: 01-06: FrameSize translation is by NAME in both directions — framesizeFromInt forward, frameSizeFromEsp reverse (real QVGA=5 -> project code 6); value-8 wire code relabeled FRAMESIZE_CIF (real 400x296 mode, reachable on OV2640); real sizes without a protocol code report boot-default QVGA
+- [Phase 01]: 01-06: terminal-state guard in CommandSender::handleResponse only — duplicate/late responses for ACKED/FAILED/TIMEOUT slots return before response storage and counter changes; findTrackedCommand still matches terminal slots because cancelCommand (own WR-03 decrement guard) and UI queries legitimately resolve them
