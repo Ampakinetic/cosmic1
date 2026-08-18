@@ -1,4 +1,5 @@
 #include "command_sender.h"
+#include "image_rx_manager.h"
 
 // Debug configuration
 #ifndef DEBUG_COMMAND_SENDER
@@ -279,7 +280,7 @@ void CommandSender::processIncomingByte(uint8_t byte) {
     }
 
     // In packet — length-driven framing (CR-03): an embedded 0x0D 0x0A pair in
-    // the response data must not terminate the packet, so the end marker is
+    // the frame data must not terminate the packet, so the end marker is
     // only ever tested at the length the header announces.
     receiveBuffer[receiveIndex++] = byte;
 
@@ -287,13 +288,49 @@ void CommandSender::processIncomingByte(uint8_t byte) {
         return;
     }
 
-    // Big-endian body length from header offsets 4-5 (dataLength for responses)
-    size_t bodyLen = (static_cast<size_t>(receiveBuffer[4]) << 8) | receiveBuffer[5];
+    // WR-12 (base half): dispatch on the wire type byte at buffer[2] BEFORE
+    // any body arithmetic — each frame type has its own body shape, and a
+    // foreign type byte must never be interpreted with response arithmetic.
+    // The base accepts 0x11 RESPONSE, 0x12 MANIFEST, 0x13 CHUNK, 0x14 BEACON.
+    uint8_t frameType = receiveBuffer[2];
+    size_t bodyLen;
+    size_t bodyOverhead;      // typed bytes between the header and the body
+    bool isResponse = false;  // only 0x11 touches the tracked-command table
+    switch (frameType) {
+        case static_cast<uint8_t>(PACKET_TYPE_RESPONSE):
+            // Big-endian dataLength from header offsets 4-5
+            bodyLen = (static_cast<size_t>(receiveBuffer[4]) << 8) | receiveBuffer[5];
+            bodyOverhead = 4; // responseType/refSequence/dataLength block
+            isResponse = true;
+            break;
 
-    // Responses: header + responseType/refSequence/dataLength block (4) + data + CRC/end (4)
-    size_t expectedTotal = CMD_HEADER_SIZE + 4 + bodyLen + 4;
+        case static_cast<uint8_t>(PACKET_TYPE_IMAGE_MANIFEST):
+            bodyLen = IMG_MANIFEST_BODY_SIZE;           // fixed 27-byte body
+            bodyOverhead = 0;
+            break;
 
-    if (expectedTotal > sizeof(receiveBuffer) || bodyLen > CMD_MAX_RESPONSE_DATA) {
+        case static_cast<uint8_t>(PACKET_TYPE_IMAGE_CHUNK):
+            // The chunk header's bodyLen field carries dataLen
+            bodyLen = (static_cast<size_t>(receiveBuffer[4]) << 8) | receiveBuffer[5];
+            bodyOverhead = 5; // imageId/chunkIndex/dataLen block
+            break;
+
+        case static_cast<uint8_t>(PACKET_TYPE_TELEMETRY_BEACON):
+            bodyLen = IMG_TELEMETRY_BEACON_BODY_SIZE;   // fixed 17-byte body
+            bodyOverhead = 0;
+            break;
+
+        default:
+            resetReceiveState(); // foreign or unknown type — discard the frame
+            return;
+    }
+
+    size_t expectedTotal = CMD_HEADER_SIZE + bodyOverhead + bodyLen + 4;
+
+    if (expectedTotal > sizeof(receiveBuffer) ||
+        (isResponse && bodyLen > CMD_MAX_RESPONSE_DATA) ||
+        (frameType == static_cast<uint8_t>(PACKET_TYPE_IMAGE_CHUNK)
+             && bodyLen > IMG_CHUNK_PAYLOAD_SIZE)) {
         resetReceiveState(); // Bogus header — lengths exceed protocol bounds
         return;
     }
@@ -307,9 +344,28 @@ void CommandSender::processIncomingByte(uint8_t byte) {
     if (receiveBuffer[expectedTotal - 2] == CMD_END_BYTE1 &&
         receiveBuffer[expectedTotal - 1] == CMD_END_BYTE2) {
         if (validatePacket(receiveBuffer, expectedTotal)) {
-            ResponsePacket response;
-            if (CommandProtocol::deserializeResponse(receiveBuffer, expectedTotal, response)) {
-                handleResponse(response);
+            if (isResponse) {
+                ResponsePacket response;
+                if (CommandProtocol::deserializeResponse(receiveBuffer, expectedTotal, response)) {
+                    handleResponse(response);
+                }
+            } else {
+                // Unsolicited image/telemetry frames — forwarded to the
+                // reassembly module; they NEVER touch the tracked-command
+                // table (0x12/0x13/0x14 are not responses to any command)
+                switch (frameType) {
+                    case static_cast<uint8_t>(PACKET_TYPE_IMAGE_MANIFEST):
+                        ImageRx().onManifestFrame(receiveBuffer, expectedTotal);
+                        break;
+                    case static_cast<uint8_t>(PACKET_TYPE_IMAGE_CHUNK):
+                        ImageRx().onChunkFrame(receiveBuffer, expectedTotal);
+                        break;
+                    case static_cast<uint8_t>(PACKET_TYPE_TELEMETRY_BEACON):
+                        ImageRx().onTelemetryBeaconFrame(receiveBuffer, expectedTotal);
+                        break;
+                    default:
+                        break; // unreachable — dispatched above
+                }
             }
         }
     }

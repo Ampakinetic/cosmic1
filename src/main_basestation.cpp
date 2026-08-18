@@ -15,6 +15,7 @@
 #include "e32_lora.h"
 #include "command_sender.h"
 #include "command_protocol.h"
+#include "image_rx_manager.h"
 
 // ===========================
 // Pin Configuration
@@ -109,6 +110,7 @@ void handleSetWBMode();
 void handleAutoCaptureEnable();
 void handleAutoCaptureDisable();
 void handleStatus();
+void handleImage(const String& uri);
 void handleNotFound();
 
 String commandStateToString(CommandState state, uint8_t retryCount);
@@ -347,6 +349,44 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                         row.textContent = e.cmd + ' · #' + e.seq + ' — ' + e.state;
                         list.appendChild(row);
                     });
+
+                    // Latest capture (IMG-01): swap the image only when a NEW
+                    // CRC-verified id lands; the dataset gate plus per-id src
+                    // means a stale image is never shown under a new id
+                    const thumbId = data.latestThumbId || 0;
+                    const thumbImg = document.getElementById('thumb-img');
+                    const thumbLabel = document.getElementById('thumb-label');
+                    if (thumbId > 0) {
+                        if (thumbImg.dataset.id !== String(thumbId)) {
+                            thumbImg.dataset.id = String(thumbId);
+                            thumbImg.src = '/img/' + thumbId + '_t.jpg';
+                            thumbImg.style.display = 'block';
+                            thumbLabel.textContent = 'Image #' + thumbId + ' — thumbnail received and verified';
+                            thumbLabel.className = 'message success';
+                        }
+                    } else {
+                        thumbImg.removeAttribute('src');
+                        delete thumbImg.dataset.id;
+                        thumbImg.style.display = 'none';
+                        thumbLabel.textContent = 'Waiting for first image...';
+                        thumbLabel.className = 'message info';
+                    }
+
+                    // Telemetry beacon (0x14): absent telemetry stays absent —
+                    // the server sends null until a real beacon arrives
+                    const tchip = document.getElementById('telemetry-chip');
+                    if (data.telemetry) {
+                        const t = data.telemetry;
+                        const age = t.ageMs < 1500 ? 'just now' : Math.round(t.ageMs / 1000) + 's ago';
+                        tchip.textContent = 'Alt ' + t.altitudeM.toFixed(1) + ' m · '
+                            + t.tempC.toFixed(1) + ' °C · '
+                            + (t.gpsValid ? (t.lat.toFixed(5) + ', ' + t.lon.toFixed(5)) : 'GPS no fix')
+                            + ' · ' + age;
+                        tchip.className = 'message ' + (t.ageMs < 15000 ? 'success' : 'info');
+                    } else {
+                        tchip.textContent = 'No telemetry received yet';
+                        tchip.className = 'message info';
+                    }
                 })
                 .catch(err => console.error(err));
         }
@@ -403,6 +443,9 @@ void loop() {
     // Process command retries and timeouts
     CmdSender().process();
 
+    // Age out stalled image transfers (receive half of the push stream)
+    ImageRx().process();
+
     // Update status
     updateStatus();
 
@@ -439,6 +482,12 @@ void initWiFi() {
 void initLoRa() {
     Serial.println("Initializing LoRa E32...");
 
+    // Pitfall 2: enlarge the UART RX buffer BEFORE the E32 begins (the E32
+    // begin call performs the serial begin). Thumbnail pushes arrive as
+    // ~216-byte chunk frames in quick succession with no flow control — the
+    // default 256-byte buffer overruns mid-burst and corrupts frames.
+    LoRaSerial.setRxBufferSize(1024);
+
     if (!E32LoRaModule().begin(&LoRaSerial, LORA_RX_PIN, LORA_TX_PIN,
                                LORA_M0_PIN, LORA_M1_PIN, LORA_AUX_PIN,
                                LORA_BAUD_RATE)) {
@@ -451,8 +500,13 @@ void initLoRa() {
         return;
     }
 
+    // Receive half of the Phase 2 push stream: CommandSender forwards
+    // CRC-validated 0x12/0x13/0x14 frames here for reassembly
+    ImageRx().begin();
+
     Serial.println("  LoRa E32 initialized");
     Serial.println("  Command sender ready");
+    Serial.println("  Image receiver ready");
 }
 
 void initWebServer() {
@@ -686,6 +740,16 @@ void handleRoot() {
     // Display-only until the enable/disable command reaches ACK — no optimistic ON
     html += "<div class=\"message info\" id=\"autocapture-chip\">OFF</div>";
 
+    html += "</div>";
+
+    // Latest capture card (IMG-01): the newest CRC-verified thumbnail pushed
+    // from the balloon, plus the telemetry-beacon readout (0x14)
+    html += "<div class=\"card\">";
+    html += "<h2>🖼 Latest Capture</h2>";
+    html += "<div class=\"message info\" id=\"thumb-label\">Waiting for first image...</div>";
+    html += "<img id=\"thumb-img\" alt=\"Balloon camera thumbnail\" ";
+    html += "style=\"width:100%;max-width:320px;border-radius:8px;margin-top:12px;display:none;\">";
+    html += "<div class=\"message info\" id=\"telemetry-chip\" style=\"margin-top:12px;\">No telemetry received yet</div>";
     html += "</div>";
 
     html += FPSTR(HTML_FOOTER);
@@ -1070,6 +1134,25 @@ void handleStatus() {
     json += "\"autoCapture\":" + String(appState.autoCaptureOn ? "true" : "false") + ",";
     json += "\"autoCaptureInterval\":" + String(appState.autoCaptureIntervalAckSec) + ",";
 
+    // IMG-01: newest CRC-verified thumbnail id — 0 until one verifies
+    json += "\"latestThumbId\":" + String(ImageRx().getLatestThumbId()) + ",";
+
+    // Telemetry beacon (0x14) snapshot — null when no beacon was ever
+    // received; the values are never fabricated
+    const TelemetrySnapshot& beacon = ImageRx().getTelemetrySnapshot();
+    if (beacon.valid) {
+        uint32_t ageMs = millis() - beacon.receivedMs;
+        json += "\"telemetry\":{";
+        json += "\"ageMs\":" + String(ageMs) + ",";
+        json += "\"altitudeM\":" + String(beacon.altitudeM, 1) + ",";
+        json += "\"tempC\":" + String(beacon.tempC, 1) + ",";
+        json += "\"lat\":" + String(beacon.lat, 6) + ",";
+        json += "\"lon\":" + String(beacon.lon, 6) + ",";
+        json += "\"gpsValid\":" + String(beacon.gpsValid ? "true" : "false") + "},";
+    } else {
+        json += "\"telemetry\":null,";
+    }
+
     // D-16: one entry per occupied queue slot, same vocabulary as lastState
     json += "\"queue\":[";
     for (uint8_t i = 0; i < entryCount; i++) {
@@ -1086,7 +1169,57 @@ void handleStatus() {
     server.send(200, "application/json", json);
 }
 
+// GET /img/{id}_t.jpg — serves the retained newest CRC-verified thumbnail
+// (IMG-01). The WebServer matches registered routes by exact path, so the
+// parameterized image path is dispatched from handleNotFound instead of
+// server.on(); the id is parsed strictly numeric before any comparison.
+void handleImage(const String& uri) {
+    static const char PREFIX[] = "/img/";
+    static const char SUFFIX[] = "_t.jpg";
+
+    if (!uri.startsWith(PREFIX) || !uri.endsWith(SUFFIX)) {
+        sendResponse(404, "Not Found", "Unknown image path");
+        return;
+    }
+
+    String idStr = uri.substring(strlen(PREFIX), uri.length() - strlen(SUFFIX));
+    if (idStr.length() == 0) {
+        sendResponse(404, "Not Found", "Missing image id");
+        return;
+    }
+    for (unsigned int i = 0; i < idStr.length(); i++) {
+        if (!isDigit(idStr.charAt(i))) {
+            sendResponse(404, "Not Found", "Invalid image id");
+            return;
+        }
+    }
+
+    long id = strtol(idStr.c_str(), nullptr, 10);
+    if (id <= 0 || static_cast<uint32_t>(id) != ImageRx().getLatestThumbId()
+            || ImageRx().getLatestThumbData() == nullptr) {
+        // Only the retained image is served — anything else (older ids,
+        // never-received ids) is honestly absent, not fabricated
+        sendResponse(404, "Not Found", "Image not available");
+        return;
+    }
+
+    // This WebServer core has no raw-pointer send overload — set the length,
+    // emit headers, then stream the binary body (binary-safe sendContent)
+    server.setContentLength(ImageRx().getLatestThumbLength());
+    server.send(200, "image/jpeg", "");
+    server.sendContent(reinterpret_cast<const char*>(ImageRx().getLatestThumbData()),
+                       ImageRx().getLatestThumbLength());
+}
+
 void handleNotFound() {
+    // /img/{id}_t.jpg routes here (exact-match routing cannot express the
+    // parameter) — dispatch before the generic 404
+    String uri = server.uri();
+    if (server.method() == HTTP_GET && uri.startsWith("/img/")) {
+        handleImage(uri);
+        return;
+    }
+
     sendResponse(404, "Not Found", "Endpoint not found");
 }
 
