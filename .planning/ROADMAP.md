@@ -101,12 +101,12 @@ Plans:
 - SD card storage implementation
 - Event-based capture triggers
 
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 02-01-PLAN.md — Tracer: CR-04/WR-11 thumbnail fix + full Phase 2 wire contract (0x12/0x13/0x14, window/threshold commands) + WR-12 type dispatch; thumbnail pushed balloon→base→web UI end-to-end (IMG-01, IMG-02, IMG-04)
+- [x] 02-01-PLAN.md — Tracer: CR-04/WR-11 thumbnail fix + full Phase 2 wire contract (0x12/0x13/0x14, window/threshold commands) + WR-12 type dispatch; thumbnail pushed balloon→base→web UI end-to-end (IMG-01, IMG-02, IMG-04)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

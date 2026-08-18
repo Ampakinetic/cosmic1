@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 6
+current_plan: 2
 status: executing
-stopped_at: Phase 2 context gathered
-last_updated: "2026-08-18T14:40:48.839Z"
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-08-18T15:46:06.785Z"
 progress:
   total_phases: 2
   completed_phases: 0
   total_plans: 10
-  completed_plans: 5
+  completed_plans: 6
 current_phase: 1
-current_phase_name: command-protocol-control
+current_phase_name: image-transmission
 ---
 
 # Project State
@@ -27,10 +27,10 @@ current_phase_name: command-protocol-control
 
 ## Current Position
 
-**Current Plan:** 6
+**Current Plan:** 2
 **Total Plans in Phase:** 4
-**Status:** Verification — human_needed (`/gsd-verify-work 1`; 5 items in 01-UAT.md)
-**Progress:** [█████████░] 90% (all 6 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
+**Status:** Ready to execute
+**Progress:** [██████░░░░] 60% (all 6 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
 
 ## Progress
 
@@ -89,7 +89,7 @@ See: `.planning/PROJECT.md`
 
 **Core value:** Users can remotely control the balloon camera and view captured images through the base station web interface, with real-time telemetry and map tracking always available.
 
-**Current focus:** Phase 01 — command-protocol-control
+**Current focus:** Phase 02 — image-transmission
 
 ## Next Steps
 
@@ -117,9 +117,9 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-18T13:31:01.048Z
-**Stopped at:** Phase 2 context gathered
-**Resume file:** .planning/phases/02-image-transmission/02-CONTEXT.md
+**Last session:** 2026-08-18T15:46:06.742Z
+**Stopped at:** Completed 02-01-PLAN.md
+**Resume file:** None
 
 ## Performance Metrics
 
@@ -129,6 +129,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P04 | 14 min | 2 tasks | 7 files |
 | Phase 01 P05 | 7 min | 2 tasks | 4 files |
 | Phase 01 P06 | 11 min | 3 tasks | 7 files |
+| Phase 02 P01 | 3243s | 3 tasks | 15 files |
 
 ## Decisions
 
@@ -138,3 +139,6 @@ See: `.planning/PROJECT.md`
 - [Phase 01]: 01-06: packet type owned by the factory, not the serializer — createResponsePacket/createCommandPacket assign packet.type as the first field (0x11/0x10) so every construction path emits the documented byte; the wire harness now transcribes the factory (zero-init + defective variant), not just the serializer (WR-05)
 - [Phase 01]: 01-06: FrameSize translation is by NAME in both directions — framesizeFromInt forward, frameSizeFromEsp reverse (real QVGA=5 -> project code 6); value-8 wire code relabeled FRAMESIZE_CIF (real 400x296 mode, reachable on OV2640); real sizes without a protocol code report boot-default QVGA
 - [Phase 01]: 01-06: terminal-state guard in CommandSender::handleResponse only — duplicate/late responses for ACKED/FAILED/TIMEOUT slots return before response storage and counter changes; findTrackedCommand still matches terminal slots because cancelCommand (own WR-03 decrement guard) and UI queries legitimately resolve them
+- [Phase ?]: Phase 2 wire contract locked: 0x12/0x14 receivers force fixed body lengths (27/17) instead of trusting header bodyLen; 0x13 keeps header bodyLen == dataLen so chunk framing stays command-shaped
+- [Phase ?]: Base reassembly follows the push stream: a new manifest supersedes any in-flight transfer; CRC-mismatch completions keep the previous verified thumbnail — never fabricated state (D-22 windowed pull arrives 02-03)
+- [Phase ?]: Binary HTTP bodies on this WebServer core use setContentLength + send + sendContent (no raw-pointer send overload exists); parameterized /img/{id}_t.jpg routes via not-found dispatch with strictly-numeric id parsing
