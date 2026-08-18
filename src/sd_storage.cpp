@@ -90,8 +90,18 @@ void SdStorage::imagePath(char* out, size_t cap, uint16_t imageId, uint8_t kind)
     }
 }
 
-void SdStorage::sidecarPath(char* out, size_t cap, uint16_t imageId) {
-    snprintf(out, cap, "/images/IMG_%05u.JSON", static_cast<unsigned>(imageId));
+void SdStorage::sidecarPath(char* out, size_t cap, uint16_t imageId, uint8_t kind) {
+    // Kind-suffixed (02-05 / WR-05, Gap 4): thumbnail and full D-30 records
+    // persist as SEPARATE files — the full's finalization must never
+    // truncate the thumbnail's record. The _T sidecar convention mirrors
+    // D-31's IMG_{id}_T.JPG and is the Phase 3 gallery contract. As with
+    // imagePath, names are built ONLY from the %05u-formatted numeric id
+    // (T-02-08).
+    if (kind == static_cast<uint8_t>(ImageKind::THUMBNAIL)) {
+        snprintf(out, cap, "/images/IMG_%05u_T.JSON", static_cast<unsigned>(imageId));
+    } else {
+        snprintf(out, cap, "/images/IMG_%05u.JSON", static_cast<unsigned>(imageId));
+    }
 }
 
 const char* SdStorage::triggerSourceName(uint8_t captureSource) {
@@ -250,7 +260,7 @@ bool SdStorage::writeSidecar(const SdImageMetadata& meta) {
     char imgPath[32];
     imagePath(imgPath, sizeof(imgPath), meta.imageId, meta.kind);
     char sidePath[32];
-    sidecarPath(sidePath, sizeof(sidePath), meta.imageId);
+    sidecarPath(sidePath, sizeof(sidePath), meta.imageId, meta.kind);
 
     File f = SD.open(sidePath, FILE_WRITE);
     if (!f) {

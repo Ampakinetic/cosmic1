@@ -97,8 +97,10 @@ public:
     bool writeChunk(uint16_t imageId, uint8_t kind, uint16_t chunkIndex,
                     uint16_t chunkSize, const uint8_t* data, size_t len);
 
-    // Close the open file and write the sidecar IMG_{id}.JSON exactly ONCE
-    // at finalization (Pitfall 8) as hand-built String JSON (the base env
+    // Close the open file and write the sidecar IMG_{id}.JSON (or
+    // IMG_{id}_T.JSON for THUMBNAIL — kind-suffixed so thumbnail and full
+    // D-30 records persist independently, 02-05/WR-05) exactly ONCE at
+    // finalization (Pitfall 8) as hand-built String JSON (the base env
     // deliberately has no ArduinoJson — research Supporting table).
     bool finalizeImage(const SdImageMetadata& meta);
 
@@ -123,7 +125,7 @@ private:
     void degrade(const char* reason);
     void fileFor(uint8_t kind, File** out, uint16_t** outId, uint32_t** outPersisted);
     static void imagePath(char* out, size_t cap, uint16_t imageId, uint8_t kind);
-    static void sidecarPath(char* out, size_t cap, uint16_t imageId);
+    static void sidecarPath(char* out, size_t cap, uint16_t imageId, uint8_t kind);
     static const char* triggerSourceName(uint8_t captureSource);
     bool writeSidecar(const SdImageMetadata& meta);
 };

@@ -167,6 +167,24 @@ void ImageRxManager::process() {
         if (millis() - t.lastProgressMs <= IMG_WINDOW_STALL_MS) {
             continue;
         }
+
+        // Gated heal (02-05 / CR-01 base half): the base speaks only on the
+        // D-21 triggers, so a thumbnail heal NEVER fires while a full pull
+        // owns the link, and only once the balloon's thumbnail push for this
+        // id provably finished — a same-id FULL manifest's arrival is that
+        // proof (the push always precedes the announcement). Oversize
+        // fallback: an oversize image never announces a full, so after
+        // IMG_THUMB_HEAL_IDLE_MS with no progress the push is taken as
+        // drained and the heal may fire anyway; the D-24 3-pass bound then
+        // resolves the row honestly instead of an infinite RECEIVING stall.
+        if (findActivePull() != nullptr) {
+            continue;   // gate 1: a full pull owns the link
+        }
+        if (findTransfer(t.imageId, static_cast<uint8_t>(ImageKind::FULL_IMAGE)) == nullptr &&
+            (millis() - t.lastProgressMs) <= IMG_THUMB_HEAL_IDLE_MS) {
+            continue;   // gate 2: push not provably finished; oversize idle fallback pending
+        }
+
         if (t.windowActive && t.passCount >= IMG_RETRANSMIT_MAX_PASSES) {
             finalizeIncomplete(t, "thumbnail push stalled; passes exhausted");
             continue;
@@ -215,15 +233,26 @@ void ImageRxManager::onChunkFrame(const uint8_t* frame, size_t length) {
 
     const ImageChunkBody& c = pkt.body;
 
-    // Routing by (imageId, kind). Wire-order fact from the balloon state
-    // machine: thumbnail chunks are only ever sent BEFORE the full manifest
-    // of the same id (the push completes before the announcement), and after
-    // it every chunk on the wire for that id is a window-pull answer. So a
-    // non-terminal FULL slot takes precedence; otherwise the chunk belongs
-    // to the thumbnail push.
-    ImageRxTransfer* t = findTransfer(c.imageId, static_cast<uint8_t>(ImageKind::FULL_IMAGE));
-    if (t == nullptr || t->terminal) {
-        t = findTransfer(c.imageId, static_cast<uint8_t>(ImageKind::THUMBNAIL));
+    // Routing by (imageId, kind). Heal-window precedence (02-05 / Gap 2):
+    // while a THUMBNAIL slot for this id is non-terminal with windowActive
+    // set (a heal window is in flight), its chunks route to the THUMBNAIL
+    // slot FIRST — the heal is never issued while a full pull is active
+    // (gate 1 above) and routing is per-image-id, so the armed heal window
+    // unambiguously owns this id's incoming chunks. The chunk body carries
+    // no kind byte — the requester's own window state is the discriminator.
+    // Without this, heal bytes would land in a QUEUED full's SD file and
+    // corrupt it.
+    ImageRxTransfer* t = findTransfer(c.imageId, static_cast<uint8_t>(ImageKind::THUMBNAIL));
+    if (!(t != nullptr && !t->terminal && t->windowActive)) {
+        // Wire-order precedence (unchanged): thumbnail chunks are only ever
+        // sent BEFORE the full manifest of the same id (the push completes
+        // before the announcement), and after it every chunk on the wire for
+        // that id is a window-pull answer. So a non-terminal FULL slot takes
+        // precedence; otherwise the chunk belongs to the thumbnail push.
+        t = findTransfer(c.imageId, static_cast<uint8_t>(ImageKind::FULL_IMAGE));
+        if (t == nullptr || t->terminal) {
+            t = findTransfer(c.imageId, static_cast<uint8_t>(ImageKind::THUMBNAIL));
+        }
     }
     if (t == nullptr) {
         if (DEBUG_IMAGE_RX) {
@@ -338,6 +367,9 @@ ImageRxTransfer* ImageRxManager::allocateSlot(uint8_t kind) {
                       "(finalized incomplete)\n",
                       oldest->imageId, oldest->imageKind);
         finalizeIncomplete(*oldest, "slot pressure");
+        // Full slot re-init (02-05 / CR-02, Gap 3): clears the stale terminal flag and
+        // counters exactly as step 2 does — next occupant starts at 0/N, never zombie.
+        *oldest = ImageRxTransfer{};
         return oldest;
     }
 
@@ -534,6 +566,11 @@ bool ImageRxManager::acceptChunk(ImageRxTransfer& t, const ImageChunkBody& c) {
     t.receivedCount++;
     t.bytesReceived += c.dataLen;
     t.lastProgressMs = millis();
+    // D-24 bounds only CONSECUTIVE unhealed stalls (02-05 / CR-03 fix b):
+    // accepted-chunk progress retires charged passes — a healed stall is not
+    // a failed pass, so cumulative healed stalls over a pull's lifetime can
+    // no longer finalize it INCOMPLETE. This is the ONLY passCount zero-writer.
+    t.passCount = 0;
 
     if (DEBUG_IMAGE_RX) {
         Serial.printf("ImageRx: image %u kind %u chunk %u/%u (%u B)\n",
@@ -726,12 +763,15 @@ void ImageRxManager::issueWindowRequest(ImageRxTransfer& t, uint16_t startChunk,
     // and the CMD_ACK_TIMEOUT_WINDOW_MS class bounds the whole 16-chunk
     // exchange (Pitfall 4). sendCommand only QUEUES — the transmit happens
     // in CmdSender().process(), after the RX buffer is fully drained.
-    uint8_t payload[5];
+    // 6-byte layout (02-05 / CR-01): imageId BE16, imageKind u8, startChunk
+    // BE16, count u8 — the kind byte makes thumbnail heals addressable (D-22).
+    uint8_t payload[6];
     CommandProtocol::writeUint16(payload, t.imageId);
-    CommandProtocol::writeUint16(payload + 2, startChunk);
-    payload[4] = static_cast<uint8_t>(count);
+    payload[2] = t.imageKind;
+    CommandProtocol::writeUint16(payload + 3, startChunk);
+    payload[5] = static_cast<uint8_t>(count);
 
-    uint16_t seq = CmdSender().sendCommand(CameraCommand::IMAGE_WINDOW_REQUEST, payload, 5);
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::IMAGE_WINDOW_REQUEST, payload, 6);
     if (seq == 0) {
         // Command table full — nothing queued, so no window is in flight.
         // NOT retried on a timer (Pitfall 5): the stall path re-issues this
