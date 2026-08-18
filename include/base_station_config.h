@@ -26,6 +26,16 @@
 #define LORA_RECEIVE_MODE    true
 #define LORA_CONTINUOUS_LISTEN true
 
+// microSD card (SPI breakout, IMG-05 storage). EDITABLE CONSTANTS: if your
+// wiring differs, change these before flashing — no code change needed
+// (research Q2 resolution / 02-03 user_setup hardware note). Chosen on the
+// ESP32-S3 DevKitC-1's FSPI-adjacent free GPIOs; no conflict with the LoRa
+// UART pins (14/48/19/20/21) or the status LED (39, main_basestation.cpp).
+#define SD_SCK_PIN          12
+#define SD_MISO_PIN         13
+#define SD_MOSI_PIN         11
+#define SD_CS_PIN           10
+
 // WiFi Configuration
 #define WIFI_MODE_AP         true    // Create Access Point for laptops
 #define WIFI_MODE_STA        false   // Optional: Connect to existing network
