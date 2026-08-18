@@ -1,4 +1,5 @@
 #include "command_handler.h"
+#include "auto_capture.h"
 
 // Debug configuration
 #ifndef DEBUG_COMMAND_HANDLER
@@ -201,9 +202,9 @@ CommandResult CommandHandler::handleCaptureNow(const CommandPacket& cmd) {
         result.success = true;
         result.responseType = ResponseType::ACK;
 
-        // Return image ID as response data
-        static uint16_t imageId = 0;
-        imageId++;
+        // Return image ID as response data - shared ID sequence with
+        // automatic captures (single authority in AutoCapture)
+        uint16_t imageId = AutoCap().allocateImageId();
 
         result.responseData[0] = (imageId >> 8) & 0xFF;
         result.responseData[1] = imageId & 0xFF;
@@ -532,16 +533,21 @@ CommandResult CommandHandler::handleAutoCaptureEnable(const CommandPacket& cmd) 
         return result;
     }
 
-    // Auto-capture will be implemented in Phase 1 expansion
-    // For now, just acknowledge
-    result.success = true;
-    result.responseType = ResponseType::ACK;
-    CommandProtocol::writeUint32(result.responseData, intervalMs);
-    result.responseLength = 4;
-    commandsExecuted++;
+    if (AutoCap().enable(intervalMs)) {
+        result.success = true;
+        result.responseType = ResponseType::ACK;
+        CommandProtocol::writeUint32(result.responseData, intervalMs);
+        result.responseLength = 4;
+        commandsExecuted++;
 
-    if (DEBUG_COMMAND_HANDLER) {
-        Serial.printf("CommandHandler: Auto-capture enabled at %lu ms (placeholder)\n", intervalMs);
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Auto-capture enabled at %lu ms\n", intervalMs);
+        }
+    } else {
+        result.success = false;
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Auto-capture enable failed", sizeof(result.message) - 1);
+        commandsFailed++;
     }
 
     return result;
@@ -550,14 +556,14 @@ CommandResult CommandHandler::handleAutoCaptureEnable(const CommandPacket& cmd) 
 CommandResult CommandHandler::handleAutoCaptureDisable(const CommandPacket& cmd) {
     CommandResult result{};
 
-    // Auto-capture will be implemented in Phase 1 expansion
-    // For now, just acknowledge
+    AutoCap().disable();
+
     result.success = true;
     result.responseType = ResponseType::ACK;
     commandsExecuted++;
 
     if (DEBUG_COMMAND_HANDLER) {
-        Serial.println("CommandHandler: Auto-capture disabled (placeholder)");
+        Serial.println("CommandHandler: Auto-capture disabled");
     }
 
     return result;
@@ -567,13 +573,13 @@ CommandResult CommandHandler::handleGetStatus(const CommandPacket& cmd) {
     CommandResult result{};
 
     ResponseStatusData status{};
-    status.imageId = 0; // TODO: Track last image ID
-    status.autoCaptureEnabled = 0; // TODO: Track auto-capture state
-    status.autoCaptureInterval = 0;
-    status.currentResolution = static_cast<FrameSize>(0x06); // QVGA default
-    status.currentQuality = 10; // Default quality
-    status.currentBrightness = 0;
-    status.currentContrast = 0;
+    status.imageId = AutoCap().getLastImageId();
+    status.autoCaptureEnabled = AutoCap().isEnabled() ? 1 : 0;
+    status.autoCaptureInterval = AutoCap().getInterval();
+    status.currentResolution = static_cast<FrameSize>(camera->getFrameSize());
+    status.currentQuality = static_cast<uint8_t>(camera->getQuality());
+    status.currentBrightness = static_cast<int8_t>(camera->getBrightness());
+    status.currentContrast = static_cast<int8_t>(camera->getContrast());
 
     result.success = true;
     result.responseType = ResponseType::STATUS;

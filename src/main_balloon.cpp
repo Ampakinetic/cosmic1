@@ -28,6 +28,7 @@
 // Phase 1: Command Protocol & Control
 #include "e32_lora.h"
 #include "command_handler.h"
+#include "auto_capture.h"
 
 // Forward declarations for missing types
 struct PowerData {
@@ -387,6 +388,12 @@ bool initializeSubsystems() {
         SYS_WARNING("Command handler initialization failed");
     } else {
         SYS_INFO("Command handler initialized");
+    }
+
+    if (!AutoCap().begin(&Camera())) {
+        SYS_WARNING("Auto-capture module initialization failed");
+    } else {
+        SYS_INFO("Auto-capture module initialized");
     }
     appState.communicationActive = true;
 
@@ -756,6 +763,9 @@ void processPacketHandling() {
 
     // Process incoming camera commands (Phase 1)
     CmdHandler().process();
+
+    // Run the interval auto-capture timer (Phase 1, CTRL-03/CTRL-04)
+    AutoCap().process();
 
     // Update subsystem state
     // SysState().setSubsystemState("lora", SubsystemState::ACTIVE);
