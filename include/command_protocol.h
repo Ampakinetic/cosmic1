@@ -12,6 +12,7 @@
 
 // Command Packet Type (extends PacketType from common_types.h)
 static constexpr PacketType PACKET_TYPE_COMMAND = static_cast<PacketType>(0x10);
+static constexpr PacketType PACKET_TYPE_RESPONSE = static_cast<PacketType>(0x11);
 
 // Response Packet Types
 enum class ResponseType : uint8_t {

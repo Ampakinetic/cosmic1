@@ -236,7 +236,7 @@ bool CommandProtocol::deserializeResponse(const uint8_t* buffer, size_t length, 
 
 ResponsePacket CommandProtocol::createACK(uint16_t refSequence, const uint8_t* data, uint16_t dataLen) {
     ResponsePacket resp{};
-    resp.type = static_cast<PacketType>(0x11); // RESPONSE
+    resp.type = PACKET_TYPE_RESPONSE;
     resp.responseType = ResponseType::ACK;
     resp.refSequence = refSequence;
     resp.dataLength = (dataLen > CMD_MAX_RESPONSE_DATA) ? CMD_MAX_RESPONSE_DATA : dataLen;
@@ -253,7 +253,7 @@ ResponsePacket CommandProtocol::createACK(uint16_t refSequence, const uint8_t* d
 
 ResponsePacket CommandProtocol::createNACK(uint16_t refSequence, ResponseType nackType, const char* message) {
     ResponsePacket resp{};
-    resp.type = static_cast<PacketType>(0x11); // RESPONSE
+    resp.type = PACKET_TYPE_RESPONSE;
     resp.responseType = nackType;
     resp.refSequence = refSequence;
 
@@ -272,7 +272,7 @@ ResponsePacket CommandProtocol::createNACK(uint16_t refSequence, ResponseType na
 
 ResponsePacket CommandProtocol::createStatus(uint16_t refSequence, const ResponseStatusData& status) {
     ResponsePacket resp{};
-    resp.type = static_cast<PacketType>(0x11); // RESPONSE
+    resp.type = PACKET_TYPE_RESPONSE;
     resp.responseType = ResponseType::STATUS;
     resp.refSequence = refSequence;
     resp.dataLength = sizeof(ResponseStatusData);
@@ -352,6 +352,7 @@ uint32_t CommandProtocol::readUint32(const uint8_t* buffer) {
 
 CommandPacket createCommandPacket(CameraCommand cmd, uint16_t sequence, const void* payload, size_t payloadSize) {
     CommandPacket packet{};
+    packet.type = PACKET_TYPE_COMMAND; // wire type assigned at construction (symmetry with createResponsePacket)
     packet.cmd = cmd;
     packet.sequenceNumber = sequence;
     packet.payloadLength = (payloadSize > CMD_MAX_PAYLOAD_SIZE) ?
@@ -370,6 +371,7 @@ CommandPacket createCommandPacket(CameraCommand cmd, uint16_t sequence, const vo
 
 ResponsePacket createResponsePacket(ResponseType type, uint16_t refSequence, const void* data, size_t dataLen) {
     ResponsePacket packet{};
+    packet.type = PACKET_TYPE_RESPONSE; // CR-01: documented 0x11 set where the packet is constructed — serializeResponse emits this field verbatim
     packet.responseType = type;
     packet.refSequence = refSequence;
     packet.dataLength = (dataLen > CMD_MAX_RESPONSE_DATA) ?

@@ -20,6 +20,11 @@
 //       offset 3, sequence patched in after the CRC is written) FAILS the
 //       sequence sweep — proof the harness has teeth
 //   (e) truncated or bogus-length streams never produce a packet (CR-03)
+//   (f) the response construction path carries the documented type byte
+//       (CR-01/WR-05): packets built through the createResponsePacket mirror
+//       serialize with byte 2 == 0x11 on both the ACK and NACK paths
+//       (identical bytes), while the defective no-type-assignment variant
+//       emits 0x00 — proof the clause has teeth against the pre-fix factory
 // ============================================================================
 
 'use strict';
@@ -120,11 +125,42 @@ function serializeCommand(sequenceNumber, cmdByte, payload, { defective = false 
     return buffer.subarray(0, offset);
 }
 
-// Transcribes CommandProtocol::serializeResponse:
-//   AA 55 | type | refSeqLow | dataLength BE16 | CRC8 pad | responseType |
+// Transcribes createResponsePacket (src/command_protocol.cpp): the packet
+// starts zero-initialized — type 0x00, which is exactly the pre-CR-01 defect —
+// then the factory assigns its fields. The `defective` option models the
+// pre-fix firmware that never assigned packet.type at all.
+function createResponsePacketMirror(responseType, refSequence, data, { defective = false } = {}) {
+    const packet = {
+        type: 0x00, // ResponsePacket packet{} zero-initializes every field
+        responseType: 0x00,
+        refSequence: 0,
+        data: Buffer.alloc(CMD_MAX_RESPONSE_DATA),
+        dataLength: 0,
+    };
+
+    if (!defective) {
+        packet.type = PACKET_TYPE_RESPONSE; // the CR-01 fix: type assigned at construction
+    }
+    packet.responseType = responseType;
+    packet.refSequence = refSequence;
+    const dataLen = data ? data.length : 0;
+    packet.dataLength = dataLen > CMD_MAX_RESPONSE_DATA ? CMD_MAX_RESPONSE_DATA : dataLen;
+
+    if (data && dataLen > 0) {
+        Buffer.from(data.subarray(0, packet.dataLength)).copy(packet.data);
+    }
+
+    // crc16 = 0 (computed at serialization); endByte markers carried by the serializer
+    return packet;
+}
+
+// Transcribes CommandProtocol::serializeResponse — emits the PACKET'S OWN
+// type field at byte 2, exactly as the firmware serializer writes resp.type
+// verbatim (src/command_protocol.cpp:159):
+//   AA 55 | resp.type | refSeqLow | dataLength BE16 | CRC8 pad | responseType |
 //   refSequence BE16 | dataLength low byte | data | CRC16 BE | 0D 0A
-function serializeResponse(responseType, refSequence, data) {
-    const dataLength = data ? data.length : 0;
+function serializeResponse(packet) {
+    const dataLength = packet.dataLength;
     const packetLength = CMD_HEADER_SIZE + 4 + dataLength + 4;
 
     if (packetLength > CMD_MAX_PACKET_SIZE) {
@@ -136,17 +172,17 @@ function serializeResponse(responseType, refSequence, data) {
 
     buffer[offset++] = CMD_START_BYTE1;
     buffer[offset++] = CMD_START_BYTE2;
-    buffer[offset++] = PACKET_TYPE_RESPONSE;
-    buffer[offset++] = refSequence & 0xFF;
+    buffer[offset++] = packet.type;
+    buffer[offset++] = packet.refSequence & 0xFF;
     buffer.writeUInt16BE(dataLength, offset); offset += 2;
     buffer[offset++] = 0x00; // CRC8 pad byte
 
-    buffer[offset++] = responseType;
-    buffer.writeUInt16BE(refSequence, offset); offset += 2;
+    buffer[offset++] = packet.responseType;
+    buffer.writeUInt16BE(packet.refSequence, offset); offset += 2;
     buffer[offset++] = dataLength & 0xFF;
 
     if (dataLength > 0 && dataLength <= CMD_MAX_RESPONSE_DATA) {
-        data.copy(buffer, offset);
+        packet.data.copy(buffer, offset, 0, dataLength);
         offset += dataLength;
     }
 
@@ -300,7 +336,7 @@ function assert(condition, label) {
 {
     // Response flavor (base station): data starting with the 0x0D 0x0A pair
     const responseRx = makeLengthDrivenReceiver({ bodyOverhead: 4, maxBody: CMD_MAX_RESPONSE_DATA, bufferSize: CMD_MAX_PACKET_SIZE });
-    const responsePacket = serializeResponse(0x05, 42, Buffer.from([0x0D, 0x0A, 0x00, 0x00])); // STATUS with CRLF-leading data
+    const responsePacket = serializeResponse(createResponsePacketMirror(0x05, 42, Buffer.from([0x0D, 0x0A, 0x00, 0x00]))); // STATUS with CRLF-leading data
     for (const b of responsePacket) responseRx.feed(b);
     assert(responseRx.packets.length === 1 &&
            responseRx.packets[0].equals(responsePacket) &&
@@ -318,7 +354,7 @@ function assert(condition, label) {
 
     // Truncated stream: half the expected bytes, then idle — nothing validates
     const truncatedRx = makeLengthDrivenReceiver({ bodyOverhead: 4, maxBody: CMD_MAX_RESPONSE_DATA, bufferSize: CMD_MAX_PACKET_SIZE });
-    const full = serializeResponse(0x00, 5, Buffer.alloc(20));
+    const full = serializeResponse(createResponsePacketMirror(0x00, 5, Buffer.alloc(20)));
     for (const b of full.subarray(0, Math.floor(full.length / 2))) truncatedRx.feed(b);
     assert(truncatedRx.packets.length === 0, '(e) truncated stream (half the expected bytes, then idle) produces no packet');
 
@@ -333,6 +369,30 @@ function assert(condition, label) {
     bogusRx.feed(0x00);
     for (let i = 0; i < 32; i++) bogusRx.feed(0x00);
     assert(bogusRx.packets.length === 0, '(e) bogus header length (bodyLen over protocol max) resets the receiver, no packet');
+}
+
+// (f) Response construction path carries the documented type byte (CR-01/WR-05)
+{
+    const RESPONSE_TYPE_ACK = 0x00;        // ResponseType::ACK
+    const RESPONSE_TYPE_NACK_PARAM = 0x03; // ResponseType::NACK_PARAM
+
+    // (f1) fixed-factory ACK: response built through the transcribed factory
+    const ackPacket = serializeResponse(createResponsePacketMirror(RESPONSE_TYPE_ACK, 0x2A7B, Buffer.from([0x34, 0x12])));
+    assert(ackPacket !== null && ackPacket[2] === PACKET_TYPE_RESPONSE, '(f1) ACK path: factory-built packet serializes with byte 2 == 0x11');
+
+    // (f2) fixed-factory NACK with a short message as data
+    const nackPacket = serializeResponse(createResponsePacketMirror(RESPONSE_TYPE_NACK_PARAM, 0x2A7B, Buffer.from('invalid parameter')));
+    assert(nackPacket !== null && nackPacket[2] === PACKET_TYPE_RESPONSE, '(f2) NACK path: factory-built packet serializes with byte 2 == 0x11');
+
+    // (f3) both construction paths emit the identical type byte
+    assert(ackPacket[2] === nackPacket[2], '(f3) ACK-path and NACK-path type bytes are identical');
+
+    // (f4) defective variant: the pre-CR-01 factory that never assigned packet.type
+    const defectivePacket = serializeResponse(createResponsePacketMirror(RESPONSE_TYPE_ACK, 0x2A7B, Buffer.from([0x34, 0x12]), { defective: true }));
+    assert(defectivePacket !== null && defectivePacket[2] === 0x00 && defectivePacket[2] !== ackPacket[2], '(f4) defective variant (type never assigned): byte 2 equals 0x00 and differs from the fixed path');
+
+    // The type byte sits inside the CRC-covered region — the fixed ACK still validates
+    assert(validateCRC(ackPacket, ackPacket.length), '(f) fixed ACK packet passes validateCRC (type byte inside the CRC-covered region)');
 }
 
 // ============================================================================
