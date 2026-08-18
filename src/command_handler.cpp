@@ -182,6 +182,9 @@ CommandResult CommandHandler::executeCommand(const CommandPacket& cmd) {
         case CameraCommand::IMAGE_WINDOW_REQUEST:
             return handleImageWindowRequest(cmd);
 
+        case CameraCommand::SET_EVENT_THRESHOLDS:
+            return handleSetEventThresholds(cmd);
+
         default:
             result.responseType = ResponseType::NACK_INVALID;
             strncpy(result.message, "Unknown command", sizeof(result.message) - 1);
@@ -577,6 +580,69 @@ CommandResult CommandHandler::handleAutoCaptureDisable(const CommandPacket& cmd)
     return result;
 }
 
+CommandResult CommandHandler::handleSetEventThresholds(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    // PayloadSetEventThresholds: altDeltaM BE16, distDeltaM BE16,
+    // minSpacingSec BE16, flags u8 (bit0 eventsEnabled) — Pitfall 9: decode
+    // big-endian via the helpers, never memcpy the native struct
+    if (cmd.payloadLength < 7) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing threshold params", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    uint16_t altDeltaM = CommandProtocol::readUint16(cmd.payload);
+    uint16_t distDeltaM = CommandProtocol::readUint16(cmd.payload + 2);
+    uint16_t minSpacingSec = CommandProtocol::readUint16(cmd.payload + 4);
+    bool eventsEnabled = (cmd.payload[6] & 0x01) != 0;
+
+    // Same bounds the module re-validates (T-02-11 double validation) — a
+    // crafted frame cannot drive the spacing below 5 s or the deltas outside
+    // sane flight ranges
+    if (altDeltaM < EVENT_MIN_ALT_DELTA_M || altDeltaM > EVENT_MAX_ALT_DELTA_M) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid altitude delta", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+    if (distDeltaM < EVENT_MIN_DIST_DELTA_M || distDeltaM > EVENT_MAX_DIST_DELTA_M) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid distance delta", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+    if (minSpacingSec < EVENT_MIN_SPACING_S || minSpacingSec > EVENT_MAX_SPACING_S) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Invalid min spacing", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    // Idempotent: re-sending the same config just re-sets it
+    if (AutoCap().setEventConfig(altDeltaM, distDeltaM, minSpacingSec, eventsEnabled)) {
+        result.success = true;
+        result.responseType = ResponseType::ACK;
+        // Echo the accepted 7-byte payload so the base can confirm exactly
+        // what the balloon adopted
+        memcpy(result.responseData, cmd.payload, 7);
+        result.responseLength = 7;
+        commandsExecuted++;
+
+        if (DEBUG_COMMAND_HANDLER) {
+            Serial.printf("CommandHandler: Event thresholds alt %u m, dist %u m, spacing %u s, events %s\n",
+                          altDeltaM, distDeltaM, minSpacingSec, eventsEnabled ? "ON" : "OFF");
+        }
+    } else {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Threshold set failed", sizeof(result.message) - 1);
+        commandsFailed++;
+    }
+
+    return result;
+}
+
 CommandResult CommandHandler::handleGetStatus(const CommandPacket& cmd) {
     CommandResult result{};
 
@@ -588,6 +654,14 @@ CommandResult CommandHandler::handleGetStatus(const CommandPacket& cmd) {
     status.currentQuality = static_cast<uint8_t>(camera->getQuality());
     status.currentBrightness = static_cast<int8_t>(camera->getBrightness());
     status.currentContrast = static_cast<int8_t>(camera->getContrast());
+
+    // Event-trigger thresholds (D-26): the live module config is the
+    // balloon-reported truth the base displays
+    AutoCaptureEventConfig eventConfig = AutoCap().getEventConfig();
+    status.eventThresholdAltM = eventConfig.altDeltaM;
+    status.eventThresholdDistM = eventConfig.distDeltaM;
+    status.eventMinSpacingSec = eventConfig.minSpacingS;
+    status.eventFlags = eventConfig.eventsEnabled ? 0x01 : 0x00;
 
     result.success = true;
     result.responseType = ResponseType::STATUS;

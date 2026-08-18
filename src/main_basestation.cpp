@@ -78,10 +78,17 @@ struct BaseStationState {
     bool autoCaptureOn;
     uint16_t autoCaptureAckSeq;
     uint16_t autoCaptureIntervalAckSec;
+    // Event Capture card (D-26): GET_STATUS poll timing
+    uint32_t lastStatusPollMs;
 } appState;
 
 // Link considered stale after this long without an ACK (LED truth, IN-03)
 static constexpr uint32_t LINK_STALE_MS = 30000;
+
+// D-26: cadence of the GET_STATUS poll that refreshes the balloon-reported
+// event-threshold display — skipped while any command is in flight so it
+// never contends with user commands or window pulls
+static constexpr uint32_t STATUS_POLL_INTERVAL_MS = 30000;
 
 // ===========================
 // Function Declarations
@@ -111,6 +118,7 @@ void handleSetExposure();
 void handleSetWBMode();
 void handleAutoCaptureEnable();
 void handleAutoCaptureDisable();
+void handleSetEventThresholds();
 void handleStatus();
 void handleImage(const String& uri);
 void handleNotFound();
@@ -374,6 +382,26 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                     chip.textContent = data.autoCapture ? ('ON · every ' + data.autoCaptureInterval + 's') : 'OFF';
                     chip.className = 'message ' + (data.autoCapture ? 'success' : 'info');
 
+                    // Event Capture card (D-26): the chip shows the
+                    // balloon-reported GET_STATUS truth; inputs disable
+                    // while a SET_EVENT_THRESHOLDS command is in flight
+                    const evChip = document.getElementById('event-chip');
+                    const ev = data.eventThresholds;
+                    if (ev) {
+                        evChip.textContent = 'Balloon: ' + (ev.eventsEnabled ? 'ON' : 'OFF')
+                            + ' · alt Δ ' + ev.altM + ' m · dist Δ ' + ev.distM + ' m · spacing ' + ev.spacingS + ' s';
+                        evChip.className = 'message ' + (ev.eventsEnabled ? 'success' : 'info');
+                    } else {
+                        evChip.textContent = 'Balloon values not received yet';
+                        evChip.className = 'message info';
+                    }
+                    const evForm = document.getElementById('event-form');
+                    const evBusy = (data.lastSeq !== 0 && data.lastCmd === 'Set Event Thresholds' && data.lastState === 'Sent')
+                        || (data.queue || []).some(function (e) {
+                            return e.cmd === 'Set Event Thresholds' && e.state === 'Sent';
+                        });
+                    Array.prototype.forEach.call(evForm.elements, function (el) { el.disabled = evBusy; });
+
                     // Pinned last-command row (empty state before any command)
                     const nameEl = document.getElementById('lastcmd-name');
                     const stateEl = document.getElementById('lastcmd-state');
@@ -564,6 +592,16 @@ void loop() {
     // Process command retries and timeouts
     CmdSender().process();
 
+    // D-26: periodic GET_STATUS poll — refreshes the balloon-reported
+    // event-threshold display. Skipped while any command is in flight so it
+    // never contends with user commands or image window pulls.
+    if (millis() - appState.lastStatusPollMs >= STATUS_POLL_INTERVAL_MS) {
+        appState.lastStatusPollMs = millis();
+        if (!CmdSender().hasPendingCommands()) {
+            CmdSender().sendCommand(CameraCommand::GET_STATUS);
+        }
+    }
+
     // Age out stalled image transfers (receive half of the push stream)
     ImageRx().process();
 
@@ -663,6 +701,7 @@ void initWebServer() {
     server.on("/set-wb", HTTP_POST, handleSetWBMode);
     server.on("/auto-capture", HTTP_POST, handleAutoCaptureEnable);
     server.on("/auto-capture-stop", HTTP_POST, handleAutoCaptureDisable);
+    server.on("/set-event-thresholds", HTTP_POST, handleSetEventThresholds);
     server.on("/status", HTTP_GET, handleStatus);
     server.onNotFound(handleNotFound);
 
@@ -892,6 +931,40 @@ void handleRoot() {
 
     // Display-only until the enable/disable command reaches ACK — no optimistic ON
     html += "<div class=\"message info\" id=\"autocapture-chip\">OFF</div>";
+
+    html += "</div>";
+
+    // Event Capture card (D-26): altitude/distance deltas + D-28 min spacing
+    // + an enable toggle. The current-values chip is filled by the poll
+    // script from the balloon-reported GET_STATUS truth — never the
+    // last-submitted form
+    html += "<div class=\"card\">";
+    html += "<h2>🛰 Event Capture</h2>";
+
+    html += "<form action=\"/set-event-thresholds\" method=\"POST\" id=\"event-form\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>Altitude delta (10-5000 m):</label>";
+    html += "<input type=\"number\" name=\"altitude-m\" min=\"10\" max=\"5000\" step=\"10\" value=\"150\">";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>Distance delta (10-50000 m):</label>";
+    html += "<input type=\"number\" name=\"distance-m\" min=\"10\" max=\"50000\" step=\"10\" value=\"500\">";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>Min spacing (5-3600 s):</label>";
+    html += "<input type=\"number\" name=\"spacing-s\" min=\"5\" max=\"3600\" step=\"5\" value=\"20\">";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>Event triggers:</label>";
+    html += "<select name=\"enabled\">";
+    html += "<option value=\"1\" selected>Enabled</option>";
+    html += "<option value=\"0\">Disabled</option>";
+    html += "</select>";
+    html += "</div>";
+    html += "<button type=\"submit\">Save Event Thresholds</button>";
+    html += "</form>";
+
+    html += "<div class=\"message info\" id=\"event-chip\" style=\"margin-top:12px;\">Balloon values not received yet</div>";
 
     html += "</div>";
 
@@ -1183,6 +1256,64 @@ void handleAutoCaptureDisable() {
     }
 }
 
+void handleSetEventThresholds() {
+    if (!server.hasArg("altitude-m") || !server.hasArg("distance-m") ||
+        !server.hasArg("spacing-s") || !server.hasArg("enabled")) {
+        sendResponse(400, "Error", "Missing event threshold parameters");
+        return;
+    }
+
+    // WR-07: range-check every field as the FULL long BEFORE narrowing to
+    // the wire width — no truncation surprise, no negative/overflow values
+    // reach the wire (T-02-13)
+    long altM = server.arg("altitude-m").toInt();
+    if (altM < 10 || altM > 5000) {
+        sendResponse(400, "Error", "Invalid altitude delta (10-5000 m)");
+        return;
+    }
+
+    long distM = server.arg("distance-m").toInt();
+    if (distM < 10 || distM > 50000) {
+        sendResponse(400, "Error", "Invalid distance delta (10-50000 m)");
+        return;
+    }
+
+    long spacing = server.arg("spacing-s").toInt();
+    if (spacing < 5 || spacing > 3600) {
+        sendResponse(400, "Error", "Invalid min spacing (5-3600 s)");
+        return;
+    }
+
+    long enabled = server.arg("enabled").toInt();
+    if (enabled != 0 && enabled != 1) {
+        sendResponse(400, "Error", "Invalid enabled value (0 or 1)");
+        return;
+    }
+
+    // Balloon decodes with CommandProtocol::readUint16 — build the 7-byte
+    // big-endian payload (writeUint16 x3 + flags byte), never memcpy a
+    // native struct onto the wire (Pitfall 9)
+    uint8_t payload[7];
+    CommandProtocol::writeUint16(payload, static_cast<uint16_t>(altM));
+    CommandProtocol::writeUint16(payload + 2, static_cast<uint16_t>(distM));
+    CommandProtocol::writeUint16(payload + 4, static_cast<uint16_t>(spacing));
+    payload[6] = static_cast<uint8_t>(enabled);
+
+    Serial.printf("Set event thresholds command: alt %ld m, dist %ld m, spacing %ld s, events %s\n",
+                  altM, distM, spacing, enabled ? "ON" : "OFF");
+
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::SET_EVENT_THRESHOLDS, payload, 7);
+
+    if (seq > 0) {
+        appState.lastCommandSequence = seq;
+        strncpy(appState.lastCommandName, "Set Event Thresholds", sizeof(appState.lastCommandName) - 1);
+        sendResponse(200, "OK", "Event threshold command sent");
+        Serial.printf("  Set event thresholds command sent (seq=%d)\n", seq);
+    } else {
+        sendResponse(500, "Error", "Failed to send event threshold command");
+    }
+}
+
 // LOCKED status vocabulary (UI-SPEC Copywriting Contract) — the single
 // CommandState-to-string mapping shared by lastState and every queue row,
 // so the pinned row and the queue can never diverge
@@ -1219,6 +1350,7 @@ const char* commandDisplayName(uint8_t commandType) {
         case CameraCommand::AUTO_CAPTURE_DISABLE: return "Auto-Capture Off";
         case CameraCommand::GET_STATUS:           return "Get Status";
         case CameraCommand::IMAGE_WINDOW_REQUEST: return "Image Window";
+        case CameraCommand::SET_EVENT_THRESHOLDS: return "Set Event Thresholds";
     }
     return "Command";
 }
@@ -1287,6 +1419,20 @@ void handleStatus() {
     }
     json += "\"autoCapture\":" + String(appState.autoCaptureOn ? "true" : "false") + ",";
     json += "\"autoCaptureInterval\":" + String(appState.autoCaptureIntervalAckSec) + ",";
+
+    // D-26: balloon-reported event-trigger configuration — latched from the
+    // newest GET_STATUS STATUS response (balloon truth, not the last form);
+    // null until the first STATUS response arrives
+    ResponseStatusData balloonStatus;
+    if (CmdSender().getStatusData(balloonStatus)) {
+        json += "\"eventThresholds\":{";
+        json += "\"altM\":" + String(balloonStatus.eventThresholdAltM) + ",";
+        json += "\"distM\":" + String(balloonStatus.eventThresholdDistM) + ",";
+        json += "\"spacingS\":" + String(balloonStatus.eventMinSpacingSec) + ",";
+        json += "\"eventsEnabled\":" + String((balloonStatus.eventFlags & 0x01) ? "true" : "false") + "},";
+    } else {
+        json += "\"eventThresholds\":null,";
+    }
 
     // IMG-01: newest CRC-verified thumbnail id — 0 until one verifies
     json += "\"latestThumbId\":" + String(ImageRx().getLatestThumbId()) + ",";

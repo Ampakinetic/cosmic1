@@ -75,6 +75,17 @@ public:
     // non-IDLE slot of the command table in slot order; returns the entry count
     uint8_t getCommandQueue(CommandQueueEntry* out, uint8_t maxEntries) const;
 
+    // Latest GET_STATUS snapshot (D-26): latched from the newest STATUS
+    // response — the balloon-reported truth the event-threshold card
+    // displays. Returns false when no STATUS response ever arrived.
+    bool getStatusData(ResponseStatusData& out) const {
+        if (!hasStatusData) {
+            return false;
+        }
+        out = latestStatus;
+        return true;
+    }
+
     // Statistics
     uint32_t getCommandsSent() const { return commandsSent; }
     uint32_t getCommandsAcked() const { return commandsAcked; }
@@ -113,6 +124,10 @@ private:
     uint8_t receiveBuffer[CMD_MAX_PACKET_SIZE];
     size_t receiveIndex;
     bool inPacket;
+
+    // Latched GET_STATUS payload (D-26) — survives tracked-slot reuse
+    ResponseStatusData latestStatus;
+    bool hasStatusData;
 
     // Private methods
     TrackedCommand* findTrackedCommand(uint16_t sequenceNumber);

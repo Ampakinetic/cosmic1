@@ -91,6 +91,11 @@ private:
     // existing createResponsePacket path (ACK/NACK_INVALID/NACK_BUSY)
     CommandResult handleImageWindowRequest(const CommandPacket& cmd);
 
+    // Phase 2 (02-04): event-trigger thresholds (D-26) — 7-byte big-endian
+    // payload, bounds-validated here and re-validated inside AutoCapture;
+    // out-of-range values answer NACK_PARAM
+    CommandResult handleSetEventThresholds(const CommandPacket& cmd);
+
     // Response sending
     bool sendResponse(const ResponsePacket& response);
 

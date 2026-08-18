@@ -70,9 +70,11 @@ CommandSender::CommandSender()
     , commandsTimeout(0)
     , receiveIndex(0)
     , inPacket(false)
+    , hasStatusData(false)
 {
     memset(pendingCommands, 0, sizeof(pendingCommands));
     memset(receiveBuffer, 0, sizeof(receiveBuffer));
+    memset(&latestStatus, 0, sizeof(latestStatus));
 }
 
 CommandSender::~CommandSender() {
@@ -412,6 +414,15 @@ void CommandSender::handleResponse(const ResponsePacket& response) {
         cmd->state = CommandState::ACKED;
         pendingCommandCount--;
         commandsAcked++;
+
+        // D-26: latch the STATUS payload so the balloon-reported config
+        // survives tracked-slot reuse (same latch discipline as the base's
+        // auto-capture chip)
+        if (response.responseType == ResponseType::STATUS &&
+            response.dataLength >= sizeof(ResponseStatusData)) {
+            memcpy(&latestStatus, response.data, sizeof(ResponseStatusData));
+            hasStatusData = true;
+        }
 
         if (DEBUG_COMMAND_SENDER) {
             Serial.printf("CommandSender: Command seq=%d ACKED\n", response.refSequence);
