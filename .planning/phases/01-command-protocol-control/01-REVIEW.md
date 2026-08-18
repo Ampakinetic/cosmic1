@@ -1,15 +1,22 @@
 ---
 phase: 01-command-protocol-control
-reviewed: 2026-08-17T23:54:09Z
+reviewed: 2026-08-18T03:37:35Z
 depth: standard
-files_reviewed: 12
+files_reviewed: 18
 files_reviewed_list:
+  - .claude/CLAUDE.md
+  - .vscode/extensions.json
+  - include/auto_capture.h
   - include/command_handler.h
   - include/command_protocol.h
   - include/command_sender.h
   - include/common_types.h
   - include/e32_lora.h
   - platformio.ini
+  - scripts/verify_protocol_roundtrip.mjs
+  - src/auto_capture.cpp
+  - src/camera_manager.cpp
+  - src/camera_manager.h
   - src/command_handler.cpp
   - src/command_protocol.cpp
   - src/command_sender.cpp
@@ -17,244 +24,165 @@ files_reviewed_list:
   - src/main_balloon.cpp
   - src/main_basestation.cpp
 findings:
-  critical: 4
-  warning: 9
-  info: 8
-  total: 21
+  critical: 1
+  warning: 6
+  info: 12
+  total: 19
 status: issues_found
 ---
 
-# Phase 1: Code Review Report
+# Phase 1: Code Review Report (re-review after gap closure)
 
-**Reviewed:** 2026-08-17T23:54:09Z
+**Reviewed:** 2026-08-18T03:37:35Z
 **Depth:** standard
-**Files Reviewed:** 12
+**Files Reviewed:** 18 (plus cross-reference: `src/stubs.cpp`, `include/sensor_pins.h`, phase plans 01-02..01-04, REQUIREMENTS.md)
 **Status:** issues_found
+**Supersedes:** 2026-08-17 review (21 findings)
 
 ## Summary
 
-Reviewed the Phase 1 command-protocol stack: CRC16-framed protocol (command_protocol), E32 UART driver (e32_lora), base-station retry sender (command_sender), balloon command handler (command_handler), both firmware entry points, and build config. Cross-referenced camera_manager.h, camera_pins.h, sensor_pins.h, board_config.h, and stubs.cpp for API and pin-contract verification.
+Re-reviewed the Phase 1 command-protocol stack after the gap-closure plans (01-02 protocol fixes, 01-03 UI completion, 01-04 auto-capture). The protocol core is now sound: **all four prior Critical findings are verified fixed in the current code** — the sequence byte is written before the CRC is computed (`command_protocol.cpp:61`, CR-01), the sender's transmit buffer is sized to the shared 240-byte constant (`command_sender.cpp:415`, CR-02), both receivers frame by the header-announced length so embedded `0D 0A` survives (CR-03), and PENDING transmit failures terminate in FAILED with retry accounting (CR-04, `command_sender.cpp:221-238`). WR-03 (cancel guard), WR-04 (backoff pacing above both state branches), WR-05 (STATUS typed end-to-end), WR-07 (validate-before-narrowing in every web handler), and IN-03 (computed link state) are also closed, and the new wire-format regression harness (`scripts/verify_protocol_roundtrip.mjs`) passes 10/10 when re-run for this review. `stubs.cpp` was verified to supply a real `CameraManager` instance, so the command handler drives the real camera.
 
-The core finding: **the command link as written cannot work end-to-end.** The serializer computes CRC before patching the sequence byte into the header (CR-01), so every command with a nonzero sequence fails CRC on the balloon and is silently dropped — all commands, all retries, forever. Three further blockers: a latent stack buffer overflow in the sender path (CR-02), non-transparent framing that deterministically drops any packet whose payload contains `0D 0A` (CR-03 — triggered by plausible real values such as UXGA resolution + default quality in status data), and an unbounded PENDING retry path that wedges the base-station event loop when the radio is unreachable (CR-04). The E32 driver's transmit is also blocking for up to 7 s inside `loop()`, violating the project's no-blocking constraint. The E32 configuration API contradicts the E32 datasheet (no `0xC0` command prefix, wrong address layout) — unused today but broken on arrival for hardware bring-up.
+One new Critical and one new Warning remain, plus four carried Warnings that were deferred rather than fixed.
 
-Accepted gaps (auto-capture placeholder, 3-of-7 settings in web UI, hardware tests pending) were not reported as findings.
+**The new Critical (CR-05):** the balloon still runs its legacy 30-second capture timer (`main_balloon.cpp:667`) alongside the new commanded auto-capture, with its own independent image-ID counter (`main_balloon.cpp:676-677`). `AUTO_CAPTURE_DISABLE` therefore does not stop automatic capture — within 30 s the legacy path fires again — and the "single shared image-ID sequence" invariant that plan 01-04 explicitly built (auto_capture.h:39-41, used by CAPTURE_NOW and GET_STATUS) is violated by a second sequence that will collide with it from ID 1.
+
+**The new Warning (WR-10):** `serializeCommand` accepts payload lengths 201-224 and `serializeResponse` accepts data lengths 51-225 — windows that fall between the packet-size check and the payload-copy guard. The serializer returns `true` and emits a 16-byte packet whose header declares a body of 201-224 bytes (verified empirically); the receiver then waits forever for bytes that were never sent. Current callers clamp (200/50) so it is unreachable today, but the regression harness's clause (b) actively certifies the malformed 224-byte case as "the valid boundary" — the test institutionalizes the defect.
+
+Carried unfixed from the previous review: blocking E32 transmit up to ~7 s inside both event loops (WR-01), the datasheet-violating E32 config API (WR-02, uncalled), the `AA AA` start-byte resync loss (WR-06), silent overwrite of a pending command by a second command in the same read burst (WR-08), and the unchecked packet-type byte / response length-width asymmetry (WR-09).
+
+Accepted gaps (per commit 0b52b9e: D-13/D-15 UI restructure deferred to Phase 3; hardware UAT items in 01-VERIFICATION.md) were not reported as findings.
 
 ## Critical Issues
 
-### CR-01: CRC16 computed before sequence number is patched into header — every command fails validation
+### CR-05: Legacy 30-second capture timer still runs beside commanded auto-capture — disable doesn't disable, and a second image-ID sequence collides with the shared one
 
-**File:** `src/command_protocol.cpp:60-88`
-**Issue:** `serializeCommand()` writes `0x00` as a "sequence placeholder" into `buffer[3]` (line 60), computes CRC16 over the buffer including that placeholder (line 79), and only afterwards overwrites `buffer[3]` with `cmd.sequenceNumber & 0xFF` (line 88). The receiver (`validateCRC`, line 24-38) recomputes CRC over the transmitted bytes, which now contain the real sequence byte. For any sequence where `(seq & 0xFF) != 0` the CRCs mismatch, `CommandHandler::validatePacket()` rejects the packet, and the command is silently dropped. Since `nextSequenceNumber` starts at 1 (`command_sender.cpp:24`), **every command issued by the base station is discarded**, exhausts its retries, and reports TIMEOUT. The Phase 1 link is non-functional.
-**Fix:** Write the real sequence byte before the CRC and delete the post-hoc patch:
-```cpp
-// header
-buffer[offset++] = CMD_START_BYTE1;
-buffer[offset++] = CMD_START_BYTE2;
-buffer[offset++] = static_cast<uint8_t>(PACKET_TYPE_COMMAND);
-buffer[offset++] = static_cast<uint8_t>(cmd.sequenceNumber & 0xFF); // real value, no placeholder
-writeUint16(buffer + offset, cmd.payloadLength);
-offset += 2;
-buffer[offset++] = 0x00; // CRC8 unused
-...
-uint16_t crc16 = calculateCRC16(buffer, offset); // now covers the real sequence byte
-writeUint16(buffer + offset, crc16);
-// DELETE line 88: buffer[3] = static_cast<uint8_t>(cmd.sequenceNumber & 0xFF);
-```
+**File:** `src/main_balloon.cpp:660-692` (with `include/auto_capture.h:39-41`, `src/command_handler.cpp:207`)
+**Issue:** `processCamera()` retains the pre-Phase-1 behavior: `Camera().isTimeToCapture(30000)` captures an image every 30 s and assigns it an ID from its own `static uint16_t nextImageId` counter (lines 676-677). This runs in the same loop as `AutoCap().process()` and is gated only on `appState.cameraActive`, not on any commanded state. Consequences:
 
-### CR-02: Stack buffer overflow — sender's 128-byte buffer vs serializer's 216-byte maximum output
+1. **CTRL-03/CTRL-04 semantics broken:** after `AUTO_CAPTURE_DISABLE` is ACKed and the UI chip shows OFF, the balloon keeps capturing automatically within 30 s. (Note the interaction: any capture resets `CameraManager::lastCaptureTime`, so while commanded auto-capture runs at ≤30 s intervals the legacy timer never fires — the legacy captures manifest *exactly* when the user has disabled auto-capture.)
+2. **Shared image-ID invariant violated:** plan 01-04 deliberately made `AutoCapture::allocateImageId()` the single authority shared by CAPTURE_NOW and interval captures ("manual and automatic captures share it, so GET_STATUS lastImageId is truthful across both modes", 01-04-SUMMARY). The legacy counter starts at 1 and counts independently, so `GET_STATUS`'s `lastImageId` can name a different image than the one last captured, and Phase 2 image sequencing inherits colliding IDs.
+3. Each interleaved legacy capture calls `captureImage()`, which frees and replaces the current image buffer — a legacy capture between a commanded capture and any future use of that image (Phase 2 transmission) silently destroys it.
 
-**File:** `src/command_sender.cpp:337` (with `src/command_protocol.cpp:50-54,73-75`)
-**Issue:** `transmitCommand()` serializes into `uint8_t buffer[128]`, but `serializeCommand()` permits packet lengths up to 240 and payload lengths up to `CMD_MAX_PAYLOAD_SIZE` (200). A command with payload ≥ 113 bytes produces 16 + payloadLength ≥ 129 bytes written into the 128-byte stack buffer — an 88-byte overflow at the maximum. `sendCommand()` is a public API that accepts arbitrary `payloadSize` (`createCommandPacket` truncates to 200, not to 112), so any future caller (image-ID lists, batch settings, protocol extension) silently corrupts the stack of the base-station loop task. Note `deserializeCommand`'s bounds checks do not protect the send path.
-**Fix:** Size the buffer to the protocol maximum and make the limit a shared constant:
-```cpp
-// command_protocol.h
-static constexpr size_t CMD_MAX_PACKET_SIZE = 240;
-
-// command_sender.cpp
-uint8_t buffer[CMD_MAX_PACKET_SIZE];
-size_t length = 0;
-```
-Additionally, reject (return `false`) rather than silently skip when `cmd.payloadLength > CMD_MAX_PAYLOAD_SIZE` inside `serializeCommand`.
-
-### CR-03: Framing is not byte-transparent — payload containing `0D 0A` truncates the packet and guarantees CRC failure
-
-**File:** `src/command_handler.cpp:615-627`, `src/command_sender.cpp:224-235`
-**Issue:** Both receivers terminate a packet the moment the last two buffered bytes equal `0x0D 0x0A`, with no notion of expected length. If that pair occurs **inside** the payload/data region, the packet is cut short, `validateCRC` fails, the receive state resets, and the remainder of the real packet (including its true terminator) is discarded as garbage. This is deterministic, not noise-dependent. Concrete triggers with real values:
-- `AUTO_CAPTURE_ENABLE` with interval 0x000D0Axx (855040–855295 ms, inside the accepted 1000–3600000 range): payload bytes `00 0D 0A xx` cut the packet — the command can never succeed (`command_handler.cpp:501`).
-- `ResponseStatusData` bytes: `currentResolution = FRAMESIZE_UXGA (0x0D)` followed by `currentQuality = 10 (0x0A)` produce `0D 0A` mid-packet (`command_protocol.cpp:160-169`) — the balloon's ACK for a successful UXGA+Q10 status/set is always dropped, so the base station retries a command that already executed (duplicate captures, false TIMEOUTs).
-
-With CR-01 fixed, this becomes the next link-killing bug.
-**Fix:** Switch to length-driven framing. The header already carries `payloadLength`/`dataLength`: after the start bytes and header, accumulate exactly `headerLen + payloadLength + 4` bytes (CRC16 + end marker), then validate. Alternatively escape `0x0D`/`0x0A` in payload on send and unescape on receive. Length-driven parsing is simpler given both sides know the format:
-```cpp
-// after start bytes, wait until CMD_HEADER_SIZE bytes buffered, then:
-uint16_t payloadLen = CommandProtocol::readUint16(receiveBuffer + 5);
-size_t expected = CMD_HEADER_SIZE + 5 + payloadLen + 4; // command packets
-// only test end-marker / CRC once receiveIndex == expected
-```
-
-### CR-04: PENDING commands never time out on transmit failure — unbounded retry storm blocks the event loop and exhausts slots
-
-**File:** `src/command_sender.cpp:163-173`
-**Issue:** In `process()`, a `PENDING` command that fails to transmit (e.g., E32 absent or AUX stuck low — `transmit()` returns false after ~1 s of AUX polling) stays `PENDING`. `retryCount` is only incremented in `retryCommand()`, which is reachable only from the `SENT` timeout branch. So a PENDING command retries **every `process()` call forever**, each attempt blocking ~1 s in `E32LoRa::transmit()`'s `waitForAuxHigh(1000)`. Consequences: the base-station `loop()` (`main_basestation.cpp:322-341`) spends nearly all its time inside `CmdSender().process()`, starving `server.handleClient()`; five such commands fill all `MAX_PENDING_COMMANDS` slots permanently; no TIMEOUT/FAILED state is ever reached and no statistics reflect the failure. With the radio disconnected the web UI becomes effectively unusable.
-**Fix:** Apply retry accounting to the initial-send failure path:
-```cpp
-if (cmd->state == CommandState::PENDING) {
-    if (transmitCommand(cmd)) {
-        cmd->state = CommandState::SENT;
-        cmd->sendTime = currentTime;
-        commandsSent++;
-    } else {
-        cmd->retryCount++;
-        cmd->lastRetryTime = currentTime;
-        if (cmd->retryCount > maxRetries) {
-            cmd->state = CommandState::FAILED;
-            pendingCommandCount--;
-            commandsFailed++;
-        }
-    }
-}
-```
+Phase 1 does not transmit images, so today's visible impact is bookkeeping and camera churn — but the commanded-control contract this phase exists to deliver ("user disables auto-capture → no automatic captures") does not hold.
+**Fix:** Remove the legacy capture block from `processCamera()` (the telemetry packet it builds goes to the stubbed `LoRaComm` path and is never transmitted), or gate it behind an explicit debug flag. If any periodic capture is kept, route its ID through `AutoCap().allocateImageId()` and make `AutoCap` the only capture trigger.
 
 ## Warnings
 
-### WR-01: E32 transmit blocks up to 7 seconds inside the main loop; AUX-low wait can also false-fail short packets
+### WR-10: Length-validation window (commands 201-224, responses 51-225) emits header/body-mismatch packets that the serializer reports as success — and the regression harness certifies the malformed boundary as valid
+
+**File:** `src/command_protocol.cpp:50-54,75,150-152,172` (with `scripts/verify_protocol_roundtrip.mjs:271-274`)
+**Issue:** `serializeCommand()` guards with `cmd.payloadLength > CMD_MAX_PACKET_SIZE - 16` (=224) but only copies the payload when `cmd.payloadLength <= CMD_MAX_PAYLOAD_SIZE` (=200). For any payload of 201-224 bytes the size check passes, the payload copy is silently skipped, and the function returns `true` with a 16-byte packet whose header declares `bodyLen = 201..224`. Verified by running the transcribed serializer: `payload 201 -> packet 16 bytes, header declares bodyLen 201`. The receiver frames to `7 + 5 + bodyLen + 4` bytes that never arrive and silently drops the command. `serializeResponse()` has the same hole for `dataLength` 51-225 (only a packet-length check at line 152; copy guard is 50 at line 172). Unreachable via current callers — `createCommandPacket`/`createResponsePacket`/`createACK`/`createNACK`/`createStatus` all clamp — so this is a defense gap for future callers, not a live failure. However, harness clause (b) asserts `serializeCommand accepts the 224-byte payload boundary (240-byte packet)` — the packet it blesses is actually the malformed 16-byte one, and the label's "240-byte packet" claim is false. The test locks in the defect instead of guarding against it.
+**Fix:** In `serializeCommand`, reject `cmd.payloadLength > CMD_MAX_PAYLOAD_SIZE` (which subsumes the 240-byte packet bound: 7+5+200+4 = 216 ≤ 240); in `serializeResponse`, reject `resp.dataLength > CMD_MAX_RESPONSE_DATA`. Return `false` rather than skipping the copy. Update harness clause (b) to test the real boundaries (200 accepted / 201 rejected) and add a shape assertion that the accepted packet's length equals `16 + payloadLength`.
+
+### WR-01 (carried, unfixed): E32 transmit blocks up to 7 seconds inside both main loops; AUX-low race can false-fail short transmissions
 
 **File:** `src/e32_lora.cpp:158-202`
-**Issue:** `transmit()` performs `waitForAuxHigh(1000)` + `waitForAuxLow(1000)` + `waitForAuxHigh(5000)` — up to 7 s of `delay(10)` polling inside the single-threaded event loop, violating the project constraint "Single-threaded event loop (no blocking)". On the balloon this stalls telemetry and the watchdog feed (`main_balloon.cpp:241-244`) during every command response; on the base station it freezes the web server during every send/retry. Additionally, `serial->flush()` returns after the UART drains, by which time a short packet may already have completed its air time and AUX may be back high — `waitForAuxLow` then times out and a **successful** transmission is reported as failure (counted in `transmitErrors`, drives CR-04's retry storm and false NACK behavior).
-**Fix:** Convert to a non-blocking AUX state machine (sample `digitalRead(auxPin)` in `process()`), or at minimum: check AUX high once before write, drop the `waitForAuxLow` step, and cap the post-write wait at an air-time-derived bound. Do not treat "AUX never observed low" as failure.
+**Issue:** Unchanged since the last review: `transmit()` performs `waitForAuxHigh(1000)` + `waitForAuxLow(1000)` + `waitForAuxHigh(5000)` — up to 7 s of `delay(10)` polling. On the base station this runs inside `CmdSender().process()` from `loop()` (`main_basestation.cpp:404`), freezing `server.handleClient()` during every send and retry (against the 5-second UI responsiveness constraint); on the balloon it runs inside `CmdHandler().process()` (`command_handler.cpp:616` sends each response), stalling the 10 Hz loop and the watchdog feed between `Debug.feedWatchdog()` calls. The AUX-low race also stands: `serial->flush()` returns after the UART drains, by which time a short packet's air time may be complete and AUX back high — `waitForAuxLow` then times out and a successful transmission is reported as failure, driving the (now correctly bounded) retry path.
+**Fix:** As previously recommended: non-blocking AUX state machine, or at minimum drop the `waitForAuxLow` step and treat "AUX never observed low" as success when the write completed.
 
-### WR-02: E32 configuration API contradicts the E32-900T30D datasheet — will fail on hardware bring-up
+### WR-02 (carried, unfixed): E32 configuration API contradicts the E32-900T30D datasheet
 
 **File:** `src/e32_lora.cpp:204-222, 264-344, 425-443`
-**Issue:** Multiple datasheet violations in the (currently uncalled) config path:
-- `writeConfig()` (line 290) sends 6 raw bytes with **no `0xC0` command prefix**. The E32 config-write frame is `C0 ADDH ADDL SPED CHAN OPTION`. It also encodes the address as 4 bytes (`addressHigh`/`addressLow` are `uint16_t` each) when the module address is `ADDH`+`ADDL` (1 byte each), and omits channel and option bytes. Any call writes garbage to the module's register 0.
-- `setParameters()` (line 316) initializes `E32Config` partially (channel, option, etc. uninitialized) and hardcodes `addressHigh=0x0000, addressLow=0xFFFF`, which through the broken `writeConfig` layout becomes `SPED=0xFF, CHAN=0xFF`.
-- `readConfig()` (line 264) sends the correct `C1 C1 C1` but never parses the 6-byte reply into `config` — returns `true` with an untouched out-parameter (misleading API contract).
-- `transmitToAddress()` (line 204) prepends a 4-byte address prefix; E32 fixed transmission uses a 3-byte prefix (`ADDH ADDL CHAN`). Also uses a stack VLA `uint8_t buffer[length + 4]` with no length bound.
-- `enterConfigMode()` (line 425) saves `previousMode` but never restores it — `exitConfigMode()` always returns to MODE_NORMAL regardless of prior state (dead variable, wrong restore).
-**Fix:** Implement frames per datasheet: write `{0xC0, addh, addl, sped, chan, option}` in MODE_SLEEP; read reply `{0xC1, addh, addl, sped, chan, option}` and populate the struct; use a 3-byte fixed-TX prefix; restore `previousMode` on exit; replace the VLA with a bounded stack buffer or `std::array`.
+**Issue:** Unchanged and still uncalled: `writeConfig()` sends 6 raw bytes with no `0xC0` command prefix and a wrong address layout (E32 frame is `C0 ADDH ADDL SPED CHAN OPTION`, addresses are 1 byte each); `setParameters()` passes a partially-initialized `E32Config`; `readConfig()` sends `C1 C1 C1` but never parses the reply into `config`; `transmitToAddress()` uses a 4-byte prefix (E32 fixed TX uses 3: `ADDH ADDL CHAN`) plus an unbounded stack VLA; `enterConfigMode()` still saves `previousMode` without restoring it. Any future hardware bring-up that calls these writes garbage to the module.
+**Fix:** Implement the datasheet frames as previously specified, or delete the config API until it is needed so it cannot be trusted by mistake.
 
-### WR-03: cancelCommand double-decrements pendingCommandCount for already-completed commands
+### WR-06 (carried, unfixed): Start-byte resync flaw — a doubled `0xAA` loses the packet start (both receivers)
 
-**File:** `src/command_sender.cpp:119-134`
-**Issue:** `findTrackedCommand()` matches any non-IDLE slot, including ACKED/FAILED/TIMEOUT entries that were already decremented when they completed. Calling `cancelCommand()` on such a slot decrements `pendingCommandCount` a second time; as a `uint8_t` it underflows to 255, making `hasPendingCommands()` permanently true and corrupting status reporting (and `printStatus`) until reboot.
-**Fix:**
-```cpp
-TrackedCommand* cmd = findTrackedCommand(sequenceNumber);
-if (!cmd || cmd->state == CommandState::ACKED ||
-    cmd->state == CommandState::FAILED || cmd->state == CommandState::TIMEOUT) {
-    return false; // nothing active to cancel
-}
-cmd->state = CommandState::FAILED;
-pendingCommandCount--;
-```
+**File:** `src/command_handler.cpp:633-640`, `src/command_sender.cpp:270-277`
+**Issue:** Unchanged by the CR-03 rewrite: while hunting for the start pair with `receiveIndex == 1` (already saw `0xAA`), any byte other than `0x55` — including another `0xAA` — falls into the `else` branch that resets `receiveIndex = 0` and discards the current byte. A stream `AA AA 55 ...` (noise byte ahead of a genuine preamble, or a misaligned stream after a dropped packet) consumes the real start marker and loses the packet. The length-driven framing does not help here because framing never begins.
+**Fix:** Re-anchor instead of discarding: `receiveIndex = (byte == CMD_START_BYTE1) ? 1 : 0;`. The mjs harness's `makeLengthDrivenReceiver` transcribes this behavior too — update it in the same change and add an `AA AA 55` resync clause.
 
-### WR-04: Retry-delay logic is dead code; failed retries re-fire immediately with no pacing
+### WR-08 (carried, unfixed): A second command arriving in the same read burst silently overwrites the pending one
 
-**File:** `src/command_sender.cpp:196-200, 350-362`
-**Issue:** The "Check for retry delay" block (lines 196-200) is a no-op — its only action, `continue`, is the last statement of the loop body, and the timeout branch above it (line 176) runs first without consulting `lastRetryTime`. Consequently `retryDelayMs` is never enforced. Worse, `retryCommand()` only updates `sendTime` when the transmit **succeeds**; when it fails, `sendTime` stays stale, so the very next `process()` pass sees the timeout condition still true and retries again immediately. With each failed attempt blocking ~1 s in the driver, a bad link burns through all retries in rapid succession and races past the intended pacing.
-**Fix:** Honor `lastRetryTime` in the timeout branch before retrying (`if (currentTime - cmd->lastRetryTime < retryDelayMs) continue;` placed before the retry decision), and update `sendTime`/`lastRetryTime` on both success and failure of the retry transmit.
+**File:** `src/command_handler.cpp:671-679` (single-slot `pendingCommand`, `include/command_handler.h:69`)
+**Issue:** Still present after the framing rewrite: `process()` drains all available bytes before executing, so two commands that arrive back-to-back (or a base-station retry landing while the first is queued) both pass through `processIncomingByte`, and the second unconditionally overwrites `pendingCommand.packet` (line 676). The first command is never executed and never NACKed; only the retry machinery on the base station recovers it, after a full D-05 timeout window.
+**Fix:** When `hasCommand` is already true, either queue the newcomer or reply `NACK_BUSY` for the new sequence number instead of overwriting.
 
-### WR-05: STATUS response type is destroyed end-to-end; sender would treat a real STATUS as failure
+### WR-09 (carried, unfixed): Packet type byte never validated on either side; response length fields are asymmetric
 
-**File:** `src/command_handler.cpp:93-106`, `src/command_sender.cpp:259-278`
-**Issue:** Two compounding defects: (1) `CommandHandler::process()` wraps every successful result in `createACK(...)`, discarding `result.responseType` — `handleGetStatus()` carefully sets `ResponseType::STATUS` (line 554) but it goes on the wire as ACK, so the protocol's STATUS type can never be observed. (2) `CommandSender::handleResponse()` treats every non-ACK response (including STATUS) as FAILED. Today GET_STATUS "works" only because of defect (1) masking defect (2); fixing either side alone breaks status queries, and no future status/diagnostics extension can use the typed path.
-**Fix:** Send the actual result type: `response = createResponsePacket(result.responseType, seq, result.responseData, result.responseLength);` and in `handleResponse()`, treat `ACK` and `STATUS` as success (STATUS = success-with-payload), NACK variants as failure.
-
-### WR-06: Start-byte resync flaw — a doubled `0xAA` loses the packet start
-
-**File:** `src/command_handler.cpp:600-609`, `src/command_sender.cpp:209-218`
-**Issue:** When hunting for the start sequence with `receiveIndex == 1` (already saw `0xAA`), any byte other than `0x55` — including another `0xAA` — falls into the `else` branch that resets `receiveIndex = 0` and **discards the current byte**. A stream `AA AA 55 ...` (e.g., noise byte before a genuine preamble, or misaligned stream after a dropped packet) loses the real start: the second `AA` is consumed, the following `55` no longer matches at index 0, and the packet is missed entirely.
-**Fix:** Re-anchor instead of discarding:
-```cpp
-} else {
-    receiveIndex = (byte == CMD_START_BYTE1) ? 1 : 0;
-}
-```
-
-### WR-07: Web handlers validate after integer truncation — crafted POST values bypass range checks
-
-**File:** `src/main_basestation.cpp:527-531, 552-554, 577-579`
-**Issue:** `handleSetQuality()` does `uint8_t quality = server.arg("quality").toInt();` and then checks `quality > 63`. `toInt()` returns `long`; the cast happens first. A crafted POST of `quality=300` truncates to 44 and passes; `quality=256` becomes 0 (best-quality JPEG — the exact opposite of intent). Same pattern in brightness/contrast: `brightness=258` truncates to 2 and is accepted. The HTML `max` attributes constrain only the form UI, not the endpoint. On an unauthenticated AP-served control panel, this is the input-validation backdoor for the command path.
-**Fix:** Validate in the wide type before narrowing:
-```cpp
-long q = server.arg("quality").toInt();
-if (q < 0 || q > 63) { sendResponse(400, "Error", "Invalid quality value (0-63)"); return; }
-uint8_t quality = static_cast<uint8_t>(q);
-```
-
-### WR-08: A second command received before the first is processed overwrites it silently
-
-**File:** `src/command_handler.cpp:619-627, 82`
-**Issue:** The handler keeps exactly one `PendingCommand`. `processIncomingByte()` sets `hasCommand = true` unconditionally on a valid packet; if a command is already pending (hasCommand true, not yet executed in this loop pass), the new packet overwrites `pendingCommand.packet` and the first command vanishes — no execution, no NACK, no statistics. The base station will retry it, but balloon-side behavior under quick successive commands (e.g., user clicking two controls) is lose-commands-silently.
-**Fix:** When `hasCommand` is already true, either queue a second slot or reply NACK_BUSY for the new sequence instead of overwriting:
-```cpp
-if (!hasCommand) {
-    pendingCommand.packet = cmd;
-    pendingCommand.receivedTime = millis();
-    hasCommand = true;
-} else {
-    // reject with NACK_BUSY for cmd.sequenceNumber
-}
-```
-
-### WR-09: Deserializers never validate the packet type byte; serializeResponse length handling is asymmetric
-
-**File:** `src/command_protocol.cpp:113-114, 151-176, 210-217`
-**Issue:** `deserializeCommand()` accepts any `buffer[2]` (never checked against `PACKET_TYPE_COMMAND` 0x10) and `deserializeResponse()` likewise ignores it (never checked against 0x11). A response replayed into a command parser — or any future second protocol on the same link — passes all checks. Related asymmetry: `serializeResponse()` writes `resp.dataLength` as 16-bit into the header (line 162) but only 8-bit in the body (line 170), and when `dataLength > CMD_MAX_RESPONSE_DATA` it silently skips the payload while the header still advertises the larger length — the receiver then zeroes the length instead of the sender rejecting the packet.
-**Fix:** In `deserializeCommand`, require `static_cast<PacketType>(buffer[2]) == PACKET_TYPE_COMMAND` (and `== 0x11` in `deserializeResponse`). In `serializeResponse()`, return `false` when `resp.dataLength > CMD_MAX_RESPONSE_DATA`, and keep header/body length fields the same width.
+**File:** `src/command_protocol.cpp:113, 161-169, 210-217`; framing in `src/command_handler.cpp:655`, `src/command_sender.cpp:291`
+**Issue:** Unchanged: `deserializeCommand()` stores `buffer[2]` into `cmd.type` without checking it against `PACKET_TYPE_COMMAND` (0x10), `deserializeResponse()` likewise ignores it, and the framing layers assume a body overhead (5 vs 4) from the packet's direction rather than its type byte. A command packet reaching the base station's response-flavored receiver (second base station, echo, future relay) is misframed by one byte rather than rejected. `serializeResponse()` also still writes `dataLength` 16-bit into the header (line 161) but 8-bit in the body (line 169) — the deserializer reads only the body byte, so the two fields can disagree for dataLength > 255 (currently impossible, but the asymmetry invites drift).
+**Fix:** Check `buffer[2]` against the expected type in framing (before the body-overhead assumption) and in both deserializers; make both response length fields the same width.
 
 ## Info
 
-### IN-01: Hardcoded E32 pin literals duplicate sensor_pins.h macros
+### IN-01 (carried): Hardcoded E32 pin literals duplicate sensor_pins.h macros
 
-**File:** `src/main_balloon.cpp:380`
-**Issue:** `E32LoRaModule().begin(loraSerial, 48, 14, 19, 20, 21, 9600)` hardcodes values that already exist as `LORA_RX_PIN/LORA_TX_PIN/LORA_M0_PIN/LORA_M1_PIN/LORA_AUX_PIN` in the included `sensor_pins.h`. Values currently match; any pin change in the header silently diverges from the runtime wiring.
-**Fix:** Use the macros (and a `LORA_BAUD_RATE` define, which `sensor_pins.h` lacks — add one).
+**File:** `src/main_balloon.cpp:381` — `E32LoRaModule().begin(loraSerial, 48, 14, 19, 20, 21, 9600)` still hardcodes values that exist as `LORA_RX_PIN/LORA_TX_PIN/LORA_M0_PIN/LORA_M1_PIN/LORA_AUX_PIN` in `include/sensor_pins.h:33-37`. Values currently match. `main_basestation.cpp:24-29` defines its own matching set (acceptable — it does not include sensor_pins.h). **Fix:** Use the macros in main_balloon.cpp; add a `LORA_BAUD_RATE` define.
 
-### IN-02: Hardcoded WiFi credential and unauthenticated control endpoints
+### IN-02 (carried): Hardcoded WiFi credential and unauthenticated control endpoints
 
-**File:** `src/main_basestation.cpp:38-41, 391-397`
-**Issue:** AP SSID/password are hardcoded (`"balloontrack"`), and all control endpoints (`/capture`, `/set-*`) accept commands with no authentication. Defensible for a field device on its own AP, but anyone with the (source-published) password can drive the camera. Combined with WR-07, validation is the only protection on these endpoints.
-**Fix:** Acceptable for Phase 1 if documented; consider a device-unique generated password at first boot.
+**File:** `src/main_basestation.cpp:38-41` — AP SSID/password hardcoded (`"balloontrack"`), all control endpoints accept commands with no authentication. Defensible for a field device on its own AP; now that WR-07's range checks are fixed, validation is the only protection. **Fix:** Acceptable for Phase 1 if documented; consider a device-unique generated password.
 
-### IN-03: /status reports "connected": true unconditionally
+### IN-04 (carried, partially fixed): Dead code across the modules
 
-**File:** `src/main_basestation.cpp:598`
-**Issue:** The JSON always reports connected=true, so the UI LED is permanently green even with the balloon link dead — the one indicator that would tell the operator commands are going nowhere never fires. The sender already tracks timeouts that could feed this field.
-**Fix:** Report link health from real signal, e.g. `millis() - lastAckTime < 15000` or "no timeouts in the last N commands".
+**Fixed since last review:** `lastCommandSequence` is now read (processLoRa/handleStatus); `lastStatus` is still write-only. **Still dead:** `findOldestCommand` (`command_sender.cpp:373-386`, never called), `updateLED` (`main_basestation.cpp:1114-1123`, never called — the blink lives in `updateStatus`), `lastCommandTime` (`main_basestation.cpp:62`, written at :700, never read), `lastStatus` (`:375,383` written, never read), `sendHTML` (`:1110-1112`), the phantom `PacketHeader header` members in `CommandPacket`/`ResponsePacket` (`include/command_protocol.h:75,91` — hand-rolled serialization ignores them), `calculateConfigCRC` (`src/e32_lora.cpp:474-482`), `previousMode` (`e32_lora.cpp:427`). **Fix:** Remove or wire up; the phantom header fields especially mislead readers about the wire format.
 
-### IN-04: Dead code across the new modules
+### IN-05 (carried, pre-existing): Duplicate PacketType enumerator values; protocol constant duplicates the new enum entry
 
-**File:** `src/command_sender.cpp:295-308` (`findOldestCommand` never called), `src/main_basestation.cpp:633-642` (`updateLED` never called; the blink lives in `updateStatus`), `src/main_basestation.cpp:63-64,509-510` (`lastCommandTime`/`lastCommandSequence` written, never read), `include/command_protocol.h:75,91` (`PacketHeader header` member never populated or serialized — hand-rolled 7-byte header is used instead), `src/e32_lora.cpp:474-482` (`calculateConfigCRC` never called), `src/e32_lora.cpp:427` (`previousMode` saved, never used — see WR-02).
-**Fix:** Remove or wire up; the phantom `PacketHeader` field especially misleads readers into thinking struct layout defines the wire format.
+**File:** `include/common_types.h:41-48` — `GPS=TELEMETRY (0x02)`, `CAMERA_THUMB=GPS_DATA (0x03)`, `CAMERA_FULL=CAMERA_DATA (0x04)`, `ACK=COMMAND_ACK (0x06)`, `NACK=STATUS (0x07)`, `PING=DEBUG (0x08)` remain aliased. Related new drift: `include/command_protocol.h:14` defines `PACKET_TYPE_COMMAND = static_cast<PacketType>(0x10)` while the enum already carries `COMMAND = 0x10` — two definitions of the same value in different headers. **Fix:** Remove the alias block; use the enum value for `PACKET_TYPE_COMMAND`.
 
-### IN-05: Duplicate PacketType enumerator values invite aliasing (pre-existing)
+### IN-06 (carried): Per-byte 100 µs delay in E32LoRa::read
 
-**File:** `include/common_types.h:26-49`
-**Issue:** `GPS = TELEMETRY (0x02)`, `CAMERA_THUMB = GPS_DATA (0x03)`, `CAMERA_FULL = CAMERA_DATA (0x04)`, `ACK = COMMAND_ACK (0x06)`, `NACK = STATUS (0x07)`, `PING = DEBUG (0x08)`. Any `switch` over `PacketType` cannot distinguish them and will not compile if both aliases are cased. The newly added `COMMAND (0x10)` / `RESPONSE (0x11)` do not collide — good — but the enum remains a trap. Related: the header's "Pin Validation" comment in `sensor_pins.h` claims no conflicts while listing camera GPIO 4 which is also `BATTERY_SENSE_PIN` (see IN-08).
-**Fix:** Remove the alias block or move it to a separate legacy enum namespace.
+**File:** `src/e32_lora.cpp:246` — `delayMicroseconds(100)` per byte in the (still unused) bulk-read overload; ~25 ms of blocking for a 256-byte burst with no stated purpose. **Fix:** Delete the delay.
 
-### IN-06: Per-byte 100 µs delay in E32LoRa::read
+### IN-07 (carried): Init failures are undetectable
 
-**File:** `src/e32_lora.cpp:246`
-**Issue:** `delayMicroseconds(100)` inside the read loop adds ~25 ms of blocking for a 256-byte burst, with no stated purpose at 9600 baud (UART FIFO already buffers). Note this bulk-read overload is currently unused — the mains use the single-byte `read()` — but it will block when adopted.
-**Fix:** Delete the delay; rely on `available()`/FIFO.
+**File:** `src/main_balloon.cpp:380-398`, `src/e32_lora.cpp:74-80` — `E32LoRa::begin()` still returns true whenever a serial pointer exists (AUX-low only logs a warning), and `initializeSubsystems()` sets `appState.communicationActive = true` unconditionally (line 398) even when the E32/CmdHandler/AutoCap begin calls above it failed. Nothing downstream can distinguish a configured link from a dead one. **Fix:** Propagate AUX failure into begin()'s return; gate `communicationActive` on the Phase-1 begins succeeding.
 
-### IN-07: Init failures are undetectable — communicationActive set regardless, E32 begin cannot fail on missing module
+### IN-08 (carried, pre-existing): GPIO 4 double-booked between battery ADC and camera I2C data
 
-**File:** `src/main_balloon.cpp:378-391`, `src/e32_lora.cpp:74-90`
-**Issue:** `E32LoRa::begin()` returns true whenever a serial pointer exists; AUX-low only logs a warning, so a completely absent module "initializes successfully". `initializeSubsystems()` then sets `appState.communicationActive = true` unconditionally, even on the CmdHandler failure path. Downstream, nothing can distinguish a configured link from a dead one.
-**Fix:** Propagate AUX-check failure (or a later readConfig probe) into the return value, and gate `communicationActive` on both begins succeeding.
+**File:** `include/sensor_pins.h:46` (`BATTERY_SENSE_PIN = 4`) vs `include/camera_pins.h` (`SIOD_GPIO_NUM = 4` for CAMERA_MODEL_ESP32S3_EYE). `checkHardwareStatus()` calls `analogRead(4)` before camera init; any periodic battery sampling would corrupt camera I2C. Not introduced by this phase, but it will bite during hardware tests. **Fix:** Move battery sense to a free GPIO or drop the boot-time ADC read.
 
-### IN-08: GPIO 4 double-booked between battery ADC and camera I2C data (pre-existing, cross-file)
+### IN-09 (new): GET_STATUS is implemented balloon-side but has no caller anywhere — the truthful-status work is unreachable end-to-end
 
-**File:** `src/main_balloon.cpp:577` with `include/sensor_pins.h:46` and `include/camera_pins.h:301`
-**Issue:** `BATTERY_SENSE_PIN = 4` collides with `SIOD_GPIO_NUM = 4` (camera SCCB SDA for `CAMERA_MODEL_ESP32S3_EYE`). `checkHardwareStatus()` calls `analogRead(4)` before camera init, and any future periodic battery sampling would corrupt camera I2C. The "No conflicts detected" comment in `sensor_pins.h` omits pin 4 from its sensor list. Not introduced by this phase, but it will bite during Phase 1 hardware tests.
-**Fix:** Move battery sense to a truly free GPIO (e.g., 3 or 41) or drop the boot-time ADC read.
+**File:** `src/command_handler.cpp:572-595`, `src/main_basestation.cpp` (no endpoint calls `sendCommand(CameraCommand::GET_STATUS)`)
+**Issue:** Plan 01-04 invested in making GET_STATUS truthful (tracked image ID, auto-capture state, live settings) and 01-03 added the "Get Status" display name for queue rows, but no base-station code path ever sends GET_STATUS and the STATUS response payload is never parsed by the sender (it only checks the response type). The feature cannot be exercised in UAT and the STATUS wire format (including the struct issues in IN-10) ships unvalidated. Consistent with the plans (no acceptance criterion requires a UI trigger), so recorded as info, not a gap violation. **Fix:** Either add a minimal trigger (a "Refresh status" button or a periodic GET_STATUS poll feeding the UI) before Phase 2 builds on the payload, or mark the command reserved in the protocol header.
+
+### IN-10 (new): ResponseStatusData is memcpy'd as a raw struct — padding bytes and native endianness on the wire
+
+**File:** `src/command_handler.cpp:586` (`memcpy(result.responseData, &status, sizeof(ResponseStatusData))`), `include/command_protocol.h:160-169`
+**Issue:** `ResponseStatusData` serializes by raw struct copy: `sizeof` is 32 on ESP32 (29 field bytes + alignment padding; the padding's content is unspecified even after `{}` initialization), the CRC therefore covers bytes nobody set, and all multi-byte fields travel native little-endian — inconsistent with the protocol's explicit big-endian discipline (`writeUint16`/`writeUint32`, correctly used for the auto-capture interval payload per the D-09 comment at `main_basestation.cpp:933-936`). Harmless today because the base station never parses the payload, but any future reader using `readUint16/readUint32` gets garbage, and the two sides must share struct layout exactly. Related doc drift: the `PayloadSet*` structs (`command_protocol.h:107-151`) declare 4-byte `reserved`-padded layouts while the actual wire payloads are 1 byte (handlers read `payload[0]` only) — the structs describe a format that is not the one sent. **Fix:** Serialize status fields explicitly (big-endian, fixed offsets) like the auto-capture payload; delete or correct the unused payload structs.
+
+### IN-11 (new): Base-station display nits — chip-latch races under slot churn, physical LED not link-truthful
+
+**File:** `src/main_basestation.cpp:1058-1071, 510-521, 504-507`
+**Issue:** (1) The auto-capture chip latch scans queue entries for an ACKed auto-capture command; ACKED slots are evicted by `findFreeSlot` when all 5 slots are occupied, so under rapid clicking (6+ commands within a 1 s poll) the ACKed enable/disable can be evicted before any `/status` poll sees it — the chip then shows a stale ON/OFF indefinitely. (2) The latched interval comes from `appState.autoCaptureIntervalSec`, which is set at *send* time: if a newer enable with a different interval is sent before an older enable ACKs, the older ACK latches the newer interval until the newer command resolves. (3) The physical STATUS_LED blinks on a 5 s timer regardless of link state — IN-03's LED truth was delivered for the web LED only. (4) `static_cast<uint16_t>(acked)` (line 504) truncates the 32-bit acked counter for change detection; benign except at exact 65536-delta boundaries. All narrow/transient; none misstate a command outcome. **Fix:** Latch auto-capture ACKs inside `handleResponse` (event-driven, no polling race) rather than in the status handler; derive the physical LED from the same computed link state as the web LED.
+
+### IN-12 (new): NACK_BUSY used as a catch-all — camera-not-ready blocks GET_STATUS and AUTO_CAPTURE_DISABLE; generic capture failures typed as BUSY
+
+**File:** `src/command_handler.cpp:139-144, 218-222, 529`
+**Issue:** `executeCommand()` gates every command on `camera->isReady()` and returns `NACK_BUSY` — including GET_STATUS (reads cached settings, needs no camera) and AUTO_CAPTURE_DISABLE (timer-only). With a failed camera init, disable can never be ACKed, so the UI permanently shows the disable command as Failed while the balloon's timer state is unknowable. `handleCaptureNow()` also returns `NACK_BUSY` with message "Capture failed" for a generic capture failure — wrong type (nothing is busy). Minor: `handleAutoCaptureEnable` hardcodes `1000`/`3600000` (line 529) instead of the `AUTO_CAPTURE_MIN/MAX_INTERVAL_MS` constants the auto_capture.h comment says it mirrors. **Fix:** Apply the camera-ready gate only to commands that act on the sensor; type generic failures as NACK; use the shared interval constants.
+
+### IN-13 (new): Retry-cadence comment vs actual behavior; harness not wired into any automated gate
+
+**File:** `src/command_sender.cpp:196-209`, `include/command_protocol.h:185-186`, `scripts/verify_protocol_roundtrip.mjs`
+**Issue:** (1) The D-07 comments describe "2000/4000/8000ms before retries 1/2/3", but the backoff guard is combined with the D-05 ACK-timeout window, so the effective spacing between attempts is `max(ackTimeout, backoff)`: for SETTINGS commands that is 5000/5000/8000 ms, not 2000/4000/8000 (only CAPTURE_NOW realizes the documented cadence, since backoff ≥ its 2000 ms timeout at every attempt). Behavior is paced and bounded — this is a documentation accuracy issue, and it means SETTINGS commands retry somewhat *later* than the documented schedule. (2) The regression harness passes (re-run for this review, 10/10) but is invoked only manually — nothing in the repo (no package.json, no CI hook, no plan verify step outside 01-02) runs it, so a future wire-format change can skip it despite the script's own "MUST be updated" contract. **Fix:** Correct the comments to state the composed cadence; add the harness to a pre-commit or CI step alongside `pio run`.
 
 ---
 
-_Reviewed: 2026-08-17T23:54:09Z_
+## Verification of prior findings (2026-08-17 review)
+
+| Prior ID | Status in current code |
+|---|---|
+| CR-01 | **Fixed** — real sequence byte written at header offset 3 before CRC (`command_protocol.cpp:61`); harness sweep proves all 65535 sequences pass |
+| CR-02 | **Fixed** — `transmitCommand` uses `uint8_t buffer[CMD_MAX_PACKET_SIZE]` (`command_sender.cpp:415`); shared constant in `command_protocol.h:177` |
+| CR-03 | **Fixed** — both receivers frame by header-announced length, end marker tested only at the framed position (`command_handler.cpp:644-683`, `command_sender.cpp:281-317`); harness clauses (c)/(e) lock it in |
+| CR-04 | **Fixed** — PENDING transmit failures count attempts, pace via backoff, and terminate in FAILED (`command_sender.cpp:221-238`) |
+| WR-03 | **Fixed** — cancelCommand decrements only from PENDING/SENT (`command_sender.cpp:148-168`) |
+| WR-04 | **Fixed** — backoff guard executes above both state branches; `retryCommand` restarts the window on both outcomes (`command_sender.cpp:196-209, 428-442`) — cadence nuance in IN-13 |
+| WR-05 | **Fixed** — handler sends `result.responseType`; sender treats ACK and STATUS as success (`command_handler.cpp:98-110`, `command_sender.cpp:335-340`) |
+| WR-06 | Open (see above) |
+| WR-07 | **Fixed** — all web handlers range-check the wide `long` before narrowing (`main_basestation.cpp` handlers) |
+| WR-08 | Open (see above) |
+| WR-09 | Open (see above) |
+| WR-01, WR-02 | Open (see above) |
+| IN-03 | **Fixed** — `connected`/`linkText` computed from ACK recency and terminal outcomes (`main_basestation.cpp:1031-1054`) |
+| IN-01, IN-02, IN-04, IN-05, IN-06, IN-07, IN-08 | Open (IN-04 partially fixed; see above) |
+
+---
+
+_Reviewed: 2026-08-18T03:37:35Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
