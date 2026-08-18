@@ -304,4 +304,9 @@ ImageManifestPacket createManifestPacket(const ImageManifestBody& body);
 // the FIRST field and copies dataLen payload bytes
 ImageChunkPacket createChunkPacket(uint16_t imageId, uint16_t chunkIndex, const uint8_t* data, uint8_t dataLen);
 
+// Create a telemetry beacon packet — assigns PACKET_TYPE_TELEMETRY_BEACON
+// (0x14) as the FIRST field (CR-01 lesson: the factory owns the wire type
+// byte; callers never assign packet.type by hand)
+TelemetryBeaconPacket createTelemetryBeaconPacket(const TelemetryBeaconBody& body);
+
 #endif // COMMAND_PROTOCOL_H

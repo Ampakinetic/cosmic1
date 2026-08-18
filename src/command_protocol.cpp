@@ -663,3 +663,11 @@ ImageChunkPacket createChunkPacket(uint16_t imageId, uint16_t chunkIndex, const 
 
     return packet;
 }
+
+TelemetryBeaconPacket createTelemetryBeaconPacket(const TelemetryBeaconBody& body) {
+    TelemetryBeaconPacket packet{};
+    packet.type = PACKET_TYPE_TELEMETRY_BEACON; // CR-01 lesson: the factory owns the wire type byte — FIRST field assigned
+    packet.body = body;
+
+    return packet;
+}

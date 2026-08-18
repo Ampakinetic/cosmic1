@@ -9,8 +9,9 @@
 
 // ===========================
 // Image TX Manager
-// Balloon Unit - Pushes thumbnails, announces fulls, services window pulls
-// Phase 2: Image Transmission (plan 02-01 push half + 02-02 pull half)
+// Balloon Unit - Pushes thumbnails, announces fulls, services window pulls,
+// beacons telemetry
+// Phase 2: Image Transmission (plan 02-01 push half + 02-02 pull half/beacon)
 // ===========================
 // Hybrid push/pull (D-17): after any capture (manual CAPTURE_NOW or interval),
 // the module takes PSRAM ownership of the full + thumbnail buffers and pushes
@@ -21,6 +22,15 @@
 // response to base window requests (IMAGE_WINDOW_REQUEST), FIFO in capture
 // order (D-19). Fulls larger than IMG_MAX_IMAGE_SIZE never arm — logged
 // skip, thumbnail still pushes (research Q4 / PRI-03).
+//
+// TX arbitration (Pattern 6, PRI-01): at each process() call the fixed
+// priority is (1) command responses — ahead by LOOP ORDER, since
+// CmdHandler().process() runs before ImageTx().process() in
+// processPacketHandling; (2) the 0x14 telemetry beacon when due (every
+// TELEMETRY_BEACON_INTERVAL_MS); (3) one chunk transmit (push or window
+// service). A beacon or response is never delayed by more than one chunk
+// transmit. The beacon branch and the chunk branch are mutually exclusive
+// within a pass — exactly one transmit per process() call.
 
 // Per-entry transfer state (02-02 extends the 02-01 vocabulary; the push
 // states are unchanged). After the thumbnail push completes, an entry with an
@@ -132,8 +142,19 @@ private:
     uint32_t nextEnqueueSeq;
     uint16_t lastEnqueuedImageId;
 
+    // Telemetry beacon state (PRI-01 / SC-5 — the 0x14 transmit side, 02-02
+    // Task 3). lastBeaconMs uses the wraparound-safe subtraction idiom and is
+    // advanced BEFORE each attempt (AutoCapture millis idiom) so a failed
+    // transmit cannot drive a tight retry loop; the next due cycle retries.
+    uint32_t lastBeaconMs;
+    uint16_t beaconSeq;      // monotonically increasing, wraps at 65535
+    bool firstBeaconLogged;  // transition-only logging: first beacon after boot
+
     // Poll side
     void enqueueCapture(uint16_t imageId);
+
+    // Beacon side — at most ONE transmit per call; returns transmit success
+    bool sendTelemetryBeacon();
 
     // Push/service side — at most ONE transmit per call
     void pushPending();

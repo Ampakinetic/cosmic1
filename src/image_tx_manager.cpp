@@ -1,5 +1,6 @@
 #include "image_tx_manager.h"
 #include "auto_capture.h"
+#include "sensor_manager.h"
 #include <esp_rom_crc.h>
 
 // Debug configuration
@@ -25,6 +26,9 @@ ImageTxManager::ImageTxManager()
     , initialized(false)
     , nextEnqueueSeq(0)
     , lastEnqueuedImageId(0)
+    , lastBeaconMs(0)
+    , beaconSeq(0)
+    , firstBeaconLogged(false)
 {
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
         entries[i] = ImageTxEntry{};
@@ -87,9 +91,79 @@ void ImageTxManager::process() {
         enqueueCapture(enqueueId);
     }
 
+    // TX arbitration (Pattern 6 / PRI-01): when the telemetry beacon is due
+    // it consumes this pass's single transmit and RETURNS before any chunk
+    // work — flight telemetry always wins the radio over image traffic.
+    // Command responses already outrank the beacon by LOOP ORDER
+    // (CmdHandler().process() runs before ImageTx().process()). Wraparound-
+    // safe millis subtraction; a beacon (or response) is never delayed by
+    // more than one chunk transmit (~250-400 ms).
+    if ((millis() - lastBeaconMs) >= TELEMETRY_BEACON_INTERVAL_MS) {
+        sendTelemetryBeacon();
+        return; // one transmit per pass — beacon XOR chunk, never both
+    }
+
     // Push discipline (Pattern 4): exactly ONE transmit per process() pass —
     // the E32 transmit is synchronous and costs ~250-400 ms of blocked loop
     pushPending();
+}
+
+// ===========================
+// Telemetry Beacon (PRI-01 / SC-5, 0x14 transmit side)
+// ===========================
+
+bool ImageTxManager::sendTelemetryBeacon() {
+    // Baseline BEFORE the attempt (AutoCapture millis idiom): a failed
+    // transmit cannot drive a tight retry loop — the next due cycle retries,
+    // and the failure is logged below rather than silently skipped.
+    lastBeaconMs = millis();
+
+    // Live sensor state — the same sources main_balloon feeds SysState
+    GPSData gps = Sensors().getGPSData();
+    BMP280Data bmp = Sensors().getBMP280Data();
+
+    // GPS validity: the same signal main_balloon uses for appState.gpsActive
+    bool gpsValid = (gps.satellites > 0);
+
+    TelemetryBeaconBody body{};
+    body.seq = beaconSeq++;
+    if (gpsValid) {
+        body.altitudeCm = static_cast<int32_t>(lroundf(gps.altitude * 100.0f));
+        body.latE6 = static_cast<int32_t>(lroundf(gps.latitude * 1000000.0f));
+        body.lonE6 = static_cast<int32_t>(lroundf(gps.longitude * 1000000.0f));
+    } else {
+        // No fix: still beacon — altitude/lat/lon zero, gpsValid clear. A
+        // stale gap in telemetry is worse than an invalid-flagged sample, and
+        // the base reports honestly from the flag.
+        body.altitudeCm = 0;
+        body.latE6 = 0;
+        body.lonE6 = 0;
+    }
+    body.tempCentiC = static_cast<int16_t>(lroundf(bmp.temperature * 100.0f));
+    body.flags = gpsValid ? 0x01 : 0x00;
+
+    TelemetryBeaconPacket pkt = createTelemetryBeaconPacket(body); // factory owns the 0x14 type byte
+
+    uint8_t buffer[CMD_MAX_PACKET_SIZE];
+    size_t length = 0;
+    bool ok = CommandProtocol::serializeTelemetryBeacon(pkt, buffer, length) &&
+              lora->transmit(buffer, length);
+
+    // Transition-only logging (not per beacon): the first beacon after boot
+    // and every transmit failure
+    if (!firstBeaconLogged) {
+        firstBeaconLogged = true;
+        if (DEBUG_IMAGE_TX) {
+            Serial.printf("ImageTx: telemetry beacon stream started (seq %u, %s)%s\n",
+                         static_cast<unsigned>(body.seq),
+                         gpsValid ? "gps valid" : "no gps fix",
+                         ok ? "" : " — transmit FAILED");
+        }
+    } else if (!ok) {
+        Serial.printf("ImageTx: telemetry beacon transmit FAILED (seq %u)\n",
+                     static_cast<unsigned>(body.seq));
+    }
+    return ok;
 }
 
 // ===========================
