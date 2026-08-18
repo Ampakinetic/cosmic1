@@ -45,6 +45,12 @@ enum class ImageTxEntryState : uint8_t {
     ANNOUNCE_FULL,            // thumbnail done; next transmit: the 0x12 FULL_IMAGE manifest (once)
     ANNOUNCED,                // full manifest emitted; serves chunks via window context only
     THUMB_PUSHED,             // parked: thumbnail done but full not armable (oversize / no buffer); eviction only
+    // SERVED (02-05 / CR-03 fix c): the FULL window whose clamped span reached
+    // fullTotalChunks — the base has been offered every full chunk at least
+    // once. The entry KEEPS both buffers (a tail-chunk loss must still be
+    // healable via a re-request, which re-opens ANNOUNCED), but is a
+    // PREFERRED eviction candidate under queue pressure.
+    SERVED,
 };
 
 // Outcome of arming a window — mapped by CommandHandler to the existing
@@ -105,6 +111,7 @@ struct ImageTxEntry {
     // no queue mutation.
     bool windowArmed;
     uint8_t  windowKind;      // ImageKind the armed window serves
+    bool windowEverArmed;     // any window (either kind) has armed on this entry — marks the active-pull context, the LAST-resort overflow-eviction class (02-05 / CR-03 fix c)
     uint16_t windowStart;     // first chunk index of the armed window
     uint16_t windowCount;     // chunks in the armed window
     uint16_t windowNextIndex; // next chunk index to transmit

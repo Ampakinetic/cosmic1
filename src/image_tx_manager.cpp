@@ -170,6 +170,29 @@ bool ImageTxManager::sendTelemetryBeacon() {
 // Enqueue (ownership transfer)
 // ===========================
 
+// Overflow-eviction class (02-05 / CR-03 fix c) — LOWER class evicted sooner:
+//   1 THUMB_PUSHED            parked, nothing left to deliver
+//   2 SERVED                  full offered through its tail; heal-only
+//   3 ANNOUNCED (!everArmed)  queued, no window airtime invested
+//   4 PUSH_THUMB_* / ANNOUNCE_FULL   push still in flight
+//   5 ANNOUNCED (everArmed)   the ACTIVE-PULL context, armed or between
+//                             windows — LAST resort (D-19)
+static uint8_t evictionClassOf(const ImageTxEntry& entry) {
+    switch (entry.state) {
+        case ImageTxEntryState::THUMB_PUSHED:
+            return 1;
+        case ImageTxEntryState::SERVED:
+            return 2;
+        case ImageTxEntryState::ANNOUNCED:
+            return entry.windowEverArmed ? 5 : 3;
+        case ImageTxEntryState::PUSH_THUMB_MANIFEST:
+        case ImageTxEntryState::PUSH_THUMB_CHUNKS:
+        case ImageTxEntryState::ANNOUNCE_FULL:
+        default:
+            return 4;
+    }
+}
+
 void ImageTxManager::enqueueCapture(uint16_t imageId) {
     ImageData img = Camera().getCurrentImage();
     if (!img.valid || img.buffer == nullptr) {
@@ -279,19 +302,39 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
         }
     }
     if (slot == nullptr) {
-        // Overflow: drop the OLDEST entry (lowest enqueue sequence) with a
-        // Serial warning — never silently
-        uint32_t oldestSeq = entries[0].enqueueSeq;
-        slot = &entries[0];
-        for (uint8_t i = 1; i < QUEUE_DEPTH; i++) {
-            if (entries[i].enqueueSeq < oldestSeq) {
-                oldestSeq = entries[i].enqueueSeq;
-                slot = &entries[i];
+        // Overflow: class-ranked eviction (02-05 / CR-03 fix c) — never free
+        // the active pull's target while any finished/parked/queued entry
+        // exists. Classes in eviction-PREFERENCE order; within a class the
+        // oldest (lowest enqueueSeq) entry goes. Every eviction is logged
+        // with its class — never silently. (ANNOUNCE_FULL rides class 4:
+        // like PUSH_THUMB_* it still has push work in flight — the one-time
+        // full manifest — and no pull can reference it yet.)
+        static constexpr uint8_t EVICT_CLASS_COUNT = 5;
+        ImageTxEntry* victim = nullptr;
+        uint8_t victimClass = 0;
+        for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+            if (!entries[i].used) {
+                continue;
+            }
+            uint8_t cls = evictionClassOf(entries[i]);
+            if (victim == nullptr || cls < victimClass ||
+                (cls == victimClass && entries[i].enqueueSeq < victim->enqueueSeq)) {
+                victim = &entries[i];
+                victimClass = cls;
             }
         }
-        Serial.printf("ImageTx: queue overflow (depth %u); dropping OLDEST entry image %u for image %u\n",
-                     static_cast<unsigned>(IMG_TX_QUEUE_DEPTH), slot->imageId, imageId);
-        freeEntry(*slot);
+        // slot == nullptr implies every entry is used, so victim is guaranteed
+        const char* className =
+            victimClass == 1 ? "parked THUMB_PUSHED" :
+            victimClass == 2 ? "SERVED (heal-only)" :
+            victimClass == 3 ? "queued, no airtime invested" :
+            victimClass == 4 ? "push in flight" :
+                               "ACTIVE-PULL context (last resort)";
+        Serial.printf("ImageTx: queue overflow (depth %u); evicting class %u (%s) entry image %u for image %u\n",
+                     static_cast<unsigned>(IMG_TX_QUEUE_DEPTH), victimClass, className,
+                     victim->imageId, imageId);
+        freeEntry(*victim);
+        slot = victim;
     }
     *slot = entry;
 
@@ -361,11 +404,29 @@ ImageTxEntry* ImageTxManager::findWindowServiceEntry() {
 }
 
 void ImageTxManager::pushPending() {
+    // Bounded interleaving (02-05 / CR-03 fix a): an armed window whose entry
+    // has waited longer than IMG_WINDOW_SERVICE_PREEMPT_MS PREEMPTS push work
+    // for this pass's single transmit. The armed entry's lastActivityMs
+    // advances only via its own transmits and re-arms, so a neighbor
+    // capture's push naturally ages it; preempting at 5000 ms — strictly
+    // below the base's 8000 ms IMG_WINDOW_STALL_MS, whose clock resets on
+    // every accepted chunk — means the base's stall can never trip while the
+    // balloon holds an armed window. PRI-01 non-regression: this preemption
+    // lives INSIDE the chunk branch — the beacon early-return in process()
+    // still runs first, and command responses still outrank both by loop order.
+    ImageTxEntry* starved = findWindowServiceEntry();
+    if (starved != nullptr &&
+        (millis() - starved->lastActivityMs) > IMG_WINDOW_SERVICE_PREEMPT_MS) {
+        serviceWindowChunk(*starved);
+        return; // one transmit per pass
+    }
+
     // D-19 transmit ordering within the chunk branch: push work (thumbnail
     // manifests/chunks and full announcements) outranks window service, so a
     // new capture's thumbnail pushes immediately even while an older entry's
     // window is mid-service — and the in-progress pull is never abandoned:
-    // its window context simply waits for the push work to drain.
+    // its window context simply waits for the push work to drain (bounded by
+    // the preemption above, never unbounded).
     ImageTxEntry* entry = findActiveEntry();
     if (entry != nullptr) {
         if (entry->state == ImageTxEntryState::PUSH_THUMB_MANIFEST) {
@@ -551,11 +612,12 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
 
     // Untrusted RF input (T-02-04): validate EVERYTHING before arming. Target
     // matching is KIND-SPLIT (D-22 / CR-01): FULL_IMAGE requests address
-    // ANNOUNCED entries (post-full-manifest, exactly as before); THUMBNAIL
-    // requests address any same-id entry whose thumbnail push provably
-    // finished (state past PUSH_THUMB_*) and that still owns thumbnail bytes
-    // — this admits THUMB_PUSHED oversize parks (whose full never announces)
-    // alongside ANNOUNCED entries, so thumbnail heals are servable end-to-end
+    // ANNOUNCED entries (post-full-manifest, exactly as before) and SERVED
+    // entries (tail re-requests re-open service — 02-05); THUMBNAIL requests
+    // address any same-id entry whose thumbnail push provably finished (state
+    // past PUSH_THUMB_*) and that still owns thumbnail bytes — this admits
+    // THUMB_PUSHED oversize parks (whose full never announces) alongside
+    // ANNOUNCED/SERVED entries, so thumbnail heals are servable end-to-end
     ImageTxEntry* target = nullptr;
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
         if (!entries[i].used || entries[i].imageId != imageId) {
@@ -567,7 +629,8 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
                 entries[i].state == ImageTxEntryState::PUSH_THUMB_CHUNKS) {
                 continue;
             }
-        } else if (entries[i].state != ImageTxEntryState::ANNOUNCED) {
+        } else if (entries[i].state != ImageTxEntryState::ANNOUNCED &&
+                   entries[i].state != ImageTxEntryState::SERVED) {
             continue;
         }
         if (target == nullptr || entries[i].enqueueSeq < target->enqueueSeq) {
@@ -624,8 +687,15 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     // Arm — idempotent (Pitfall 10): arming (re-)resets the cursor to
     // startChunk, so a duplicate or re-requested window simply re-sends the
     // same indices; no ID allocation, no queue mutation, no state corruption
+    if (!thumbWindow && target->state == ImageTxEntryState::SERVED) {
+        // A tail re-request re-opens service: SERVED -> ANNOUNCED (the entry
+        // keeps its buffers the whole time). THUMBNAIL windows never change
+        // entry state.
+        target->state = ImageTxEntryState::ANNOUNCED;
+    }
     target->windowArmed = true;
     target->windowKind = imageKind;
+    target->windowEverArmed = true;
     target->windowStart = startChunk;
     target->windowCount = count;
     target->windowNextIndex = startChunk;
@@ -684,6 +754,16 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
     if (entry.windowNextIndex >= entry.windowStart + entry.windowCount) {
         // Window complete: clear the armed context and await the next request
         entry.windowArmed = false;
+        // Completion marker (02-05 / CR-03 fix c): a FULL window whose clamped
+        // span reached the image tail (windowStart + windowCount ==
+        // fullTotalChunks) has offered the base every full chunk at least
+        // once — mark SERVED (preferred eviction candidate; buffers KEPT so
+        // a tail re-request can still heal). THUMBNAIL windows never change
+        // entry state.
+        if (entry.windowKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) &&
+            static_cast<uint32_t>(entry.windowStart) + entry.windowCount >= entry.fullTotalChunks) {
+            entry.state = ImageTxEntryState::SERVED;
+        }
     }
     return ok;
 }
@@ -781,6 +861,7 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     entry.nextThumbChunk = 0;
     entry.windowArmed = false;
     entry.windowKind = 0;
+    entry.windowEverArmed = false;
     entry.windowStart = 0;
     entry.windowCount = 0;
     entry.windowNextIndex = 0;
