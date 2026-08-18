@@ -5,6 +5,7 @@ status: draft
 shadcn_initialized: false
 preset: none
 created: 2026-08-19
+amended: 2026-08-19
 ---
 
 # Phase 2 — UI Design Contract
@@ -12,6 +13,8 @@ created: 2026-08-19
 > **Baseline, not greenfield — retroactive.** Phase 2 was executed (status: gaps_found); the web UI it shipped already exists as embedded HTML/CSS/JS in `src/main_basestation.cpp` (`HTML_HEADER` lines 137–351, `HTML_FOOTER` script lines 353–547, card markup in `handleRoot` lines 760–984). Every token below is extracted from that shipped interface and declared as the contract. This spec governs the **gap-closure replan** (`/gsd-plan-phase 02 --gaps`, driven by `02-VERIFICATION.md`): the transfer state-machine fixes are mostly non-UI, but they must preserve — and in the CR-02 case restore — the UI contracts locked here. New or touched UI must reuse the tokens below exactly; no new visual language.
 >
 > **Provenance:** all colors/typography/spacing/copy from direct reads of `src/main_basestation.cpp` this session; transfer-state vocabulary from `transferStateToString` (`src/image_rx_manager.cpp:28-37`, locked D-20); storage states from `handleStatus` (`main_basestation.cpp:1479-1484`); card set and copy from `handleRoot` + poll script; Phase 1 inherited tokens from `01-UI-SPEC.md` (approved 2026-08-18). Decisions D-20/D-22/D-24/D-26 from `02-CONTEXT.md`; gap definitions from `02-VERIFICATION.md`.
+>
+> **Amendment (2026-08-19, checker-driven):** token-table changes only, shipped code unchanged. (1) Typography locked to exactly four sizes — 14/16/18/24; the 12px "Micro" tier was struck, and the shipped 11/12/13px transfer-panel text now lives solely in the off-scale deviation table with 14px harmonization targets. (2) Spacing `lg` changed 20→24px to match the standard set; 20px retired to the off-grid table with a 24px target.
 
 ---
 
@@ -46,15 +49,15 @@ Phase 2 additions (shipped, now locked):
 
 ## Spacing Scale
 
-Declared values (multiples of 4). As-shipped grid first; off-grid values are documented facts flagged for harmonize-on-touch (gap closure must not add NEW off-grid values).
+**Locked scale — standard set only: {4, 8, 16, 24, 32, 48, 64}.** Every locked token below is a member of that set. Off-grid shipped values are documented facts flagged for harmonize-on-touch (gap closure must not add NEW off-grid values).
 
-| Token | Value | Usage (as shipped) |
-|-------|-------|--------------------|
+| Token | Value | Usage |
+|-------|-------|-------|
 | xs | 4px | Label→input gap, status-label→value gap, h1→subtitle gap, `.transfer-state` horizontal padding is NOT this (see exceptions) |
 | sm | 8px | Status-bar grid gap, LED→text gap, input/select inner padding, button-group gap, `.transfer-row` margin-top, border-radius 8px (buttons/messages/rows/status-bar/img) |
 | md | 16px | `.form-group` spacing, button padding, status-bar padding |
-| lg | 20px | Card padding, card stack rhythm (`margin-bottom`), header padding, container padding, `<hr>` vertical margins |
-| xl / 2xl / 3xl | 24/48/64px | Not used (single-viewport control panel; reserved) |
+| lg | 24px | Card padding, card stack rhythm (`margin-bottom`), header padding, container padding, `<hr>` vertical margins — **locked target; the shipped code uses 20px for all of these (off-grid, see table below)**. New surfaces use 24px; touched surfaces migrate to 24px |
+| xl / 2xl / 3xl | 32/48/64px | Not used (single-viewport control panel; reserved) |
 
 **Exceptions (component sizes, not spacing):** 12px LED diameter; 6px range-track and progress-track heights; 12px progress/range corner radii (half of height).
 
@@ -62,6 +65,7 @@ Declared values (multiples of 4). As-shipped grid first; off-grid values are doc
 
 | Value | Where | Harmonization target |
 |-------|-------|----------------------|
+| 20px | `.card` padding, card stack `margin-bottom`, `.header` padding, `.container` padding, `<hr>` vertical margins — the shipped value of the `lg` role until the 2026-08-19 amendment struck it from the lock | **24px (`lg`)** |
 | 15px | `.card h2` margin-bottom, `.message` padding | 16px (carried Phase 1 flag — never touched) |
 | 13px | `.transfer-row` font-size (see Typography) | 14px |
 | 12px | `.transfer-row` horizontal padding, inline `margin-top:12px` on `#event-chip`/`#thumb-img`/`#telemetry-chip` | 12px is acceptable as the row/chip rhythm — if touched, prefer 8px or 16px |
@@ -75,20 +79,30 @@ Touch-target rule (Phase 1, unchanged): buttons keep ≥44px touch height (16px 
 
 ## Typography
 
+**Locked scale — exactly 4 sizes.** No other size may be introduced; any text that does not fit one of these roles must consolidate into Body.
+
 | Role | Size | Weight | Line Height |
 |------|------|--------|-------------|
 | Body | 14px | 400 | 1.5 (declared on `body` — the Phase 1 "declare explicitly" note landed) |
 | Label | 16px | 700 | 1.2 |
 | Heading | 18px | 700 | 1.2 |
 | Display | 24px | 700 | 1.2 |
-| Micro | 12px | 400/700 | 1.2 |
 
-- **Body 14px/400/1.5** — form labels, input values, status-bar labels, `.message` text, header subtitle, muted text at `#94a3b8`.
+- **Body 14px/400/1.5** — form labels, input values, status-bar labels, `.message` text, header subtitle, muted text at `#94a3b8`. **This is also the consolidation target for the transfer panel's off-scale text** (see deviation table below): once harmonized, `.transfer-row` base, `.transfer-chunks`, and both badge kinds are Body 14px (badges keep weight 700 for the pill).
 - **Label 16px/700** — button labels only.
 - **Heading 18px/700** — card `h2` titles and status-bar numerals (`.status-value`).
 - **Display 24px/700** — header `h1`.
-- **Micro 12px — Phase 2 badge tier (declared here as a contract amendment):** `.transfer-chunks` (12px/400), `.transfer-kind` and `.transfer-state` badges (700). As shipped these are 11px (badges) and 13px (row base) — **off the Phase 1 four-size rule; flagged**: harmonize badges 11→12px and `.transfer-row` base 13→14px on next touch. Gap closure does NOT introduce further sizes.
 - Exactly 2 weights (400/700) — unchanged; no italics anywhere.
+
+**Off-scale as shipped — documented, harmonize-on-touch, NON-BLOCKING for gap closure** (the former 12px "Micro" tier was struck from the lock in the 2026-08-19 amendment; these entries are where that text now lives):
+
+| Shipped value | Where (source line in `main_basestation.cpp`) | Harmonization target |
+|---------------|----------------------------------------------|----------------------|
+| 13px | `.transfer-row` base font-size (line 300) | **14px — Body tier** |
+| 12px | `.transfer-chunks` (line 327) | **14px — Body tier** (consolidate with the row base when the row is next touched) |
+| 11px | `.transfer-kind` / `.transfer-state` badges (lines 305, 329) | **14px — Body tier** at weight 700; the pill padding/border already carries the badge affordance, no meaning is lost |
+
+Gap closure and all future work must NOT introduce sizes outside the locked four; touching any row above obligates its harmonization.
 
 ---
 
@@ -213,8 +227,8 @@ Accent is NOT for: form labels, body copy, input borders, dividers, backgrounds,
 - [ ] Dimension 1 Copywriting: PASS
 - [ ] Dimension 2 Visuals: PASS (primary focal point declared in Design System)
 - [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS (micro tier declared as contract amendment; 11/13px flagged harmonize-on-touch)
-- [ ] Dimension 5 Spacing: PASS (off-grid shipped values documented with harmonization targets; no new off-grid values permitted)
+- [ ] Dimension 4 Typography: PASS (exactly 4 sizes locked: 14/16/18/24; shipped 11/12/13px transfer-panel text moved fully into the off-scale deviation table with explicit 14px harmonization targets; no sizes outside the four permitted)
+- [ ] Dimension 5 Spacing: PASS (locked scale standard-set-only; `lg` = 24px, shipped 20px retired to the off-grid table with 24px target; off-grid shipped values documented with harmonization targets; no new off-grid values permitted)
 - [ ] Dimension 6 Registry Safety: PASS
 
 **Approval:** pending
