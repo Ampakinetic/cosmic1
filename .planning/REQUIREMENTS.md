@@ -13,7 +13,7 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 - [x] **CTRL-02**: User can adjust all camera settings remotely (resolution, quality, brightness, contrast, saturation, exposure, white balance)
 - [x] **CTRL-03**: System supports both manual (on-demand) and automatic (scheduled) capture modes
 - [x] **CTRL-04**: Automatic capture supports fixed interval timing
-- [ ] **CTRL-05**: Automatic capture supports event-based triggers (altitude change, location change)
+- [x] **CTRL-05**: Automatic capture supports event-based triggers (altitude change, location change)
 - [x] **CTRL-06**: Camera commands that fail are retried with timeout
 
 ### Image Transmission
@@ -82,7 +82,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CTRL-02 | Phase 1 | Complete |
 | CTRL-03 | Phase 1 | Complete |
 | CTRL-04 | Phase 1 | Complete |
-| CTRL-05 | Phase 2 | Pending |
+| CTRL-05 | Phase 2 | Complete |
 | CTRL-06 | Phase 1 | Complete |
 | IMG-01 | Phase 2 | Complete |
 | IMG-02 | Phase 2 | Complete |

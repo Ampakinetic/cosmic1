@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_plan: 4
-status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-08-18T21:09:06.419Z"
+status: verifying
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-08-18T21:32:25.751Z"
 progress:
   total_phases: 2
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 10
-  completed_plans: 8
+  completed_plans: 9
 current_phase: 1
 current_phase_name: image-transmission
 ---
@@ -29,8 +29,8 @@ current_phase_name: image-transmission
 
 **Current Plan:** 4
 **Total Plans in Phase:** 4
-**Status:** Ready to execute
-**Progress:** [████████░░] 80% (all 6 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
+**Status:** Phase complete — ready for verification
+**Progress:** [█████████░] 90% (all 6 plans executed; tracer PLAN.md uses non-standard filename, summary at 01-01-SUMMARY.md)
 
 ## Progress
 
@@ -117,8 +117,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-18T21:09:06.361Z
-**Stopped at:** Completed 02-03-PLAN.md
+**Last session:** 2026-08-18T21:32:25.686Z
+**Stopped at:** Completed 02-04-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -132,6 +132,7 @@ See: `.planning/PROJECT.md`
 | Phase 02 P01 | 3243s | 3 tasks | 15 files |
 | Phase 02 P02 | 550s (continuation session; Task 1 in prior session) | 3 tasks | 7 files |
 | Phase 02 P03 | 90m | 3 tasks | 9 files |
+| Phase 02 P04 | ~12 min | 2 tasks | 8 files |
 
 ## Decisions
 
@@ -148,3 +149,6 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: Window requests ride the Phase 1 tracked-command machinery with CMD_ACK_TIMEOUT_WINDOW_MS (15 s) while a separate 8 s stall clock watches the chunk stream — the ACK bounds only the arm handshake (02-03)
 - [Phase ?]: Fulls stream straight to SD via seek+offset with no whole-image RAM buffer; complete is set only after esp_rom_crc32_le read-back verification, and SD-degraded transfers report INCOMPLETE (notStored) even at 100 percent chunks (02-03)
 - [Phase ?]: D-22 consequence flagged for hardware UAT: the balloon serves windows only from announced full entries, so a thumbnail-hole window re-request cannot retrieve thumbnail bytes — the base degrades honestly to INCOMPLETE after 3 passes (02-03)
+- [Phase ?]: 02-04: event triggers live inside AutoCapture.process() behind the SC-5 master enable — AUTO_CAPTURE_DISABLE stops interval AND event captures; fire() is the single gated capture path (D-28 spacing wraps every automatic source, T-01-09 baseline-before-attempt, shared allocateImageId) and every fire advances lastCaptureTime so D-27 (event resets interval baseline) falls out of the arithmetic
+- [Phase ?]: 02-04: eventsEnabled defaults OFF at boot — event captures require explicit opt-in via the UI toggle; delta defaults 150 m / 500 m / 20 s spacing (research sketch constants), all re-validated in-module so a spoofed SET_EVENT_THRESHOLDS cannot machine-gun the camera (T-02-11 double validation)
+- [Phase ?]: 02-04: base polls GET_STATUS every 30 s (skipped while commands are in flight) and CommandSender latches the newest STATUS payload — the Event Capture card displays balloon-reported truth, never the last-submitted form

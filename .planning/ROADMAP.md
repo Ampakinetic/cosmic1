@@ -101,7 +101,7 @@ Plans:
 - SD card storage implementation
 - Event-based capture triggers
 
-**Plans:** 3/4 plans executed
+**Plans:** 4/4 plans executed
 
 Plans:
 **Wave 1**
@@ -115,7 +115,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 02-04-PLAN.md — CTRL-05 event triggers: altitude/distance/flight-phase capture inside AutoCapture (D-25/D-27/D-28), UI-configurable thresholds (D-26)
+- [x] 02-04-PLAN.md — CTRL-05 event triggers: altitude/distance/flight-phase capture inside AutoCapture (D-25/D-27/D-28), UI-configurable thresholds (D-26)
 
 ### Phase 3: Enhanced Web Interface
 
