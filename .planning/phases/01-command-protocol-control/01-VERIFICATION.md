@@ -1,90 +1,86 @@
 ---
 phase: 01-command-protocol-control
-verified: 2026-08-18T05:48:20Z
-status: gaps_found
+verified: 2026-08-18T11:12:04Z
+status: human_needed
 score: 1/5 must-haves verified
-behavior_unverified: 4 # SC-2/SC-3/SC-4/SC-5 present + wired; runtime behavior needs hardware UAT (SC-5 upgraded from FAILED — CR-05 closed)
+behavior_unverified: 4 # SC-2/SC-3/SC-4/SC-5 present + wired, all three response-path gaps CLOSED; runtime behavior needs hardware UAT
 overrides_applied: 0
 re_verification:
   previous_status: gaps_found
   previous_score: 1/5
   gaps_closed:
-    - "SC-5 / CR-05: legacy 30 s capture timer fully removed — verified independently by this verifier (negative grep gates all zero; loop() subsystem block clean; AutoCap().begin:387 / CmdHandler().process:725 / AutoCap().process:728 intact; single image-ID authority confirmed; both targets build SUCCESS; harness 10/10)"
+    - "Gap 1 / CR-01 + WR-05: response packet-type conformance — createResponsePacket assigns packet.type = PACKET_TYPE_RESPONSE as first field (src/command_protocol.cpp:374), createCommandPacket assigns PACKET_TYPE_COMMAND (:355), createACK/createNACK/createStatus derive from the one shared constant (include/command_protocol.h:15), serializer emits resp.type verbatim (:159), CommandHandler::process routes ALL successful responses through the factory (:98-103); harness clause (f) with factory mirror + defective-variant teeth — verifier-run 15/15 exit 0"
+    - "Gap 2 / CR-02 + WR-01: truthful GET_STATUS resolution — handleGetStatus uses frameSizeFromEsp(camera->getFrameSize()) (src/command_handler.cpp:579), by-name reverse mapping over nine real framesize_t constants with documented QVGA default (:741-766, const-qualified), FrameSize value 8 relabeled FRAMESIZE_CIF with truthful differs-by-design header comment (include/command_protocol.h:58-72), forward map CIF->real CIF (:714-716), UI option 'CIF 400x296' (src/main_basestation.cpp:616); negative gates: FRAMESIZE_QXGA remnants 0, false matching-comment 0"
+    - "Gap 3 / CR-03: terminal-state guard — handleResponse returns for ACKED/FAILED/TIMEOUT slots (src/command_sender.cpp:336-338) BEFORE response storage (:341), pendingCommandCount-- (:349/:358), and statistics; retryCommand/findTrackedCommand/findFreeSlot mechanics unchanged and intact"
   gaps_remaining: []
-  regressions: [] # SC-1 routes, protocol constants, real-seq CRC site, retry mechanics, sensor setters, /status flow all re-checked intact
-gaps:
-  - truth: "LoRa command packets transmitted from base station to balloon and acknowledged (SC-2) — success responses must conform to the documented RESPONSE wire format (0x11), a phase deliverable ('Command packet protocol specification')"
-    status: partial
-    reason: "NEW CR-01 (01-REVIEW.md ca682b4), independently confirmed by this verifier: createResponsePacket (src/command_protocol.cpp:371-387) never assigns packet.type — ResponsePacket packet{} zero-initializes it to 0x00 — and serializeResponse emits resp.type verbatim (src/command_protocol.cpp:159). CommandHandler::process() builds ALL successful responses (every ACK and STATUS) through this factory (src/command_handler.cpp:98-103), so the entire success path goes onto the wire with header type 0x00 while NACKs carry 0x11 (createNACK :256). Documented contract: include/command_protocol.h:92 '0x11 for responses', common_types.h:38 RESPONSE=0x11. Current endpoint pair still interoperates (deserializeResponse reads buffer[2] at :210 but never validates it), so the phase round trip is not broken today — but the protocol deliverable is non-conformant on its entire success path and any type-filtering consumer (Phase 2 image pipeline sharing the channel, sniffer, telemetry router) will misroute or drop every successful response. The regression harness masks this because its JS mirror hardcodes PACKET_TYPE_RESPONSE (scripts/verify_protocol_roundtrip.mjs:139) instead of modeling createResponsePacket (WR-05), so the wire-format evidence for the response path is known incomplete."
-    artifacts:
-      - path: "src/command_protocol.cpp"
-        issue: "createResponsePacket (:371-387) leaves packet.type unassigned (0x00); createCommandPacket has the same latent asymmetry (commands correct only because serializeCommand hardcodes 0x10 at :60)"
-      - path: "scripts/verify_protocol_roundtrip.mjs"
-        issue: ":139 hardcodes 0x11 in serializeResponse mirror — certifies a type byte the firmware does not emit (WR-05)"
-    missing:
-      - "Set packet.type = PACKET_TYPE_RESPONSE (0x11) in createResponsePacket and PACKET_TYPE_COMMAND in createCommandPacket (symmetry)"
-      - "Add harness clause that transcribes createResponsePacket faithfully and asserts serialized byte 2 == 0x11 for both ACK and NACK paths"
-  - truth: "Balloon status reporting is truthful (plan 01-04 must-have artifact: 'real GET_STATUS' — status source for SC-3 evidence and Phase 2)"
-    status: partial
-    reason: "NEW CR-02 (01-REVIEW.md), independently confirmed: handleGetStatus casts the real esp32-camera framesize_t to the project FrameSize enum across differently-numbered values (src/command_handler.cpp:579). Verified against the pinned library (.pio/libdeps/esp32-s3-balloon/esp32-camera/driver/include/sensor.h:83-102): real QQVGA=1/QVGA=5/VGA=8/UXGA=13 vs project QQVGA=5/QVGA=6/VGA=9/UXGA=13 (include/command_protocol.h:57-68, whose comment falsely claims the values match esp_camera.h). The balloon boots at FRAMESIZE_QVGA (real 5) so GET_STATUS reports FrameSize(5) = project QQVGA 160x120 while the camera is actually at QVGA 320x240. Mitigating: GET_STATUS currently has no issuer anywhere in the base station (confirmed by grep — only queue-row label and timeout constant reference it), so no current UI behavior is corrupted; the defect is latent in a delivered artifact whose truthfulness plan 01-04 claimed and this path's prior verification certified. The SET direction is unaffected (framesizeFromInt maps by enum name, :703-735)."
-    artifacts:
-      - path: "src/command_handler.cpp"
-        issue: ":579 static_cast<FrameSize>(camera->getFrameSize()) — raw numeric cast between mismatched enums"
-      - path: "include/command_protocol.h"
-        issue: ":57-68 FrameSize values do not match the real framesize_t despite the comment claiming so; value 8 named QXGA/'400x296' actually targets real QXGA 2048x1536 (WR-01: the UI 'QXGA 400x296' option always NACKs)"
-    missing:
-      - "Name-based reverse mapping (frameSizeFromEsp) used by handleGetStatus instead of the raw cast"
-      - "Fix the false 'matching esp_camera.h framesize_t' comment; resolve WR-01 (rename project value 8 to CIF and map it to real FRAMESIZE_CIF 400x296 in framesizeFromInt and the base-station option label)"
-  - truth: "Failed commands are retried with timeout and user is notified (SC-4) — retry-path response accounting must stay consistent under the designed retry flow"
-    status: partial
-    reason: "NEW CR-03 (01-REVIEW.md), independently confirmed: findTrackedCommand (src/command_sender.cpp:363-371) matches any non-IDLE slot including terminal ACKED/FAILED/TIMEOUT slots, and handleResponse (:319-357) has no terminal-state guard, so a second response for the same refSequence re-runs the transition and executes pendingCommandCount-- a second time. pendingCommandCount is uint8_t (include/command_sender.h:101) — underflow to 255 makes hasPendingCommands() true forever (UI shows pending=1 permanently, slot accounting and statistics corrupt). This is the NORMAL retry path, not an exotic one: retryCommand (:428-442) retransmits with the SAME sequenceNumber, so when ACK latency approaches the 2 s CAPTURE_NOW window the sender retries, the balloon re-executes and sends a second ACK with the same refSequence, and both the late first ACK and the second ACK process (1→0→255). Prior verification's line-level check of the retry mechanics missed this hole; it sits squarely in SC-4's truth domain and in CTRL-06/PRI-02."
-    artifacts:
-      - path: "src/command_sender.cpp"
-        issue: "handleResponse (:319-357) lacks a terminal-state guard; findTrackedCommand (:363-371) returns terminal slots for response matching"
-    missing:
-      - "Guard in handleResponse: if cmd->state is ACKED/FAILED/TIMEOUT, return (duplicate/late response) — or restrict findTrackedCommand to PENDING/SENT for response matching"
+  regressions: [] # SC-1 routes (12 incl. 7 settings + auto-capture pair), CR-05 gates (legacy symbols 0 in main_balloon, isTimeToCapture 0, sole capture/ID authorities intact), retry mechanics (ackTimeoutFor :24/:243, backoff :205), protocol constants, /status flow — all re-checked on this verifier's own runs
 deferred:
   - truth: "D-13: separate camera-controls page from telemetry display"
     addressed_in: "Phase 3"
     evidence: "Plan 01-03 deferral truth; Phase 3 goal 'Full base station control panel with telemetry, maps, and gallery'; accepted in commit 0b52b9e"
   - truth: "D-15: accordion panels grouping camera settings"
     addressed_in: "Phase 3"
-    evidence: "Plan 01-03 deferral truth; WEB-04 top-down layout restructure; accepted in commit 0b52b9e"
+    evidence: "WEB-04 top-down layout restructure; accepted in commit 0b52b9e"
+  - truth: "CR-04 + WR-11: createThumbnail failure paths leave currentThumbnail.buffer dangling (double-free on next freeCurrentThumbnail) and the 4000-byte allocation estimate makes the failure path the common case — dormant, no Phase 1 caller"
+    addressed_in: "Phase 2"
+    evidence: "Phase 2 deliverables list 'Thumbnail generation on balloon' and IMG-02 'Thumbnail preview displays immediately on base station' — Phase 2 wires the first createThumbnail caller. Dormancy proven by this verifier: createThumbnail called only from captureThumbnail (camera_manager.cpp:214), captureThumbnail only from captureBoth (:229), captureBoth has no callers; currentThumbnail initializes null (:12) and freeCurrentThumbnail is null-guarded (:588), so the dangling state is unreachable in Phase 1 code paths. MUST be fixed (null the member on both failure paths; enlarge/realloc the estimate) before or as the first task of the Phase 2 thumbnail work — crash-class defect, not a Phase 1 goal blocker"
 behavior_unverified_items:
   - truth: "LoRa command packets transmitted from base station to balloon and acknowledged (SC-2)"
     test: "Power both ESP32-S3 boards with E32 modules linked; issue a capture command from the web UI"
-    expected: "Balloon executes, ACK arrives within the D-05 window (2 s for CAPTURE_NOW), UI queue row shows ACK Received; degraded link yields 3 paced retries then Timeout"
-    why_human: "Requires physical radios; E32 AUX timing (WR-04 blocking transmit / AUX-low race) can only be evaluated on hardware — no host harness drives the sender/handler state machines over a link"
+    expected: "Balloon executes; ACK arrives within the D-05 window (2 s for CAPTURE_NOW); UI queue row shows ACK Received; degraded link yields 3 paced retries then Timeout"
+    why_human: "Requires physical radios; E32 AUX timing (WR-04) can only be evaluated on hardware. Wire-format half is now code-proven: byte 2 == 0x11 asserted by harness clause (f) on ACK and NACK paths"
   - truth: "Balloon receives camera commands and adjusts camera settings accordingly (SC-3)"
     test: "Send SET_RESOLUTION / SET_SATURATION / SET_EXPOSURE / SET_WB from the UI, then capture and inspect the image"
     expected: "Sensor accepts the values; visible change in captured images; NACK_BUSY if a sensor call fails"
     why_human: "Sensor acceptance of saturation/ae_level/wb_mode values and visual image assessment need the physical camera module"
   - truth: "Failed commands are retried with timeout and user is notified (SC-4)"
     test: "Power the balloon off; issue a capture command; watch the Command Queue panel"
-    expected: "Row shows Sent, then Failed/Timeout after 3 paced attempts (D-05 window + D-07 backoff); LED turns red 'No link'; counters advance"
-    why_human: "Retry state transitions at runtime need two radios; no host test exercises the CommandSender state machine (millis/E32-coupled). Note: run this AFTER gap 3 (terminal-state guard) is fixed — the duplicate-ACK race is most likely exactly here, on a slow link"
+    expected: "Row shows Sent, then Failed/Timeout after 3 paced attempts (D-05 window + D-07 backoff); LED turns red 'No link'; counters advance; pending returns to 0 — including when a duplicate/late ACK arrives after a retry"
+    why_human: "Retry state transitions at runtime need two radios; no host test exercises the CommandSender state machine. The prior verifier's precondition is now met: gap 3 (terminal-state guard) is in place, so the duplicate-ACK edge can be safely exercised on a slow link"
   - truth: "Both manual trigger and interval-based auto-capture work end-to-end (SC-5)"
     test: "Enable auto-capture at 10 s and at 60 s; then disable; issue a manual CAPTURE_NOW between them"
     expected: "Captures at exactly the commanded cadence (including above 30 s, no interleave); zero automatic captures after the ACKed disable; manual trigger still works; image IDs form one sequence"
-    why_human: "Timing behavior across a real RF link with physical radios and camera cannot be exercised by host builds or the wire-format harness; the CR-05 fix is code-proven by absence (negative grep gates) but runtime cadence needs hardware"
+    why_human: "Timing behavior across a real RF link with physical radios and camera cannot be exercised by host builds or the wire-format harness"
+human_verification:
+  - test: "End-to-end command round trip over real radios (UAT 1)"
+    expected: "ACK within 2 s for CAPTURE_NOW; queue row 'ACK Received'; counters advance; degraded link gives 3 paced retries then Timeout"
+    why_human: "RF delivery, AUX timing, mode switching (WR-04) — hardware only"
+  - test: "Retry/TIMEOUT on degraded link, now including the duplicate-ACK edge (UAT 2)"
+    expected: "3 paced attempts then Timeout; LED red 'No link'; pending count returns to 0 and stays 0 even when a late ACK follows a retry"
+    why_human: "Runtime state-machine transitions need two radios; the CR-03 guard is code-proven but the race itself is a runtime phenomenon"
+  - test: "Camera settings on the physical sensor (UAT 3)"
+    expected: "Visible changes per setting; NACK_BUSY on sensor failure; resolution options incl. CIF 400x296 execute successfully"
+    why_human: "Physical camera required"
+  - test: "Auto-capture interval and disable behavior (UAT 4)"
+    expected: "Exact commanded cadence; zero captures after ACKed disable; one continuous image-ID sequence; manual trigger works throughout"
+    why_human: "Timing across the radio link"
+  - test: "Prohibition review (01-06 plan, judgment-tier, flagged): MUST NOT report fabricated protocol or camera state"
+    expected: "Human confirms at UAT that responses carry their documented type on the wire and GET_STATUS fields reflect actual module state (boot QVGA reports 320x240)"
+    why_human: "unverified-prohibition — human review recommended. This verifier's NON-AUTHORITATIVE code-level judgment is PASS (all four response factories assign the shared constant; GET_STATUS derives fields via real getters and the name-based mapping; no numeric reinterpretation remains), but the prohibition is judgment-tier with no wired enforcement, so it cannot be marked green by an autonomous run"
 ---
 
-# Phase 1: Command Protocol & Control Verification Report (Re-verification after CR-05 gap closure)
+# Phase 1: Command Protocol & Control Verification Report (Re-verification #3, after response-path gap closure)
 
 **Phase Goal:** Establish bidirectional LoRa communication for camera control
-**Verified:** 2026-08-18T05:48:20Z
-**Status:** gaps_found
-**Re-verification:** Yes — after CR-05 gap closure (plan 01-05 executed, commits 352b195 + b5726b3)
+**Verified:** 2026-08-18T11:12:04Z
+**Status:** human_needed
+**Re-verification:** Yes — #3, after response-path gap closure (plan 01-06, commits 75b8514 / 36674ff / 56704e2)
 
 ## Goal Achievement
 
-The prior gap is genuinely closed. CR-05 (legacy 30-second capture timer) was verified closed by this verifier independently, not from SUMMARY claims: all negative grep gates return zero (processCamera / processIncomingCommands / nextImageId / createCameraPacket / CameraData absent from src/main_balloon.cpp; isTimeToCapture absent from all of src/ + include/), the positive wiring gates are intact (AutoCap().begin(&Camera()) :387, CmdHandler().process() :725, AutoCap().process() :728), loop()'s subsystem block contains no capture step, project-wide live capture calls exist only in AutoCapture::process (commanded interval) and the CAPTURE_NOW handler (manual), AutoCapture::allocateImageId() is the only image-ID sequence, and both firmware targets plus the 10-clause wire-format harness pass on this verifier's own runs. SC-5's deterministic blocker is gone; its remaining risk is runtime behavior over the radio link, so it moves from FAILED to PRESENT_BEHAVIOR_UNVERIFIED — same class as SC-2/SC-3/SC-4, resolved by hardware UAT item 4.
+All three response-path criticals from re-verification #2 are genuinely closed. This verifier proved each closure line-by-line in the current code, independently of both the 01-06 SUMMARY and the fresh 01-REVIEW.md (commit fa921a7) that anticipated the closures:
 
-However, the fresh code review (01-REVIEW.md, commit ca682b4 — post-dating the gap-closure commits) found 3 new Critical defects, and this verifier confirmed each one line-by-line in the current code before accepting them. They are all deterministic, code-level, and hardware-free to fix, and each lands inside a phase must-have domain: (1) every successful balloon response is serialized with packet type 0x00 instead of the documented 0x11 RESPONSE — the protocol-spec deliverable is non-conformant on its entire success path, and the regression harness masks it by hardcoding 0x11; (2) GET_STATUS misreports camera resolution via a raw cast between differently-numbered enums (latent — GET_STATUS has no issuer today — but it falsifies plan 01-04's "truthful status" artifact claim this path previously certified); (3) the retry state machine has no terminal-state guard, so the normal retry-edge duplicate ACK double-decrements the uint8 pending-command counter and permanently corrupts the "user is notified" half of SC-4.
+1. **CR-01/WR-05 (response type byte):** `createResponsePacket` assigns `packet.type = PACKET_TYPE_RESPONSE` as the first field set (src/command_protocol.cpp:374); `createCommandPacket` assigns `PACKET_TYPE_COMMAND` (:355) for symmetry; `createACK`/`createNACK`/`createStatus` all derive from the one shared constant (include/command_protocol.h:15) with zero inline 0x11 casts remaining; `serializeResponse` emits `resp.type` verbatim (:159); and `CommandHandler::process` routes every successful response — ACK and STATUS alike — through the factory (:98-103). The harness now models the real construction path: `createResponsePacketMirror` transcribes the zero-initialized C++ factory with a `defective` option, the serializer mirror emits the packet's own type field, and clause (f1)-(f4) asserts byte 2 == 0x11 on both ACK and NACK paths while the defective variant provably yields 0x00. Verifier-run: 15/15 clauses, exit 0. The harness can no longer certify a byte the firmware does not emit.
+2. **CR-02/WR-01 (GET_STATUS cross-enum cast):** `handleGetStatus` now derives `currentResolution` via `frameSizeFromEsp(camera->getFrameSize())` (src/command_handler.cpp:579) — a by-name reverse mapping over the nine real `framesize_t` constants with a documented QVGA fallback for sizes no protocol code can set (:741-766, const-qualified, matching the header declaration after the auto-fixed compile error). The FrameSize block is rewritten as protocol-internal wire codes with a truthful "numbering DELIBERATELY DIFFERS … translated BY NAME" comment (include/command_protocol.h:58-72); value 8 is renamed `FRAMESIZE_CIF` and maps to real FRAMESIZE_CIF in both directions (:714-716); the UI option reads "CIF 400x296" (src/main_basestation.cpp:616). Negative gates: `FRAMESIZE_QXGA` remnants in src/+include = 0; false "matching framesize_t" comments = 0. Boot QVGA now reports as 320x240.
+3. **CR-03 (duplicate-response accounting):** `handleResponse` returns early for any slot in ACKED/FAILED/TIMEOUT (src/command_sender.cpp:336-338), placed before response storage (:341), both `pendingCommandCount--` sites (:349, :358), and the statistics updates — the retry-edge duplicate ACK can no longer underflow the uint8 counter or latch `hasPendingCommands()` true. Sibling mechanics are deliberately untouched: `findTrackedCommand` still matches terminal slots (legitimate for `cancelCommand`'s own-guarded decrement and UI queries), `retryCommand` still resets the window on both outcomes, eviction still clears terminal slots.
 
-Phase status is therefore gaps_found again — for a different reason than either prior round: the previous gap was a superseded code path left in place; the new gaps are correctness holes in delivered, wired code. The 01-05 SUMMARY's "Phase 1 has zero open code gaps" was accurate when written and is superseded by the review; the ROADMAP "Plans: 5/5... zero open code gaps" note is likewise now stale.
+Independent corroboration: the fresh adversarial re-review (01-REVIEW.md, fa921a7) — which executed the 15-clause harness itself — reaches the same closure verdict on all three. Nothing in this round contradicts it, and this verifier did not rely on it.
+
+**No FAILED truths, no missing/stub artifacts, no unwired links, no blocker anti-patterns remain.** What keeps the phase open is exactly what kept it open before the gap cycle began, now with a clean code base: SC-2/SC-3/SC-4/SC-5 assert runtime behavior over physical radios and a physical camera that no host harness can exercise. The four hardware UAT items are carried, and UAT 2's prior precondition ("run after the terminal-state guard lands") is now satisfied.
 
 Note on mode: ROADMAP.md marks Phase 1 `Mode: mvp`, but the goal is not in user-story format, so standard goal-backward verification applies (same determination as both prior verifications).
+
+Note on CR-04: the review's one remaining Critical (createThumbnail failure-path dangling buffer → double-free) is real but **not part of this phase's delivered surface** — this verifier re-proved dormancy by grep and lifecycle analysis (see Deferred Items): no Phase 1 code path can reach the failure branches, `currentThumbnail` starts null, and `freeCurrentThumbnail` is null-guarded. Phase 2's explicit deliverable "Thumbnail generation on balloon" wires the first caller, so the defect is deferred there with a must-fix-before-caller note. WR-12 (receive-side type validation) and WR-13 (false health-check diagnostic) are new Warnings, verified present by this verifier, neither inside a Phase 1 must-have domain.
 
 ### Observable Truths
 
@@ -92,144 +88,143 @@ Must-haves are the 5 ROADMAP success criteria (roadmap contract governs; plan mu
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | Base station web interface has camera control section with trigger button and settings forms (SC-1) | ✓ VERIFIED | Regression intact: 12 routes registered (main_basestation.cpp:461-472) incl. all 7 settings + auto-capture pair; queue panel + status flow (:1011-1024) unchanged. New WR-01 noted: the "QXGA 400x296" resolution option targets real QXGA 2048x1536 and will always NACK on the OV2640 — one broken option, not a broken form |
-| 2 | LoRa command packets transmitted from base station to balloon and acknowledged (SC-2) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED + GAP (partial) | Interop between the current endpoints still holds (commands correct 0x10 via serializeCommand :60; neither receiver validates the response type byte), and the prior protocol fixes remain intact (real seq byte before CRC at :61; length-driven framing; 240-byte limits; harness 10/10 on verifier re-run). But NEW CR-01: createResponsePacket leaves packet.type unassigned → every ACK/STATUS on the wire carries 0x00, violating the documented 0x11 contract for the entire success path, with the harness masking it (see gap 1). Physical RF round trip (incl. WR-04 AUX race) remains hardware UAT item 1 |
-| 3 | Balloon receives camera commands and adjusts camera settings accordingly (SC-3) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED (carried) | Adjust path intact and unaffected: 7 sensor setters real (camera_manager.cpp:426-474), handlers ACK only on true return, SET_RESOLUTION maps by enum name (:703-735). NEW CR-02 hits the report path, not the adjust path: GET_STATUS currentResolution is a raw cross-enum cast (:579) — boot QVGA reports as QQVGA (see gap 2; latent, GET_STATUS has no issuer). Sensor acceptance of values remains hardware UAT item 3 |
-| 4 | Failed commands are retried with timeout and user is notified (SC-4) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED + GAP (partial) | Prior mechanics intact (backoff :196-209 with clamped shift, ackTimeoutFor :24 used at :243, retryCommand resets sendTime on both outcomes :428-442, 5 counted pendingCommandCount-- sites, cancel guard, notification flow to /status). But NEW CR-03: no terminal-state guard in handleResponse + findTrackedCommand matching terminal slots → the designed retry-edge duplicate ACK double-decrements the uint8 pending counter → underflow → hasPendingCommands() true forever, UI pending=1 permanently (see gap 3). Runtime retry transitions remain hardware UAT item 2 |
-| 5 | Both manual trigger and interval-based auto-capture work end-to-end (SC-5) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED (upgraded from FAILED) | CR-05 CLOSED, verifier-proven: legacy timer gone (all negative gates zero), AutoCapture sole capture trigger (only live captureImage calls: auto_capture.cpp:98 + command_handler.cpp:201; camera_manager.cpp:228 sits in uncalled captureBoth()), sole ID authority (allocateImageId at command_handler.cpp:207 + auto_capture.cpp:99 only), disable handler executes AutoCap().disable() (:558), builds 2/2 SUCCESS, harness 10/10 exit 0. Remaining: runtime cadence/disable over the RF link — hardware UAT item 4 |
+| 1 | Base station web interface has camera control section with trigger button and settings forms (SC-1) | ✓ VERIFIED | Regression intact: 12 routes registered (main_basestation.cpp:461-473) incl. all 7 settings + auto-capture pair; 10 sendCommand call sites; queue panel and /status flow unchanged. WR-01 resolved by the CIF relabel — the previously always-NACKing resolution option now names and executes real FRAMESIZE_CIF |
+| 2 | LoRa command packets transmitted from base station to balloon and acknowledged (SC-2) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Code gap CLOSED (CR-01/WR-05 — factory assigns 0x11, serializer emits verbatim, process routes all success responses through the factory, harness clause (f) with teeth, verifier-run 15/15). Wire-format half is code-proven; the RF round trip itself (incl. WR-04 AUX race) is hardware UAT item 1 |
+| 3 | Balloon receives camera commands and adjusts camera settings accordingly (SC-3) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Code gap CLOSED (CR-02 — name-based reverse mapping at :579/:741-766, both directions by name, negative gates zero). Adjust path regression intact (7 sensor setters, ACK only on true return). Sensor acceptance of values is hardware UAT item 3 |
+| 4 | Failed commands are retried with timeout and user is notified (SC-4) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Code gap CLOSED (CR-03 — terminal-state guard :336-338 before any counter/statistics change; retry/backoff mechanics regression-intact: ackTimeoutFor :24 used :243, clamped backoff shift :205). Runtime retry transitions are hardware UAT item 2 — now safe to run on a slow link per the prior verifier's precondition |
+| 5 | Both manual trigger and interval-based auto-capture work end-to-end (SC-5) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | CR-05 closure regression-verified on this run: legacy symbols 0 in main_balloon.cpp, isTimeToCapture 0 project-wide, live captureImage calls only in AutoCapture::process (auto_capture.cpp:98) and the CAPTURE_NOW handler (command_handler.cpp:201), allocateImageId only at command_handler.cpp:207 + auto_capture.cpp:99, wiring gates :387/:725/:728 intact. Runtime cadence/disable is hardware UAT item 4 |
 
-**Score:** 1/5 truths verified (4 present, behavior-unverified — routed to human UAT; 3 of them carry new code gaps)
+**Score:** 1/5 truths verified (4 present, behavior-unverified — routed to human UAT; none carries a code gap anymore)
 
 ### Deferred Items
 
 | # | Item | Addressed In | Evidence |
 |---|------|-------------|----------|
-| 1 | D-13: separate camera-controls page (controls stay cards on the single page) | Phase 3 | WEB-04 top-down layout restructure; plan 01-03 deferral truth; commit 0b52b9e |
+| 1 | D-13: separate camera-controls page (controls stay cards on the single page) | Phase 3 | WEB-04 top-down layout restructure; commit 0b52b9e |
 | 2 | D-15: accordion settings groups (stacked single-field forms retained) | Phase 3 | WEB-04 top-down layout restructure; commit 0b52b9e |
+| 3 | CR-04 + WR-11: createThumbnail dangling-buffer double-free on failure paths; undersized 4000-byte estimate makes failure the common case | Phase 2 | Phase 2 deliverables: "Thumbnail generation on balloon", IMG-02 thumbnail preview. Dormant in Phase 1 (verifier-proven: no caller of captureThumbnail/captureBoth outside camera_manager; buffer starts null; free is null-guarded). Must be fixed before/at the first Phase 2 caller |
 
-### Required Artifacts
+### Required Artifacts (01-06 plan must_haves)
 
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
-| `src/main_balloon.cpp` | Legacy capture path fully removed; AutoCap wiring intact | ✓ VERIFIED | 0 occurrences of processCamera/processIncomingCommands/nextImageId/createCameraPacket/CameraData; AutoCap().begin :387, CmdHandler().process :725, AutoCap().process :728; loop() subsystem block clean; commit 352b195 = 46 deletions |
-| `src/camera_manager.h` / `.cpp` | Dead timing helper swept; capture/setter/getter methods untouched | ✓ VERIFIED | 0 isTimeToCapture occurrences in src/ + include/; setters :426/:445/:464 intact; commit b5726b3 |
-| `src/auto_capture.cpp` | process() comment reworded; behavior unchanged | ✓ VERIFIED | :86-100 wraparound-safe idiom + T-01-09 baseline-before-attempt retained, no CameraManager reference |
-| `src/command_protocol.cpp` | Protocol serialization | ✗ DEFECT (gap 1) | Real-seq CRC (:61) and size limits intact — but createResponsePacket :371-387 never sets packet.type (NEW CR-01) |
-| `src/command_handler.cpp` | Handlers, framing, typed responses, truthful status | ⚠️ PARTIAL | Framing and all handlers still execute; GET_STATUS currentResolution misreports via cross-enum cast :579 (NEW CR-02) — "truthful status" claim now false for that field |
-| `src/command_sender.cpp` | Retry terminal states, framing, queue API | ⚠️ PARTIAL | All prior-verified mechanics intact — but handleResponse lacks the terminal-state guard (NEW CR-03), corrupting accounting on duplicate responses |
-| `src/main_basestation.cpp` | Complete UI layer | ✓ VERIFIED | 12 routes, queue panel, computed LED unchanged; WR-06 (uint16-truncated ACK edge at :503-507) and WR-10 (chip latches latest issued interval, seq-wrap freeze) are Warning-level defects noted below |
-| `scripts/verify_protocol_roundtrip.mjs` | Host wire-format regression harness | ⚠️ PARTIAL | 10/10 PASS on verifier re-run — but :139 hardcodes the response type byte, so it certifies 0x11 the firmware does not emit (WR-05; masks gap 1) |
-| `platformio.ini` | Build separation | ✓ VERIFIED | Both envs build SUCCESS on verifier run (balloon 40.6 s, basestation 24.2 s) |
+| `src/command_protocol.cpp` | Factories assign packet.type; shared constant in all response constructors | ✓ VERIFIED | createResponsePacket :374, createCommandPacket :355, createACK/createNACK/createStatus :239/:256/:275 — all `PACKET_TYPE_RESPONSE`, zero inline casts |
+| `include/command_protocol.h` | PACKET_TYPE_RESPONSE constant; FrameSize value 8 renamed CIF with truthful comment | ✓ VERIFIED | Constant :15; FRAMESIZE_CIF :66; "translated BY NAME" block comment :58-61 |
+| `src/command_handler.cpp` | frameSizeFromEsp reverse mapping used by handleGetStatus; CIF forward case | ✓ VERIFIED | Call site :579; mapping :741-766 (const); framesizeFromInt CIF :714-716 |
+| `include/command_handler.h` | frameSizeFromEsp declaration | ✓ VERIFIED | Declaration present next to framesizeFromInt; const mismatch auto-fixed in 36674ff — both targets compile |
+| `src/command_sender.cpp` | Terminal-state guard at top of handleResponse | ✓ VERIFIED | :336-338, before storage (:341), decrements (:349/:358), statistics |
+| `src/main_basestation.cpp` | Value-8 option labeled with the true mode name | ✓ VERIFIED | "CIF 400x296" :616 |
+| `scripts/verify_protocol_roundtrip.mjs` | Factory mirror + type-emitting serializer mirror + clause (f) with teeth | ✓ VERIFIED | createResponsePacketMirror :132-155; serializer emits packet.type :175; (f1)-(f4) :374-396; clauses (c)/(e) routed through the factory; header clause list updated |
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
 |------|----|----|--------|---------|
-| main_basestation POST routes | CmdSender().sendCommand | 12 command routes incl. 4 settings + auto-capture pair | ✓ WIRED | Regression intact |
-| main_balloon processPacketHandling | AutoCapture::process | AutoCap().process() :728 every pass — now the ONLY periodic capture call | ✓ WIRED | CR-05 closure core; verifier-confirmed |
-| main_balloon initializeSubsystems | AutoCapture::begin | AutoCap().begin(&Camera()) :387 | ✓ WIRED | Intact |
-| command_handler handleCaptureNow / AutoCapture::process | AutoCapture::allocateImageId | :207 / auto_capture.cpp:99 — the only two callers project-wide | ✓ WIRED | Single ID authority restored (note: plan's link wording cited handleAutoCaptureEnable, which does not and need not allocate — enable just starts the timer) |
-| command_handler handleAutoCaptureDisable | AutoCap().disable | :558, ACK reflects the call | ✓ WIRED | With the legacy path gone, the disable contract now holds at system level |
-| handleStatus | CmdSender state queries | getCommandQueue/getCommandState/getCommandRetryCount (:1011-1028) | ✓ WIRED | Per-command outcomes reach the 1 s poll |
-| CommandHandler success responses | serializeResponse → wire | createResponsePacket → resp.type byte | ✗ DEFECTIVE (gap 1) | Emits 0x00 for all ACK/STATUS; NACK path emits 0x11 — inconsistent on-wire type field |
+| CommandHandler::process success responses | createResponsePacket → serializeResponse → wire byte 2 | Every ACK/STATUS traverses the chain | ✓ WIRED | process :98-103 builds via the factory; factory assigns type :374; serializer emits verbatim :159 — byte 2 is 0x11 on the real construction path |
+| camera->getFrameSize (real framesize_t) | handleGetStatus → ResponseStatusData.currentResolution | frameSizeFromEsp name-based reverse mapping | ✓ WIRED | :579 → :741-766; raw numeric reinterpretation eliminated |
+| deserializeResponse output | handleResponse terminal-state guard | duplicate/late responses return before counter/statistics change | ✓ WIRED | processIncomingByte :311-313 → handleResponse :336-338 guard precedes all mutations |
 
 ### Data-Flow Trace (Level 4)
 
 | Artifact | Data Variable | Source | Produces Real Data | Status |
 |----------|--------------|--------|--------------------|--------|
-| /status | sent/acked/failed/pending | CmdSender counters + hasPendingCommands | Yes | ⚠️ FLOWING-WITH-DEFECT — pending can latch 255 after one duplicate response (gap 3) |
+| /status | sent/acked/failed/pending | CmdSender counters + hasPendingCommands | Yes | ✓ FLOWING — duplicate-response corruption path closed by the :336-338 guard |
 | /status | lastCmd/lastSeq/lastState/lastRetry | appState + getCommandState/RetryCount | Yes | ✓ FLOWING |
-| /status | connected/linkText | Computed from lastAckTime + terminal outcomes | Yes | ⚠️ FLOWING-WITH-DEFECT — WR-06: uint16-truncated ACK-edge compare (:503-507) misses edges at 65536 boundaries |
+| /status | connected/linkText | lastAckTime + terminal outcomes | Yes | ⚠️ FLOWING — WR-06 uint16 ACK-edge truncation remains a Warning |
 | /status | queue[] | getCommandQueue over 5-slot table | Yes | ✓ FLOWING |
-| GET_STATUS response | imageId/enabled/interval | AutoCap() module | Yes | ✓ FLOWING — lastImageId divergence source removed (CR-05); no issuer exists yet |
-| GET_STATUS response | currentResolution | static_cast<FrameSize>(camera->getFrameSize()) :579 | Wrong data | ✗ CORRUPTED — cross-enum numeric cast reports QVGA as QQVGA (gap 2) |
+| GET_STATUS response | imageId/enabled/interval | AutoCap() module | Yes | ✓ FLOWING |
+| GET_STATUS response | currentResolution | frameSizeFromEsp(camera->getFrameSize()) | Yes | ✓ FLOWING — previously CORRUPTED (cross-enum cast), now name-translated |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| Wire-format regression suite | `node scripts/verify_protocol_roundtrip.mjs` (verifier-run) | 10/10 PASS, exit 0 | ✓ PASS (but see WR-05: response-type clause is not faithful to firmware — passes vacuously) |
-| Both firmware targets compile | `pio run -e esp32-s3-balloon -e esp32-s3-basestation` (verifier-run) | 2 succeeded | ✓ PASS |
-| CR-05 removal gates | Negative greps (5 legacy symbols + isTimeToCapture) + positive greps (3 wiring sites) — verifier-run | 0 / 0 / all present | ✓ PASS |
-| Retry state machine exercised by a test | none exists — no host harness for CommandSender state machine | n/a | ? SKIP (hardware UAT item 2; gap 3 must be fixed first to make that UAT meaningful) |
+| Wire-format regression suite incl. clause (f) | `node scripts/verify_protocol_roundtrip.mjs` (verifier-run) | 15/15 PASS, exit 0 — (f1) ACK byte 2 == 0x11, (f2) NACK byte 2 == 0x11, (f4) defective variant == 0x00 | ✓ PASS |
+| Both firmware targets compile | `pio run -e esp32-s3-balloon -e esp32-s3-basestation` (verifier-run) | 2 succeeded (29.3 s / 20.6 s) | ✓ PASS |
+| CR-05 removal gates (regression) | Negative greps (legacy symbols in main_balloon, isTimeToCapture) + positive wiring gates :387/:725/:728 | 0 / 0 / all present | ✓ PASS |
+| Gap-2 negative gates | FRAMESIZE_QXGA remnants; false matching-comments | 0 / 0 | ✓ PASS |
+| CR-04 dormancy gate | grep captureThumbnail/captureBoth/createThumbnail callers outside camera_manager | 0 external callers | ✓ PASS (dormant; deferred to Phase 2) |
+| Retry state machine exercised by a host test | none exists — no host harness for CommandSender | n/a | ? SKIP (hardware UAT item 2; guard is code-proven, race is runtime) |
 
 ### Probe Execution
 
-No probes declared in any PLAN/SUMMARY; no `scripts/*/tests/probe-*.sh` exists. The declared verification commands (harness + builds) were executed above. SKIPPED otherwise.
+No probes declared in any PLAN/SUMMARY; no `scripts/*/tests/probe-*.sh` exists. The declared verification commands (harness + both builds) were executed by this verifier above. SKIPPED otherwise.
 
 ### Requirements Coverage
 
 | Requirement | Source Plan | Description | Status | Evidence |
 |-------------|------------|-------------|--------|----------|
-| CTRL-01 | 01-01, 01-02, 01-03, 01-05 | Trigger camera capture from base station web UI | ✓ SATISFIED (code; UAT 1 outstanding) | Full path intact; single shared image-ID sequence now protected (CR-05 closed). WR-03 note: a retried CAPTURE_NOW re-executes and consumes extra IDs — Warning, duplicates suppressed nowhere |
-| CTRL-02 | 01-01, 01-03, 01-04 | Adjust ALL camera settings remotely | ✓ SATISFIED (code; UAT 3 outstanding) | 7/7 forms/routes + 7/7 executing handlers intact; SET path name-mapped and correct. WR-01: "QXGA 400x296" option always NACKs (mislabeled enum target) |
-| CTRL-03 | 01-01, 01-03, 01-04, 01-05 | Manual + automatic capture modes | ✓ SATISFIED at code level (was BLOCKED; UAT 4 outstanding) | CR-05 closed: disable semantics restored, AutoCapture sole trigger — verifier-proven by absence gates |
-| CTRL-04 | 01-01, 01-03, 01-04, 01-05 | Automatic capture fixed interval timing | ✓ SATISFIED at code level (was BLOCKED; UAT 4 outstanding) | Exact commanded cadence across 1000..3600000 ms; no 30 s interleave; one ID sequence |
-| CTRL-06 | 01-01, 01-02, 01-03 | Failed commands retried with timeout | ✓ SATISFIED with defect — gap 3 | Mechanics verified intact, but the duplicate-response accounting hole (NEW CR-03) sits inside this requirement's retry path |
-| PRI-02 | 01-01, 01-02 | Retry with timeout for failed transmissions | ✓ SATISFIED with defect — gap 3 | Same evidence as CTRL-06 |
+| CTRL-01 | 01-02, 01-03, 01-05, 01-06 | Trigger camera capture from base station web UI | ✓ SATISFIED (code; UAT 1 outstanding) | Full path intact; response type now conforms on the entire success path (CR-01 closed) |
+| CTRL-02 | 01-03, 01-04, 01-06 | Adjust ALL camera settings remotely | ✓ SATISFIED (code; UAT 3 outstanding) | 7/7 forms/routes/handlers; SET path name-mapped; WR-01 resolved — every resolution option now targets a real OV2640 mode; GET_STATUS reports truthfully (CR-02 closed) |
+| CTRL-03 | 01-03, 01-04, 01-05 | Manual + automatic capture modes | ✓ SATISFIED (code; UAT 4 outstanding) | CR-05 closure regression-verified this run |
+| CTRL-04 | 01-03, 01-04, 01-05 | Automatic capture fixed interval timing | ✓ SATISFIED (code; UAT 4 outstanding) | Exact commanded cadence 1000..3600000 ms; one ID sequence |
+| CTRL-06 | 01-02, 01-03, 01-06 | Failed commands retried with timeout | ✓ SATISFIED (code; UAT 2 outstanding) | Retry mechanics intact AND accounting integrity restored (CR-03 closed) — the requirement's defect from re-verification #2 is gone |
+| PRI-02 | 01-02, 01-06 | Retry with timeout for failed transmissions | ✓ SATISFIED (code; UAT 2 outstanding) | Same evidence as CTRL-06 |
 
-Orphaned requirements: none — REQUIREMENTS.md traceability maps exactly the six phase IDs (CTRL-05 correctly routes to Phase 2); all six appear in plan `requirements` fields.
+Orphaned requirements: none — the union of `requirements` fields across 01-02..01-06 equals exactly the six phase IDs; REQUIREMENTS.md traceability maps the same six to Phase 1 (CTRL-05 correctly routes to Phase 2).
 
-### Plan Prohibition Verdicts (judgment-tier — autonomous, non-authoritative; human review recommended at UAT)
+### Plan Prohibition Verdicts (judgment-tier — autonomous, NON-AUTHORITATIVE)
+
+**unverified-prohibition — human review recommended** (01-06 plan, flagged at planning time; no wired enforcement exists for a judgment-tier item, so it cannot be marked green autonomously).
 
 | Plan | Prohibition | Verdict | Notes |
 |------|-------------|---------|-------|
-| 01-05 | MUST NOT acknowledge success for actions not executed — no capture path outside AutoCapture and CAPTURE_NOW, no second timer or ID counter | PASS (code level) | Proven by absence: verifier-run negative greps all zero; only live capture calls are AutoCapture::process and the CAPTURE_NOW handler; one ID sequence. Runtime confirmation rides UAT item 4 |
-| 01-04 (restored by 01-05) | No ack-only stubs, no fabricated status | PASS (code level), with residual flag | Every handler executes; AUTO_CAPTURE_DISABLE ACK now truthful. Residual: GET_STATUS fabricates currentResolution via the cross-enum cast (gap 2) — same truthfulness spirit, lower stakes (no issuer today). Human review at UAT |
+| 01-06 | MUST NOT report fabricated protocol or camera state: every response-construction path carries its documented packet type (0x11) onto the wire; GET_STATUS fields reflect actual module state through real conversions, never a raw numeric reinterpretation across differently-numbered enums | PASS (code level, non-authoritative) | All four response factories assign the shared constant; GET_STATUS derives every field from real getters plus the name-based mapping; numeric reinterpretation eliminated (negative gates zero). Residual truthfulness items at Warning level, none fabricating protocol state: WR-13 false health-check diagnostic (log-only; `performSystemChecks` returns true unconditionally), documented QVGA fallback for unrepresentable sizes, IN-08 GET_STATUS endianness (no consumer yet). Human confirmation rides the UAT items above |
 
 ### Anti-Patterns Found
 
-Confirmed by this verifier unless marked "review-reported". Severity follows impact on the phase goal.
+Confirmed present by this verifier unless marked "review-reported". None is a Phase 1 must-have blocker; CR-04 is deferred to Phase 2 with a must-fix note.
 
 | File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| src/command_protocol.cpp | 371-387, 159 | NEW CR-01: success responses serialized with type 0x00, not 0x11; whole success path non-conformant; harness masks it | 🛑 Blocker (gap 1) | Protocol deliverable violated; Phase 2 type-routing consumers will misroute every ACK |
-| src/command_handler.cpp | 579 | NEW CR-02: GET_STATUS resolution misreported via cross-enum cast (boot QVGA reads as QQVGA) | 🛑 Blocker (gap 2) | Delivered status artifact untruthful; latent (no issuer) but falsifies a certified claim |
-| src/command_sender.cpp | 319-371 | NEW CR-03: no terminal-state guard — duplicate/late ACK double-decrements uint8 pendingCommandCount → permanent UI pending=1 | 🛑 Blocker (gap 3) | Normal retry-edge path corrupts SC-4's notification state |
-| scripts/verify_protocol_roundtrip.mjs | 139 | WR-05: JS mirror hardcodes 0x11 — certifies a type byte the firmware does not emit (confirmed) | ⚠️ Warning | Response-path wire-format evidence incomplete until gap 1's harness clause lands |
-| include/command_protocol.h / main_basestation.cpp / command_handler.cpp | 57-68 / 612-622 / 713-716 | WR-01: project value 8 named "QXGA 400x296" targets real QXGA 2048x1536 — UI option always NACKs; enum comment false | ⚠️ Warning | One broken resolution option; folded into gap 2's fix |
-| src/command_handler.cpp | 676-679 | WR-02: single pending-command slot — second command in same read burst overwrites the first silently | ⚠️ Warning | Recovered via base-station retry after full D-05 window |
-| src/command_handler.cpp | 147-226 | WR-03: no duplicate-sequence suppression — retried CAPTURE_NOW re-executes, burns image IDs | ⚠️ Warning | Gaps in Phase 2 image-ID sequence; compounding with WR-09 |
-| src/e32_lora.cpp | 158-202, 104-131 | WR-04 (carried, was WR-01): blocking transmit up to ~7 s; setMode delay(50) | ⚠️ Warning | Deferred to hardware bring-up (documented in plan 01-02) |
-| include/command_protocol.h | 181 | WR-09: 2 s CAPTURE_NOW ACK window can be shorter than worst-case capture; slow success looks like timeout → retry → re-execute | ⚠️ Warning | Interacts with gaps 3 and WR-03 at UAT |
-| src/main_basestation.cpp | 1058-1071 | WR-10 (review-reported): auto-capture chip latches latest issued interval, not the ACKed one; seq-wrap freezes the chip | ⚠️ Warning | UI truthfulness of the auto-capture state chip |
-| src/main_basestation.cpp | 503-507 | WR-06 (confirmed): ACK-edge detection truncates the 32-bit counter to 16 bits — LED can flip to "No link" at 65536 boundaries | ⚠️ Warning | Link-LED truthfulness edge case |
-| src/e32_lora.cpp | 264-344 | WR-07 (carried, was WR-02): config API contradicts E32 datasheet; setChannel silently no-ops | ⚠️ Warning | Uncalled; fix at radio bring-up |
-| src/camera_manager.cpp | 290-334 | WR-11 (review-reported): thumbnail size estimate too small — creation usually fails | ⚠️ Warning | Dormant in Phase 1 (no thumbnail path exercised); live for Phase 2 |
-| src/command_handler.cpp / command_sender.cpp | 630-640 / 268-278 | IN-06 (carried, was WR-06): 0xAA 0xAA 0x55 loses frame sync; duplicated validatePacket | ℹ️ Info | Noise-robustness gap |
-| src/command_protocol.cpp | 190-256 | IN-08: dead payload/response structs misdocument the wire layout; IN-05 duplicate-valued enum aliases | ℹ️ Info | Documentation hazard for Phase 2 protocol work |
-| src/main_basestation.cpp | 1110-1123 | IN-02: dead sendHTML/updateLED; physical LED blinks unconditionally | ℹ️ Info | Cleanup |
-| src/main_balloon.cpp | 375 | IN-03: hardcoded E32 pins duplicate sensor_pins.h macros | ℹ️ Info | Divergence risk |
-| src/command_handler.cpp | 529 | IN-04: interval bounds restated as literals instead of the auto_capture.h constants | ℹ️ Info | Divergence risk |
+| src/camera_manager.cpp | 294, 311-317, 328-334 | CR-04: createThumbnail failure paths free `thumbnail.buffer` without nulling — dangling member; next freeCurrentThumbnail double-frees. Feeds off WR-11 (4000-byte estimate routinely undersized, so failure is the common case once called) | 🛑 Critical defect, DORMANT in Phase 1 → deferred to Phase 2 | No Phase 1 caller (verifier grep-proven); `enableCamera(false)` sites (main_balloon:705/:937) only free a null buffer today. Fix (null member on both failure paths + allocation headroom/realloc) must land before Phase 2 wires the thumbnail path |
+| src/command_handler.cpp / src/command_sender.cpp | 673-680 / 309-313 | WR-12 (new): receive paths never validate the packet-type byte — a CRC-valid RESPONSE framed on the balloon's channel would be executed as a command (and symmetrically on the base station). Missing receive-side counterpart of the CR-01 fix | ⚠️ Warning | Latent with a single disciplined pair; live risk when Phase 2 image traffic shares the channel. One-comparison fix + harness clause recommended in Phase 2 protocol work |
+| src/main_balloon.cpp | 465-469 | WR-13 (new): health check condition degenerates to `appState.cameraActive` (real check commented out) — every boot with a working camera logs "Camera system health check failed" | ⚠️ Warning | False diagnostic only — `performSystemChecks` returns true unconditionally (:483); masks genuine check failures in the same report |
+| src/command_handler.cpp | 676-679 | WR-02 (carried): single pending-command slot; second framed command in same read burst overwrites the first | ⚠️ Warning | Recovered via base-station retry after the D-05 window |
+| src/command_handler.cpp | 147-226 | WR-03 (carried): no duplicate-sequence suppression — retried CAPTURE_NOW re-executes, burns image IDs | ⚠️ Warning | Gaps in Phase 2 image-ID sequence; interacts with WR-09 |
+| src/e32_lora.cpp | 158-202, 104-131 | WR-04 (carried): blocking transmit up to ~7 s; setMode delay(50) | ⚠️ Warning | Deferred to hardware bring-up |
+| src/main_basestation.cpp | 503-507 | WR-06 (carried): ACK-edge detection truncates 32-bit counter to 16 bits — LED edge case at 65536 boundaries | ⚠️ Warning | Link-LED truthfulness edge |
+| src/e32_lora.cpp | 264-344 | WR-07 (carried): E32 config API contradicts datasheet; setChannel silently no-ops | ⚠️ Warning | Uncalled; fix at radio bring-up |
+| src/main_basestation.cpp | 38-41 | WR-08 (carried): hardcoded AP credentials; unauthenticated command endpoints | ⚠️ Warning | Bench-acceptable; `/gsd-secure-phase` scope |
+| include/command_protocol.h | 185 | WR-09 (carried): 2 s CAPTURE_NOW window can be shorter than worst-case capture | ⚠️ Warning | Interacts with WR-03 at UAT 2 |
+| src/main_basestation.cpp | 1058-1069 | WR-10 (carried): auto-capture chip latches latest issued interval, not the ACKed one; seq-wrap freezes the chip | ⚠️ Warning | UI truthfulness of the auto-capture chip |
+| src/camera_manager.cpp | 290-334 | WR-11 (carried): thumbnail size estimate too small | ⚠️ Warning | Folded into the CR-04 Phase 2 deferral |
+| src/command_handler.cpp / command_sender.cpp | 633-640 / 270-277 | IN-06 (carried): 0xAA 0xAA 0x55 loses frame sync; duplicated validatePacket | ℹ️ Info | Noise-robustness gap |
+| include/command_protocol.h | 110-173 | IN-08 (carried): dead payload/response structs misdocument the wire; GET_STATUS memcpy little-endian vs big-endian convention | ℹ️ Info | First real GET_STATUS consumer must define the wire encoding |
+| src/command_sender.cpp | 383-396, 406-415 | IN-01 (carried): dead findOldestCommand; eviction comment/code mismatch | ℹ️ Info | Cleanup |
+| src/main_basestation.cpp | 1110-1123 | IN-02 (carried): dead sendHTML/updateLED; LED blinks unconditionally | ℹ️ Info | Cleanup |
+| src/main_balloon.cpp | 375 | IN-03 (carried): hardcoded E32 pins duplicate sensor_pins.h macros | ℹ️ Info | Divergence risk |
+| src/command_handler.cpp | 529 | IN-04 (carried): interval bounds restated as literals | ℹ️ Info | Divergence risk |
+| include/e32_lora.h | 91 | IN-07 (carried): lastReceiveTime never updated on single-byte read path | ℹ️ Info | Bogus printStatus "Last RX" |
+| .planning/ROADMAP.md | 48 | Stale header: "5/6 plans executed … 01-06 pending" contradicts Wave 4 checkbox `[x]` at line 67 | ℹ️ Info | Update at next docs pass |
 
-No TBD/FIXME/XXX markers in any phase-modified file (verifier grep clean). The prior IN-12 (camera-ready gate NACK_BUSYs AUTO_CAPTURE_DISABLE) remains structurally present but is no longer compounding a broken disable contract.
+No TBD/FIXME/XXX markers in any 01-06-modified file (verifier grep clean, 0 matches across all seven).
 
 ### SUMMARY vs Reality
 
-1. 01-05 SUMMARY claims are accurate and reproduce: both commits present (352b195: 46 deletions in main_balloon.cpp; b5726b3: camera_manager sweep + comment reword), all source gates pass on verifier re-run, both builds and the harness green on verifier re-run.
-2. The 01-05 SUMMARY's "Phase 1 has zero open code gaps" was true at its timestamp (before the re-review) and is superseded by 01-REVIEW.md (ca682b4), whose 3 criticals this verifier independently confirmed in the current code. The ROADMAP "zero open code gaps" note is now stale.
-3. REQUIREMENTS.md marks CTRL-01..04, CTRL-06, PRI-02 Complete: CTRL-03/CTRL-04 marks are now accurate at the same code-level standard as the others (CR-05 closed, verifier-proven); CTRL-06/PRI-02 carry the gap-3 defect; all six remain pending hardware UAT.
+1. 01-06 SUMMARY claims reproduce on this verifier's own runs: all three fix commits exist with matching subjects (75b8514, 36674ff, 56704e2; docs commits 36fbf05/35e029a/fa921a7 present), the three code closures hold line-by-line, the harness passes 15/15, both targets build SUCCESS. The claimed auto-fix (const qualifier on frameSizeFromEsp definition) is visible in the source and validated by compilation.
+2. 01-REVIEW.md (fa921a7) independently confirms all three closures; its remaining Critical (CR-04) was re-examined by this verifier and classified dormant/deferred rather than blocking, with dormancy proven rather than assumed.
+3. REQUIREMENTS.md marks CTRL-01..04, CTRL-06, PRI-02 Complete — accurate at the code-level standard of this cycle; all six remain contingent on hardware UAT items 1-4, which is what `status: human_needed` records.
 
 ### Human Verification Required
 
-Recorded for UAT; items 1-3 are the carried behavior-unverified truths, item 4 is newly unblocked by the CR-05 fix. None of these is the cause of gaps_found (that is the 3 new code gaps).
+Four hardware UAT items (the carried behavior-unverified truths) plus one flagged prohibition review. These are the only things between Phase 1 and `passed`; every code-level must-have is green.
 
 1. **End-to-end command round trip over real radios** — Power both boards; trigger a capture. Expect ACK within 2 s, queue row "ACK Received", counters advance. Why human: RF delivery, AUX timing, mode switching (WR-04 applies).
-2. **Retry/TIMEOUT on degraded link** — Power balloon off; issue a command. Expect 3 paced attempts (D-05 window, D-07 backoff), then "Timeout", LED red "No link". Why human: state-machine runtime needs two radios. Run after gap 3 is fixed — the duplicate-ACK race is most probable exactly here.
-3. **Camera settings on the sensor** — Send each of the 7 settings; capture and inspect. Expect visible changes; NACK_BUSY on sensor failure. Why human: physical camera required.
-4. **Auto-capture interval and disable behavior (newly unblocked)** — Enable at 10 s and at 60 s; disable; manual trigger between. Expect captures at exactly the commanded cadence, zero captures after the ACKed disable, one continuous image-ID sequence. Why human: timing across the radio link.
+2. **Retry/TIMEOUT on degraded link, including the duplicate-ACK edge** — Power balloon off; issue a command. Expect 3 paced attempts then "Timeout", LED red "No link", pending returns to 0 and stays there even when a late ACK follows a retry. Why human: state-machine runtime needs two radios. The prior verifier's precondition (terminal-state guard in place) is now met — this UAT is meaningful as of plan 01-06.
+3. **Camera settings on the sensor** — Send each of the 7 settings; capture and inspect. Expect visible changes; NACK_BUSY on sensor failure; resolution options incl. CIF 400x296 succeed. Why human: physical camera required.
+4. **Auto-capture interval and disable behavior** — Enable at 10 s and 60 s; disable; manual trigger between. Expect exact cadence, zero captures after ACKed disable, one continuous image-ID sequence. Why human: timing across the radio link.
+5. **Prohibition review (flagged)** — Confirm no fabricated protocol/camera state reaches the wire or the UI: responses carry their documented type; GET_STATUS reflects actual module state. Why human: judgment-tier prohibition, autonomously judged PASS at code level but non-authoritative without enforcement.
 
 ### Gaps Summary
 
-The CR-05 gap-closure plan did exactly what it claimed, and this verifier proved it independently: the legacy 30-second timer is gone, AutoCapture is the sole capture trigger and image-ID authority, both targets build, and the wire-format harness passes. SC-5's deterministic blocker is closed and the truth joins SC-2/SC-3/SC-4 in the hardware-UAT queue.
+No gaps. All three structured gaps from re-verification #2 are closed and were proven closed by this verifier's own reads, greps, harness run, and builds — corroborated, not replaced, by the independent re-review. The phase has no FAILED truth, no missing or stub artifact, no broken key link, and no blocker anti-pattern in its delivered surface.
 
-What blocks the phase goal now is a different class of problem, surfaced by the post-closure code review and confirmed line-by-line by this verifier: three correctness defects in delivered, wired protocol code. (1) Every successful response is serialized with packet type 0x00 instead of the documented 0x11 — the command-protocol deliverable is non-conformant on its entire success path, and the regression harness hides this by hardcoding the correct value, so the fix must also add a faithful harness clause. (2) GET_STATUS misreports camera resolution through a raw cast between two differently-numbered enums — latent today (no issuer) but it falsifies the truthful-status claim plan 01-04 made and this path previously certified, and the same mislabeled enum makes the UI's "QXGA 400x296" option permanently fail. (3) The retry state machine accepts duplicate responses for terminal commands — the exact race the designed retry flow produces at ACK-latency edges — and double-decrements a uint8 counter, permanently corrupting the pending-command display. All three are small, code-only fixes requiring no hardware; all three sit inside must-have truth domains (SC-2 protocol conformance, truthful status artifact, SC-4 retry/notification integrity).
+Status is `human_needed` rather than `passed` for exactly one reason: SC-2/SC-3/SC-4/SC-5 assert runtime behavior over physical radios and a physical camera, which no host-side verification can exercise. The four hardware UAT items (plus the flagged prohibition review) are structured in the frontmatter. CR-04 is a genuine crash-class defect but sits in an API with zero Phase 1 callers (verifier-proven), squarely inside Phase 2's "Thumbnail generation on balloon" deliverable — deferred there with a must-fix-before-first-caller note. New warnings WR-12 and WR-13 are verified present and recorded; neither is inside a Phase 1 must-have domain.
 
-Recommended next step: `/gsd-plan-phase --gaps` for the three structured gaps above (they share a theme — protocol/response-path correctness — and could close in one focused plan with an extended harness), then re-verify, then `/gsd-secure-phase 1` and hardware UAT (items 1-4).
-
-Deferred items (D-13/D-15 → Phase 3) and carried warnings (WR-01..WR-11 minus the folded ones, IN-*) are documented above and do not block the phase goal.
+Recommended next step: hardware UAT items 1-4 (item 5 rides along), then `/gsd-secure-phase 1` (WR-08 scope), then mark the phase complete. Phase 2 planning should pick up CR-04/WR-11 as an entry task and consider WR-12 with the image-traffic protocol work.
 
 ---
 
-_Verified: 2026-08-18T05:48:20Z_
+_Verified: 2026-08-18T11:12:04Z_
 _Verifier: Claude (gsd-verifier)_
