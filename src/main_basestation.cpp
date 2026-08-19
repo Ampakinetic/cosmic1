@@ -85,6 +85,33 @@ struct BaseStationState {
 // Link considered stale after this long without an ACK (LED truth, IN-03)
 static constexpr uint32_t LINK_STALE_MS = 30000;
 
+// Link truth (IN-03 / WR-10) — the SINGLE computation shared by /status JSON
+// and the physical status LED (so the two can never disagree): READY only
+// while an ACK was seen within LINK_STALE_MS and no terminal failure is
+// newer, NO_LINK when a terminal failure is the latest outcome, UNKNOWN
+// before any command completes or when the link is stale.
+enum class LinkTruth { READY, NO_LINK, UNKNOWN };
+
+static LinkTruth computeLinkTruth() {
+    uint32_t finished = CmdSender().getCommandsAcked() + CmdSender().getCommandsFailed()
+                      + CmdSender().getCommandsTimeout();
+    bool ackRecent = (appState.lastAckTime != 0)
+                  && (millis() - appState.lastAckTime <= LINK_STALE_MS);
+    bool failIsLatest = appState.lastOutcomeBad
+                     && (appState.lastAckTime == 0
+                         || appState.lastAckTime < appState.lastTerminalFailTime);
+    if (finished == 0) {
+        return LinkTruth::UNKNOWN;
+    }
+    if (failIsLatest) {
+        return LinkTruth::NO_LINK;
+    }
+    if (ackRecent) {
+        return LinkTruth::READY;
+    }
+    return LinkTruth::UNKNOWN;
+}
+
 // D-26: cadence of the GET_STATUS poll that refreshes the balloon-reported
 // event-threshold display — skipped while any command is in flight so it
 // never contends with user commands or window pulls
@@ -105,7 +132,6 @@ void initWebServer();
 
 void processLoRa();
 void processCommands();
-void updateStatus();
 
 void handleRoot();
 void handleCapture();
@@ -127,7 +153,6 @@ String commandStateToString(CommandState state, uint8_t retryCount);
 const char* commandDisplayName(uint8_t commandType);
 
 void sendResponse(int code, const char* status, const char* message = nullptr);
-void sendHTML(const char* html);
 void updateLED();
 
 // ===========================
@@ -605,8 +630,8 @@ void loop() {
     // Age out stalled image transfers (receive half of the push stream)
     ImageRx().process();
 
-    // Update status
-    updateStatus();
+    // Physical status LED mirrors the computed link truth (WR-10 / IN-03)
+    updateLED();
 
     // Small delay
     delay(10);
@@ -738,19 +763,6 @@ void processLoRa() {
         appState.lastAckTime = millis();
     }
     appState.ackedAtLastPoll = static_cast<uint16_t>(acked);
-}
-
-void updateStatus() {
-    static uint32_t lastUpdate = 0;
-
-    if (millis() - lastUpdate > 5000) {
-        lastUpdate = millis();
-
-        // Blink LED to show activity
-        static bool ledState = false;
-        ledState = !ledState;
-        digitalWrite(STATUS_LED_PIN, ledState ? HIGH : LOW);
-    }
 }
 
 // ===========================
@@ -1382,26 +1394,13 @@ void handleStatus() {
     // outcomes — never a hardcoded value. Yellow "Unknown" before any command
     // completes or when the link is stale, red "No link" when the last
     // terminal outcome is bad and no ACK has arrived since, green "Ready"
-    // only while an ACK was seen within LINK_STALE_MS.
-    uint32_t finished = CmdSender().getCommandsAcked() + CmdSender().getCommandsFailed()
-                      + CmdSender().getCommandsTimeout();
-    bool ackRecent = (appState.lastAckTime != 0)
-                  && (millis() - appState.lastAckTime <= LINK_STALE_MS);
-    bool failIsLatest = appState.lastOutcomeBad
-                     && (appState.lastAckTime == 0
-                         || appState.lastAckTime < appState.lastTerminalFailTime);
-    bool connected = false;
-    const char* linkText;
-    if (finished == 0) {
-        linkText = "Unknown";
-    } else if (failIsLatest) {
-        linkText = "No link";
-    } else if (ackRecent) {
-        connected = true;
-        linkText = "Ready";
-    } else {
-        linkText = "Unknown";
-    }
+    // only while an ACK was seen within LINK_STALE_MS. WR-10: the SAME
+    // computation (computeLinkTruth) drives the physical status LED.
+    LinkTruth truth = computeLinkTruth();
+    bool connected = (truth == LinkTruth::READY);
+    const char* linkText = (truth == LinkTruth::READY) ? "Ready"
+                         : (truth == LinkTruth::NO_LINK) ? "No link"
+                                                          : "Unknown";
     json += "\"connected\":" + String(connected ? "true" : "false") + ",";
     json += "\"linkText\":\"" + String(linkText) + "\",";
 
@@ -1604,15 +1603,25 @@ void sendResponse(int code, const char* status, const char* message) {
     server.send(code, "application/json", json);
 }
 
-void sendHTML(const char* html) {
-    server.send(200, "text/html", html);
-}
-
+// Physical status LED mirrors the SAME computed link truth as /status
+// (WR-10 / IN-03 — the LED no longer blindly blinks every 5 s while the JSON
+// alone reports the truth): ON solid = Ready (green), 1 Hz blink =
+// Unknown/stale (yellow), OFF = No link (red). The blink is self-throttled;
+// safe to call every loop pass.
 void updateLED() {
+    LinkTruth truth = computeLinkTruth();
+    if (truth == LinkTruth::READY) {
+        digitalWrite(STATUS_LED_PIN, HIGH);
+        return;
+    }
+    if (truth == LinkTruth::NO_LINK) {
+        digitalWrite(STATUS_LED_PIN, LOW);
+        return;
+    }
+
     static uint32_t lastBlink = 0;
     static bool ledState = false;
-
-    if (millis() - lastBlink > 1000) {
+    if (millis() - lastBlink >= 1000) {
         lastBlink = millis();
         ledState = !ledState;
         digitalWrite(STATUS_LED_PIN, ledState ? HIGH : LOW);
