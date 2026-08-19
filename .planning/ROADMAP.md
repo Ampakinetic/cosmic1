@@ -163,6 +163,29 @@ Plans:
 - WiFi mode switching (AP/Station)
 - Comprehensive testing of all features
 
+**Plans:** 5 plans — tracer dashboard shell first, then map, alerts, gallery, WiFi (sequential waves; every plan owns src/main_basestation.cpp, so file ownership serializes the waves)
+
+Plans:
+**Wave 1**
+
+- [ ] 03-01-PLAN.md — Tracer: D-45 single-page dashboard shell + /api/state single endpoint + 5s poll with backoff/stale badge/diff-render + six-tile telemetry panel; 0x14 beacon battery extension 17→19 bytes harness-first (WEB-01, WEB-03, WEB-04, ALRT-02 data path)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 03-02-PLAN.md — Map & trajectory: capped GPS ring buffer into /api/state, embedded gzipped Leaflet 1.9.4, altitude-banded track, auto-follow/recenter, offline canvas fallback (WEB-02)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 03-03-PLAN.md — Alert engine: six base-side conditions (derived beacon-loss signal quality; no RSSI — E32 has none), D-44 latch/auto-clear lifecycles, NVS thresholds, banner bar + beep + Alert Thresholds card (ALRT-01..ALRT-06)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 03-04-PLAN.md — Gallery: SdStorage enumeration + RAM index, /gallery pagination + sidecar detail routes, thumbnail grid + pager + incomplete badges, Latest Capture card absorbed (IMG-06)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 03-05-PLAN.md — WiFi manager: NVS-backed AP/Station with 20s fallback state machine, POST /wifi, WiFi card with two-step confirm; WEB-06 balloon-boundary negative check (WEB-05)
+
 ## Milestone Definition
 
 **v1.0 Milestone:** Complete Base Station Camera Control Extension
