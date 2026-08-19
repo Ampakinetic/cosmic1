@@ -27,10 +27,10 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 
 ### Web Interface
 
-- [ ] **WEB-01**: Base station web UI displays live telemetry (temperature, altitude, GPS coordinates)
+- [x] **WEB-01**: Base station web UI displays live telemetry (temperature, altitude, GPS coordinates)
 - [ ] **WEB-02**: Base station web UI displays balloon position on OpenStreetMap
-- [ ] **WEB-03**: Map and telemetry update every 5 seconds
-- [ ] **WEB-04**: UI layout uses top-down design (map/telemetry top, camera/gallery below)
+- [x] **WEB-03**: Map and telemetry update every 5 seconds
+- [x] **WEB-04**: UI layout uses top-down design (map/telemetry top, camera/gallery below)
 - [ ] **WEB-05**: Base station supports both AP mode and Station mode WiFi connectivity
 - [ ] **WEB-06**: Existing balloon WiFi camera interface remains unchanged
 
@@ -43,7 +43,7 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 ### Alerts & Monitoring
 
 - [ ] **ALRT-01**: System provides altitude threshold warnings
-- [ ] **ALRT-02**: System provides low battery alerts
+- [x] **ALRT-02**: System provides low battery alerts
 - [ ] **ALRT-03**: System provides GPS lost notifications
 - [ ] **ALRT-04**: System provides landing detection alerts
 - [ ] **ALRT-05**: System provides ascent rate warnings
@@ -90,17 +90,17 @@ Which phases cover which requirements. Updated during roadmap creation.
 | IMG-04 | Phase 2 | Gaps Found |
 | IMG-05 | Phase 2 | Gaps Found |
 | IMG-06 | Phase 3 | Pending |
-| WEB-01 | Phase 3 | Pending |
+| WEB-01 | Phase 3 | Complete |
 | WEB-02 | Phase 3 | Pending |
-| WEB-03 | Phase 3 | Pending |
-| WEB-04 | Phase 3 | Pending |
+| WEB-03 | Phase 3 | Complete |
+| WEB-04 | Phase 3 | Complete |
 | WEB-05 | Phase 3 | Pending |
 | WEB-06 | - | Complete (existing) |
 | PRI-01 | Phase 2 | Gaps Found |
 | PRI-02 | Phase 1 | Complete |
 | PRI-03 | Phase 2 | Gaps Found |
 | ALRT-01 | Phase 3 | Pending |
-| ALRT-02 | Phase 3 | Pending |
+| ALRT-02 | Phase 3 | Complete |
 | ALRT-03 | Phase 3 | Pending |
 | ALRT-04 | Phase 3 | Pending |
 | ALRT-05 | Phase 3 | Pending |

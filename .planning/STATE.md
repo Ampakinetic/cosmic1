@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 5 of 5 executed (02-05 complete 2026-08-19)
+current_plan: 2
 status: executing
-stopped_at: Phase 3 UI-SPEC approved
-last_updated: "2026-08-19T15:04:57.618Z"
+stopped_at: Completed 03-01-PLAN.md
+last_updated: "2026-08-19T15:55:26.399Z"
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 16
-  completed_plans: 10
+  completed_plans: 11
 current_phase: 2
-current_phase_name: image-transmission
+current_phase_name: enhanced-web-interface
 ---
 
 # Project State
@@ -27,10 +27,10 @@ current_phase_name: image-transmission
 
 ## Current Position
 
-**Current Plan:** 5 of 5 executed (02-05 complete 2026-08-19)
+**Current Plan:** 2
 **Total Plans in Phase:** 5
-**Status:** Phase 02 execution complete — re-verification + UAT pending
-**Progress:** [█████████░] 91% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
+**Status:** Ready to execute
+**Progress:** [███████░░░] 69% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
 
 ## Progress
 
@@ -93,7 +93,7 @@ See: `.planning/PROJECT.md`
 
 **Core value:** Users can remotely control the balloon camera and view captured images through the base station web interface, with real-time telemetry and map tracking always available.
 
-**Current focus:** Phase 02 — image-transmission
+**Current focus:** Phase 03 — enhanced-web-interface
 
 ## Next Steps
 
@@ -122,9 +122,9 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-19T11:35:37.643Z
-**Stopped at:** Phase 3 UI-SPEC approved
-**Resume file:** C:/Work/Prog/Cosmic1/.planning/phases/03-enhanced-web-interface/03-UI-SPEC.md
+**Last session:** 2026-08-19T15:55:26.358Z
+**Stopped at:** Completed 03-01-PLAN.md
+**Resume file:** None
 
 ## Performance Metrics
 
@@ -139,6 +139,7 @@ See: `.planning/PROJECT.md`
 | Phase 02 P03 | 90m | 3 tasks | 9 files |
 | Phase 02 P04 | ~12 min | 2 tasks | 8 files |
 | Phase 02 P05 | ~21 min | 3 tasks | 8 files |
+| Phase 03 P01 | 23min | 2 tasks | 8 files |
 
 ## Decisions
 
@@ -162,3 +163,5 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 02-05: fairness preemption lives INSIDE the chunk branch — pushPending() services a starved armed window (> IMG_WINDOW_SERVICE_PREEMPT_MS 5000 ms, strictly under the base's 8000 ms stall) before push work, while the beacon early-return and command-response loop order stay untouched (PRI-01 proven by node order-gates); overflow eviction is class-ranked with the windowEverArmed ANNOUNCED entry (the active pull) as last resort
 - [Phase ?]: 02-05: D-24 bounds only CONSECUTIVE unhealed stalls — acceptChunk is the sole passCount zero-writer (accepted-chunk progress retires charged passes); thumbnail heals fire only when no full pull is active AND the same-id FULL manifest arrived (push provably finished), with a 24 s idle fallback for oversize thumbnails that never announce a full; heal chunks route to the armed THUMBNAIL slot before the FULL-first precedence
 - [Phase ?]: 02-05: sidecars are kind-suffixed — IMG_{id}_T.JSON for thumbnails vs IMG_{id}.JSON for fulls (mirrors D-31's _T.JPG, the Phase 3 gallery contract) so neither finalization truncates the other's D-30 record; slot-pressure evictions fully reset the slot (*oldest = ImageRxTransfer{}) so a new manifest starts at 0/N
+- [Phase ?]: 03-01: Battery tile JS written in final battery-aware form in Task 1 (renders em-dash under pre-extension JSON), so Task 2 added only the JSON fields
+- [Phase ?]: 03-01: Beacon battery truth gated on voltage in [1.8,8.0] V AND nonzero raw ADC read — floating sense line never reports a fake pack; PowerMgr().update() wired on 1s millis timer in processPowerManagement
