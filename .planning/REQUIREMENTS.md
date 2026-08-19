@@ -13,16 +13,16 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 - [x] **CTRL-02**: User can adjust all camera settings remotely (resolution, quality, brightness, contrast, saturation, exposure, white balance)
 - [x] **CTRL-03**: System supports both manual (on-demand) and automatic (scheduled) capture modes
 - [x] **CTRL-04**: Automatic capture supports fixed interval timing
-- [x] **CTRL-05**: Automatic capture supports event-based triggers (altitude change, location change)
+- [ ] **CTRL-05**: Automatic capture supports event-based triggers (altitude change, location change)
 - [x] **CTRL-06**: Camera commands that fail are retried with timeout
 
 ### Image Transmission
 
-- [x] **IMG-01**: Captured images are transmitted from balloon to base station over LoRa
-- [x] **IMG-02**: Thumbnail preview (320x240 or smaller) displays immediately on base station
-- [x] **IMG-03**: Full resolution images transfer in background after thumbnail
-- [x] **IMG-04**: Images are chunked into packets for reliable LoRa transmission
-- [x] **IMG-05**: Base station stores received images on SD card
+- [ ] **IMG-01**: Captured images are transmitted from balloon to base station over LoRa
+- [ ] **IMG-02**: Thumbnail preview (320x240 or smaller) displays immediately on base station
+- [ ] **IMG-03**: Full resolution images transfer in background after thumbnail
+- [ ] **IMG-04**: Images are chunked into packets for reliable LoRa transmission
+- [ ] **IMG-05**: Base station stores received images on SD card
 - [ ] **IMG-06**: Image gallery displays all received images with pagination
 
 ### Web Interface
@@ -36,9 +36,9 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 
 ### Priority & Reliability
 
-- [x] **PRI-01**: Telemetry data always has priority over camera/image data on LoRa link
+- [ ] **PRI-01**: Telemetry data always has priority over camera/image data on LoRa link
 - [x] **PRI-02**: Camera commands use retry mechanism with timeout for failed transmissions
-- [x] **PRI-03**: System gracefully handles LoRa bandwidth limitations
+- [ ] **PRI-03**: System gracefully handles LoRa bandwidth limitations
 
 ### Alerts & Monitoring
 
@@ -82,13 +82,13 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CTRL-02 | Phase 1 | Complete |
 | CTRL-03 | Phase 1 | Complete |
 | CTRL-04 | Phase 1 | Complete |
-| CTRL-05 | Phase 2 | Complete |
+| CTRL-05 | Phase 2 | Gaps Found |
 | CTRL-06 | Phase 1 | Complete |
-| IMG-01 | Phase 2 | Complete |
-| IMG-02 | Phase 2 | Complete |
-| IMG-03 | Phase 2 | Complete |
-| IMG-04 | Phase 2 | Complete |
-| IMG-05 | Phase 2 | Complete |
+| IMG-01 | Phase 2 | Gaps Found |
+| IMG-02 | Phase 2 | Gaps Found |
+| IMG-03 | Phase 2 | Gaps Found |
+| IMG-04 | Phase 2 | Gaps Found |
+| IMG-05 | Phase 2 | Gaps Found |
 | IMG-06 | Phase 3 | Pending |
 | WEB-01 | Phase 3 | Pending |
 | WEB-02 | Phase 3 | Pending |
@@ -96,9 +96,9 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WEB-04 | Phase 3 | Pending |
 | WEB-05 | Phase 3 | Pending |
 | WEB-06 | - | Complete (existing) |
-| PRI-01 | Phase 2 | Complete |
+| PRI-01 | Phase 2 | Gaps Found |
 | PRI-02 | Phase 1 | Complete |
-| PRI-03 | Phase 2 | Complete |
+| PRI-03 | Phase 2 | Gaps Found |
 | ALRT-01 | Phase 3 | Pending |
 | ALRT-02 | Phase 3 | Pending |
 | ALRT-03 | Phase 3 | Pending |
