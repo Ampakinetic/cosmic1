@@ -18,6 +18,7 @@
 #include "command_protocol.h"
 #include "image_rx_manager.h"
 #include "sd_storage.h"
+#include "trajectory_buffer.h"
 
 // ===========================
 // Pin Configuration
@@ -818,6 +819,7 @@ void setup() {
     initWiFi();
     initLoRa();
     initStorage();
+    Trajectory().begin();   // D-38: full-flight GPS track ring (base-only)
     initWebServer();
 
     appState.initialized = true;
@@ -856,6 +858,10 @@ void loop() {
 
     // Age out stalled image transfers (receive half of the push stream)
     ImageRx().process();
+
+    // D-38: record one trajectory point per new valid-GPS beacon (pulls
+    // the telemetry snapshot — no image_rx_manager changes)
+    Trajectory().process();
 
     // Physical status LED mirrors the computed link truth (WR-10 / IN-03)
     updateLED();
@@ -1652,7 +1658,11 @@ void handleApiState() {
     uint8_t entryCount = CmdSender().getCommandQueue(entries, MAX_PENDING_COMMANDS);
 
     String json;
-    json.reserve(4096);
+    // Pitfall 4 (payload budget): size the reserve for the LIVE payload in
+    // one allocation — base fields plus the compact trajectory at its
+    // ~28 B/point worst case, so a full 500-point track never mid-build
+    // reallocs on the single-threaded server
+    json.reserve(2048 + static_cast<uint32_t>(Trajectory().getCount()) * 28);
     json += "{";
     json += "\"sent\":" + String(appState.commandsSent) + ",";
     json += "\"acked\":" + String(appState.commandsAcked) + ",";
@@ -1735,6 +1745,25 @@ void handleApiState() {
         json += "\"telemetry\":null,";
     }
 
+    // D-38: full-flight trajectory — compact array-of-arrays, OLDEST first
+    // ([[lat,lon,altM],...] with fixed 6-decimal lat/lon and integer
+    // meters, ~22-28 B/pt). This is the SINGLE data path both map render
+    // paths consume (D-37: the offline canvas is a render swap, not a
+    // data change); trajCount lets the client diff-gate track re-renders.
+    uint16_t trajCount = Trajectory().getCount();
+    json += "\"trajCount\":" + String(trajCount) + ",";
+    json += "\"traj\":[";
+    for (uint16_t i = 0; i < trajCount; i++) {
+        if (i > 0) {
+            json += ",";
+        }
+        TrajectoryPoint p = Trajectory().getPoint(i);
+        json += "[" + String(p.latE6 / 1e6, 6) + ","
+                     + String(p.lonE6 / 1e6, 6) + ","
+                     + String(p.altM) + "]";
+    }
+    json += "],";
+
     // D-20: one row per transfer slot — pushed thumbnails and pulled fulls
     // in the same array, every value derived from the chunk bitmap / pass
     // counter / terminal flags (locked transferStateToString vocabulary)
@@ -1777,6 +1806,16 @@ void handleApiState() {
         json += "\"retry\":" + String(entries[i].retryCount) + "}";
     }
     json += "]}";
+
+    // D-38 discretion measurement: log the built payload length ONCE at
+    // the first full 500-point track (the cap decision input — if this
+    // exceeds ~16 KB the cap stays at 500, never grows to 1000)
+    static bool trajPayloadLogged = false;
+    if (!trajPayloadLogged && trajCount >= TRAJ_MAX_POINTS) {
+        trajPayloadLogged = true;
+        Serial.printf("Trajectory: first full %u-point /api/state payload is %u bytes\n",
+                      static_cast<unsigned>(trajCount), static_cast<unsigned>(json.length()));
+    }
 
     server.send(200, "application/json", json);
 }
