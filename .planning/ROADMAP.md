@@ -163,7 +163,7 @@ Plans:
 - WiFi mode switching (AP/Station)
 - Comprehensive testing of all features
 
-**Plans:** 2/5 plans executed — tracer dashboard shell first, then map, alerts, gallery, WiFi (sequential waves; every plan owns src/main_basestation.cpp, so file ownership serializes the waves)
+**Plans:** 3/5 plans executed — tracer dashboard shell first, then map, alerts, gallery, WiFi (sequential waves; every plan owns src/main_basestation.cpp, so file ownership serializes the waves)
 
 Plans:
 **Wave 1**
@@ -176,7 +176,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 03-03-PLAN.md — Alert engine: six base-side conditions (derived beacon-loss signal quality; no RSSI — E32 has none), D-44 latch/auto-clear lifecycles, NVS thresholds, banner bar + beep + Alert Thresholds card (ALRT-01..ALRT-06)
+- [x] 03-03-PLAN.md — Alert engine: six base-side conditions (derived beacon-loss signal quality; no RSSI — E32 has none), D-44 latch/auto-clear lifecycles, NVS thresholds, banner bar + beep + Alert Thresholds card (ALRT-01..ALRT-06)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 

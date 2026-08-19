@@ -42,12 +42,12 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 
 ### Alerts & Monitoring
 
-- [ ] **ALRT-01**: System provides altitude threshold warnings
+- [x] **ALRT-01**: System provides altitude threshold warnings
 - [x] **ALRT-02**: System provides low battery alerts
-- [ ] **ALRT-03**: System provides GPS lost notifications
-- [ ] **ALRT-04**: System provides landing detection alerts
-- [ ] **ALRT-05**: System provides ascent rate warnings
-- [ ] **ALRT-06**: System provides signal quality monitoring
+- [x] **ALRT-03**: System provides GPS lost notifications
+- [x] **ALRT-04**: System provides landing detection alerts
+- [x] **ALRT-05**: System provides ascent rate warnings
+- [x] **ALRT-06**: System provides signal quality monitoring
 
 ## v2 Requirements
 
@@ -99,12 +99,12 @@ Which phases cover which requirements. Updated during roadmap creation.
 | PRI-01 | Phase 2 | Gaps Found |
 | PRI-02 | Phase 1 | Complete |
 | PRI-03 | Phase 2 | Gaps Found |
-| ALRT-01 | Phase 3 | Pending |
+| ALRT-01 | Phase 3 | Complete |
 | ALRT-02 | Phase 3 | Complete |
-| ALRT-03 | Phase 3 | Pending |
-| ALRT-04 | Phase 3 | Pending |
-| ALRT-05 | Phase 3 | Pending |
-| ALRT-06 | Phase 3 | Pending |
+| ALRT-03 | Phase 3 | Complete |
+| ALRT-04 | Phase 3 | Complete |
+| ALRT-05 | Phase 3 | Complete |
+| ALRT-06 | Phase 3 | Complete |
 
 **Coverage:**
 

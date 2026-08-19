@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 03-02-PLAN.md
-last_updated: "2026-08-19T16:24:38.806Z"
+stopped_at: Completed 03-03-PLAN.md
+last_updated: "2026-08-19T16:51:56.412Z"
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 16
-  completed_plans: 12
+  completed_plans: 13
 current_phase: 2
 current_phase_name: enhanced-web-interface
 ---
@@ -27,10 +27,10 @@ current_phase_name: enhanced-web-interface
 
 ## Current Position
 
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 5
 **Status:** Ready to execute
-**Progress:** [████████░░] 75% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
+**Progress:** [████████░░] 81% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
 
 ## Progress
 
@@ -122,8 +122,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-19T16:24:38.770Z
-**Stopped at:** Completed 03-02-PLAN.md
+**Last session:** 2026-08-19T16:51:56.373Z
+**Stopped at:** Completed 03-03-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -141,6 +141,7 @@ See: `.planning/PROJECT.md`
 | Phase 02 P05 | ~21 min | 3 tasks | 8 files |
 | Phase 03 P01 | 23min | 2 tasks | 8 files |
 | Phase 03 P02 | 25min | 2 tasks | 10 files |
+| Phase 03 P03 | 24m | 2 tasks | 4 files |
 
 ## Decisions
 
@@ -169,3 +170,5 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: Pull-based trajectory recording: TrajectoryBuffer polls ImageRx().getTelemetrySnapshot() with beacon-seq dedup — producer untouched
 - [Phase ?]: Offline map swap covers (not hides) Leaflet so tile recovery stays live; periodic re-probe every 3rd poll flips back automatically
 - [Phase ?]: TRAJ_MAX_POINTS stays 500: measured 500-point /api/state payload 14,009 B (traj 13,395 B) — under 16 KB budget
+- [Phase ?]: ALRT-06 beacon loss = (expected - received) over the sliding 60s window: equals interior seq-gap count at the locked 5s cadence but also covers edge loss and total outage
+- [Phase ?]: Critical alerts latch on the condition rising edge; ack while condition persists keeps the row hidden until it clears and re-fires (03-03)
