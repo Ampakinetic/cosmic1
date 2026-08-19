@@ -49,8 +49,12 @@ bool CommandProtocol::serializeCommand(const CommandPacket& cmd, uint8_t* buffer
     size_t offset = 0;
     size_t packetLength = CMD_HEADER_SIZE + 5 + cmd.payloadLength + 4; // header + cmd+seq+payloadLen + payload + crc+end
 
-    // LoRa packet limit (CR-02): header 7 + command block 5 + CRC 2 + end 2 = 16 overhead
-    if (packetLength > CMD_MAX_PACKET_SIZE || cmd.payloadLength > CMD_MAX_PACKET_SIZE - 16) {
+    // LoRa packet limit (CR-02): header 7 + command block 5 + CRC 2 + end 2 = 16 overhead.
+    // WR-04: the payload bound is CMD_MAX_PAYLOAD_SIZE itself (200) — the old
+    // packet-size-only check (224) accepted lengths whose payload bytes were
+    // then silently NOT written (the write below only ran <= 200), emitting a
+    // malformed packet whose header advertised absent payload bytes.
+    if (packetLength > CMD_MAX_PACKET_SIZE || cmd.payloadLength > CMD_MAX_PAYLOAD_SIZE) {
         return false;
     }
 
@@ -71,8 +75,8 @@ bool CommandProtocol::serializeCommand(const CommandPacket& cmd, uint8_t* buffer
     writeUint16(buffer + offset, cmd.payloadLength);
     offset += 2;
 
-    // Write payload
-    if (cmd.payloadLength > 0 && cmd.payloadLength <= CMD_MAX_PAYLOAD_SIZE) {
+    // Write payload (bound already enforced above — WR-04)
+    if (cmd.payloadLength > 0) {
         memcpy(buffer + offset, cmd.payload, cmd.payloadLength);
         offset += cmd.payloadLength;
     }

@@ -10,9 +10,10 @@
 // Clauses — exits 0 only if ALL hold:
 //   (a) every sequence number 1..65535 serializes into a packet that passes
 //       the balloon-side validation rules (start bytes, end bytes, validateCRC)
-//   (b) serializeCommand rejects a payload of CMD_MAX_PACKET_SIZE - 15 = 225
-//       bytes (would produce a 241-byte packet) while accepting the 224-byte
-//       boundary (240-byte packet exactly)
+//   (b) serializeCommand rejects a payload of CMD_MAX_PAYLOAD_SIZE + 1 = 201
+//       bytes (WR-04: a length above the payload bound would emit a packet
+//       whose header advertises payload bytes that are absent) while
+//       accepting the 200-byte boundary (216-byte packet)
 //   (c) a command whose payload contains the consecutive bytes 0x0D 0x0A
 //       passes packet validation, and BOTH length-driven receivers
 //       (response flavor + command flavor) accumulate it intact
@@ -118,8 +119,8 @@ function serializeCommand(sequenceNumber, cmdByte, payload, { defective = false 
     const payloadLength = payload ? payload.length : 0;
     const packetLength = CMD_HEADER_SIZE + 5 + payloadLength + 4;
 
-    if (packetLength > CMD_MAX_PACKET_SIZE || payloadLength > CMD_MAX_PACKET_SIZE - 16) {
-        return null; // rejected (CR-02)
+    if (packetLength > CMD_MAX_PACKET_SIZE || payloadLength > CMD_MAX_PAYLOAD_SIZE) {
+        return null; // rejected (CR-02 packet limit; WR-04 payload bound)
     }
 
     const buffer = Buffer.alloc(packetLength);
@@ -136,7 +137,7 @@ function serializeCommand(sequenceNumber, cmdByte, payload, { defective = false 
     buffer.writeUInt16BE(sequenceNumber, offset); offset += 2;
     buffer.writeUInt16BE(payloadLength, offset); offset += 2;
 
-    if (payloadLength > 0 && payloadLength <= CMD_MAX_PAYLOAD_SIZE) {
+    if (payloadLength > 0) {
         payload.copy(buffer, offset);
         offset += payloadLength;
     }
@@ -331,12 +332,12 @@ function assert(condition, label) {
     assert(accepted === 0xFFFF, `(a) fixed serializer: all 65535 sequences (1..65535) pass balloon-side validation (${accepted}/65535)`);
 }
 
-// (b) Oversize rejection and boundary acceptance
+// (b) Oversize rejection and boundary acceptance (WR-04: payload bound is CMD_MAX_PAYLOAD_SIZE)
 {
-    const oversize = serializeCommand(1, 0x01, Buffer.alloc(CMD_MAX_PACKET_SIZE - 15)); // 225-byte payload -> 241-byte packet
-    const boundary = serializeCommand(1, 0x01, Buffer.alloc(CMD_MAX_PACKET_SIZE - 16)); // 224-byte payload -> exactly 240 bytes
-    assert(oversize === null, '(b) serializeCommand rejects a 225-byte payload (241-byte packet)');
-    assert(boundary !== null && balloonAccepts(boundary), '(b) serializeCommand accepts the 224-byte payload boundary (240-byte packet)');
+    const oversize = serializeCommand(1, 0x01, Buffer.alloc(CMD_MAX_PAYLOAD_SIZE + 1)); // 201-byte payload -> header would advertise absent bytes
+    const boundary = serializeCommand(1, 0x01, Buffer.alloc(CMD_MAX_PAYLOAD_SIZE));     // 200-byte payload -> 216-byte packet
+    assert(oversize === null, '(b) serializeCommand rejects a 201-byte payload (payloadLength > CMD_MAX_PAYLOAD_SIZE, WR-04)');
+    assert(boundary !== null && balloonAccepts(boundary), '(b) serializeCommand accepts the 200-byte payload boundary (216-byte packet)');
 }
 
 // (c) Embedded end-marker bytes survive as packet content
