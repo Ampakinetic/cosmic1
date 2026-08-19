@@ -267,6 +267,56 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             font-size: 14px;
             font-weight: bold;
         }
+        /* D-42 alert bar — the FIRST content section, created/removed by
+           the poll renderer (zero alerts = no bar in the DOM at all) */
+        #alerts {
+            margin-bottom: 24px;
+        }
+        .alerts-head {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        .audio-hint {
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        .alert-banner {
+            border-left: 4px solid;
+            border-radius: 8px;
+            padding: 16px;
+            margin-bottom: 8px;
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        .alert-banner.critical {
+            border-color: #ef4444;
+            background: #7f1d1d;
+        }
+        .alert-banner.critical .alert-title {
+            color: #f87171;
+        }
+        .alert-banner.warning {
+            border-color: #eab308;
+            background: #713f12;
+        }
+        .alert-banner.warning .alert-title {
+            color: #fbbf24;
+        }
+        .alert-title {
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .alert-detail {
+            color: #e2e8f0;
+            font-size: 14px;
+        }
         .map-frame {
             position: relative;
             width: 100%;
@@ -498,6 +548,7 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
 <body>
     <nav class="section-nav">
         <div class="nav-inner">
+            <a href="#alerts">Alerts</a>
             <a href="#map">Map</a>
             <a href="#capture">Capture</a>
             <a href="#queue">Queue</a>
@@ -957,19 +1008,19 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
         }
 
         // ---------- section nav (D-45): highlight while scrolling ----------
+        // Sections are looked up per update, NOT pinned at load: the
+        // alerts section is created and removed by the poll renderer, so
+        // a load-time section list would miss it.
         const navLinks = {};
-        const navSections = [];
         Array.prototype.forEach.call(document.querySelectorAll('.section-nav a'), function (a) {
-            const id = (a.getAttribute('href') || '').slice(1);
-            navLinks[id] = a;
-            const sec = document.getElementById(id);
-            if (sec) navSections.push(sec);
+            navLinks[(a.getAttribute('href') || '').slice(1)] = a;
         });
         function updateNavCurrent() {
-            let current = navSections.length > 0 ? navSections[0].id : null;
-            for (let i = 0; i < navSections.length; i++) {
-                if (navSections[i].getBoundingClientRect().top <= 140) current = navSections[i].id;
-            }
+            let current = null;
+            Object.keys(navLinks).forEach(function (id) {
+                const sec = document.getElementById(id);
+                if (sec && sec.getBoundingClientRect().top <= 140) current = id;
+            });
             Object.keys(navLinks).forEach(function (id) {
                 setClass(navLinks[id], id === current ? 'current' : '');
             });
@@ -1069,7 +1120,257 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
         }
 
         // ---------- per-poll state render (D-34: one payload, diff-checked) ----------
+        // ---------- alert bar + beep (D-42 / D-44, Pitfall 7) ----------
+        // The alerts section is CREATED and REMOVED by the poll renderer:
+        // zero alerts = no bar in the DOM at all (no all-clear
+        // placeholder). Banners always render regardless of the mute
+        // state — muting suppresses the beep only, never hides banners.
+        const alertSeenCritical = {};
+        let beepsMuted = false;
+        try { beepsMuted = sessionStorage.getItem('cosmic1BeepsMuted') === '1'; } catch (e) {}
+
+        let audioCtx = null;
+        let audioArmed = false;
+
+        // First gesture anywhere arms audio (browser autoplay policy);
+        // the context is created lazily HERE, never at page load
+        function armAudio() {
+            if (!audioCtx) {
+                try {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                } catch (e) { audioCtx = null; }
+            }
+            if (!audioCtx) return;
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume().then(function () {
+                    audioArmed = (audioCtx.state === 'running');
+                    updateAudioUi();
+                });
+            } else {
+                audioArmed = (audioCtx.state === 'running');
+            }
+            updateAudioUi();
+        }
+        document.addEventListener('click', function () { armAudio(); });
+
+        // ~1000 Hz, 150 ms envelope — only on the none -> critical
+        // transition of a type (never per poll, never for warnings)
+        function beepOnce() {
+            if (beepsMuted || !audioArmed || !audioCtx || audioCtx.state !== 'running') return;
+            const oscillator = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            oscillator.frequency.value = 1000;
+            const t = audioCtx.currentTime;
+            gain.gain.setValueAtTime(0.0001, t);
+            gain.gain.exponentialRampToValueAtTime(0.3, t + 0.01);
+            gain.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+            oscillator.connect(gain);
+            gain.connect(audioCtx.destination);
+            oscillator.start(t);
+            oscillator.stop(t + 0.16);
+        }
+
+        function toggleMute() {
+            beepsMuted = !beepsMuted;
+            try { sessionStorage.setItem('cosmic1BeepsMuted', beepsMuted ? '1' : '0'); } catch (e) {}
+            updateAudioUi();
+        }
+
+        function updateAudioUi() {
+            const btn = document.getElementById('mute-btn');
+            if (btn) setText(btn, beepsMuted ? 'Unmute' : 'Mute beeps');
+            const hint = document.getElementById('audio-hint');
+            if (hint) hint.style.display = audioArmed ? 'none' : 'inline';
+        }
+
+        function ackAlert(type) {
+            fetch('/alerts/ack', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'type=' + type
+            }).then(function (r) {
+                if (r.ok) pollOnce();   // collapse is server-truthful on the next poll
+            }).catch(function (err) { console.error(err); });
+        }
+
+        // Locked banner copy (UI-SPEC) composed from the server's live
+        // v1/v2 values — titles and details render via textContent only
+        function fmt1(x) { return (Math.round(x * 10) / 10).toFixed(1); }
+        function alertCopy(a) {
+            switch (a.type) {
+            case 0:
+                return ['Altitude Threshold',
+                    Math.round(a.v1) + ' m, above the ' + Math.round(a.v2) + ' m warning level'];
+            case 1:
+                return ['Low Battery',
+                    a.v1 < 0 ? 'Battery voltage not reported by the balloon'
+                             : fmt1(a.v1) + ' V, below the ' + fmt1(a.v2) + ' V threshold'];
+            case 2:
+                return ['GPS Signal Lost', 'no valid fix for ' + Math.round(a.v1) + ' s'];
+            case 3:
+                return ['Landing Detected',
+                    'altitude within ' + Math.round(a.v1) + ' m of ground level and stable for '
+                    + Math.round(a.v2) + ' s'];
+            case 4:
+                return [a.v1 >= 0 ? 'Ascent Rate' : 'Descent Rate',
+                    (a.v1 >= 0 ? 'climbing at ' : 'descending at ') + fmt1(Math.abs(a.v1))
+                    + ' m/s, above the ' + Math.round(a.v2) + ' m/s limit'];
+            case 5:
+                return ['Signal Quality',
+                    Math.round(a.v1) + '% of telemetry beacons missed in the last minute'];
+            }
+            return ['Alert', ''];
+        }
+
+        // D-45: the alerts bar is the FIRST content section — created
+        // above map and telemetry when the first alert appears
+        function ensureAlertsSection() {
+            let sec = document.getElementById('alerts');
+            if (!sec) {
+                sec = document.createElement('section');
+                sec.id = 'alerts';
+                const head = document.createElement('div');
+                head.className = 'alerts-head';
+                const mute = document.createElement('button');
+                mute.type = 'button';
+                mute.id = 'mute-btn';
+                mute.addEventListener('click', toggleMute);
+                const hint = document.createElement('span');
+                hint.id = 'audio-hint';
+                hint.className = 'audio-hint';
+                hint.textContent = 'Audio muted until you interact with the page.';
+                head.appendChild(mute);
+                head.appendChild(hint);
+                const list = document.createElement('div');
+                list.id = 'alert-list';
+                sec.appendChild(head);
+                sec.appendChild(list);
+                document.getElementById('map').parentNode.insertBefore(sec, document.getElementById('map'));
+            }
+            return sec;
+        }
+
+        let lastAlertSig = null;
+        function renderAlerts(data) {
+            const alerts = data.alerts || [];
+            // Beep only on the none -> critical transition per type
+            const presentCritical = {};
+            alerts.forEach(function (a) {
+                if (a.sev === 'critical') {
+                    presentCritical[a.type] = true;
+                    if (!alertSeenCritical[a.type]) {
+                        alertSeenCritical[a.type] = true;
+                        beepOnce();
+                    }
+                }
+            });
+            Object.keys(alertSeenCritical).forEach(function (k) {
+                if (!presentCritical[k]) delete alertSeenCritical[k];
+            });
+
+            const sig = alerts.map(function (a) {
+                return a.type + '|' + a.sev + '|' + a.latched + '|' + a.v1 + '|' + a.v2;
+            }).join(';');
+            if (sig === lastAlertSig) {
+                updateAudioUi();   // section may have been (re)created
+                return;
+            }
+            lastAlertSig = sig;
+
+            // Zero alerts: the bar leaves the DOM entirely
+            if (alerts.length === 0) {
+                const sec = document.getElementById('alerts');
+                if (sec) sec.remove();
+                return;
+            }
+
+            const list = ensureAlertsSection().querySelector('#alert-list');
+            while (list.firstChild) list.removeChild(list.firstChild);
+            // Rows arrive newest-first from the server — render in order
+            alerts.forEach(function (a) {
+                const row = document.createElement('div');
+                row.className = 'alert-banner ' + a.sev;
+                const copy = alertCopy(a);
+                const title = document.createElement('span');
+                title.className = 'alert-title';
+                title.textContent = copy[0];
+                const detail = document.createElement('span');
+                detail.className = 'alert-detail';
+                detail.textContent = '— ' + copy[1];
+                row.appendChild(title);
+                row.appendChild(detail);
+                // Only latched (critical) rows carry an Acknowledge button
+                if (a.latched) {
+                    const ack = document.createElement('button');
+                    ack.type = 'button';
+                    ack.textContent = 'Acknowledge';
+                    ack.addEventListener('click', function () { ackAlert(a.type); });
+                    row.appendChild(ack);
+                }
+                list.appendChild(row);
+            });
+            updateAudioUi();
+        }
+
+        // ---------- Alert Thresholds card (D-43) ----------
+        // Inputs prefill from the persisted /api/state truth — the
+        // signature gate keeps an in-progress edit from being clobbered
+        // by a background poll
+        let lastThresholdsSig = null;
+        function renderAlertThresholds(data) {
+            const t = data.thresholds;
+            if (!t) return;
+            const sig = t.altWarnM + '|' + t.battLowV + '|' + t.gpsLostS + '|' + t.rateLimitMps
+                + '|' + t.beaconLossPct + '|' + t.landingRateMps + '|' + t.landingStableS;
+            if (sig === lastThresholdsSig) return;
+            lastThresholdsSig = sig;
+            document.getElementById('alert-alt').value = t.altWarnM;
+            document.getElementById('alert-batt').value = t.battLowV;
+            document.getElementById('alert-gps').value = t.gpsLostS;
+            document.getElementById('alert-rate').value = t.rateLimitMps;
+            document.getElementById('alert-loss').value = t.beaconLossPct;
+            document.getElementById('alert-landrate').value = t.landingRateMps;
+            document.getElementById('alert-landstable').value = t.landingStableS;
+        }
+
+        // Save path: inputs disable while the POST is in flight, then the
+        // card refreshes from the persisted truth on the next poll
+        document.getElementById('alerts-form').addEventListener('submit', function (ev) {
+            ev.preventDefault();
+            const form = ev.target;
+            const els = form.elements;
+            for (let i = 0; i < els.length; i++) els[i].disabled = true;
+            const fields = ['altitude-m', 'battery-v', 'gps-lost-s', 'rate-mps',
+                'beacon-loss-pct', 'landing-rate-mps', 'landing-stable-s'];
+            const body = fields.map(function (f) {
+                return f + '=' + encodeURIComponent(form.elements[f].value);
+            }).join('&');
+            const msg = document.getElementById('alerts-msg');
+            fetch('/alerts', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body
+            }).then(function (r) {
+                return r.json().then(function (j) { return { ok: r.ok, msg: j.message }; });
+            }).then(function (res) {
+                for (let i = 0; i < els.length; i++) els[i].disabled = false;
+                msg.className = 'message ' + (res.ok ? 'success' : 'error');
+                setText(msg, res.msg || (res.ok ? 'Alert thresholds saved'
+                                                : 'Failed to save alert thresholds'));
+                pollOnce();
+            }).catch(function (err) {
+                console.error(err);
+                for (let i = 0; i < els.length; i++) els[i].disabled = false;
+                msg.className = 'message error';
+                setText(msg, 'Failed to save alert thresholds');
+            });
+        });
+
         function renderState(data) {
+            // Alert bar first (D-42): top section of the dashboard
+            renderAlerts(data);
+            renderAlertThresholds(data);
+
             setText(document.getElementById('cmd-sent'), data.sent);
             setText(document.getElementById('cmd-acked'), data.acked);
             setText(document.getElementById('cmd-failed'), data.failed);
@@ -1609,6 +1910,50 @@ void handleRoot() {
     html += "</form>";
 
     html += "<div class=\"message info\" id=\"event-chip\" style=\"margin-top:16px;\">Balloon values not received yet</div>";
+
+    html += "</div>";
+
+    // ⚠️ Alert Thresholds card (D-43): the seven BASE-LOCAL persisted
+    // thresholds. Inputs prefill from /api/state thresholds{} (persisted
+    // truth, never the last-submitted form) and disable while the save
+    // POST is in flight; WR-07 range checks and the locked 400/500 copy
+    // live in the /alerts route
+    html += "<div class=\"card\">";
+    html += "<h2>⚠️ Alert Thresholds</h2>";
+
+    html += "<form action=\"/alerts\" method=\"POST\" id=\"alerts-form\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>Altitude warning (100-10000 m):</label>";
+    html += "<input type=\"number\" name=\"altitude-m\" id=\"alert-alt\" min=\"100\" max=\"10000\" value=\"1000\">";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>Low battery (2.5-4.5 V):</label>";
+    html += "<input type=\"number\" name=\"battery-v\" id=\"alert-batt\" min=\"2.5\" max=\"4.5\" step=\"0.1\" value=\"3.3\">";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>GPS lost after (10-300 s):</label>";
+    html += "<input type=\"number\" name=\"gps-lost-s\" id=\"alert-gps\" min=\"10\" max=\"300\" step=\"5\" value=\"30\">";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>Rate limit (1-50 m/s):</label>";
+    html += "<input type=\"number\" name=\"rate-mps\" id=\"alert-rate\" min=\"1\" max=\"50\" value=\"15\">";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>Beacon loss (10-90 %):</label>";
+    html += "<input type=\"number\" name=\"beacon-loss-pct\" id=\"alert-loss\" min=\"10\" max=\"90\" step=\"5\" value=\"20\">";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>Landing rate below (0.5-5 m/s):</label>";
+    html += "<input type=\"number\" name=\"landing-rate-mps\" id=\"alert-landrate\" min=\"0.5\" max=\"5\" step=\"0.5\" value=\"1\">";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>Landing stable for (30-600 s):</label>";
+    html += "<input type=\"number\" name=\"landing-stable-s\" id=\"alert-landstable\" min=\"30\" max=\"600\" step=\"30\" value=\"60\">";
+    html += "</div>";
+    html += "<button type=\"submit\">Save Alert Thresholds</button>";
+    html += "</form>";
+
+    html += "<div class=\"message info\" id=\"alerts-msg\" style=\"margin-top:16px;\">Thresholds apply on the base station only.</div>";
 
     html += "</div>";
 
