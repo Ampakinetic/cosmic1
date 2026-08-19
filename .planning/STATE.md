@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 current_plan: 5
-status: executing
-stopped_at: Completed 03-04-PLAN.md
-last_updated: "2026-08-19T17:15:23.410Z"
+status: verifying
+stopped_at: Completed 03-05-PLAN.md
+last_updated: "2026-08-19T17:37:48.454Z"
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 16
-  completed_plans: 14
+  completed_plans: 15
 current_phase: 2
 current_phase_name: enhanced-web-interface
 ---
@@ -29,8 +29,8 @@ current_phase_name: enhanced-web-interface
 
 **Current Plan:** 5
 **Total Plans in Phase:** 5
-**Status:** Ready to execute
-**Progress:** [█████████░] 88% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
+**Status:** Phase complete — ready for verification
+**Progress:** [█████████░] 94% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
 
 ## Progress
 
@@ -122,8 +122,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-19T17:15:23.369Z
-**Stopped at:** Completed 03-04-PLAN.md
+**Last session:** 2026-08-19T17:37:36.879Z
+**Stopped at:** Completed 03-05-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -143,6 +143,7 @@ See: `.planning/PROJECT.md`
 | Phase 03 P02 | 25min | 2 tasks | 10 files |
 | Phase 03 P03 | 24m | 2 tasks | 4 files |
 | Phase 03 P04 | 19m | 2 tasks | 3 files |
+| Phase 03 P05 | 12 min | 2 tasks | 4 files |
 
 ## Decisions
 
@@ -176,3 +177,6 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: Gallery index is a fixed static RAM array (1000 entries) built at boot, rebuilt only when finalizeImage's indexVersion advances - pagination never rescans the directory (03-04)
 - [Phase ?]: Sidecar presence bits (SD_SC_PRESENT_*) drive /gallery detail serialization - only sidecar-carried fields render, never zero-filled; gpsValid derives from the null-vs-numeric telemetry triple (03-04)
 - [Phase ?]: Latest Capture card retired in 03-04: the newest gallery grid item is the latest-capture surface; latestThumbId JSON field and /img routes remain
+- [Phase ?]: 03-05: WiFi dual-mode discipline without the dual-mode constant — during a runtime AP-to-STA join the AP keeps serving (WiFi.begin ORs STA into the running mode); update() converges via WiFi.mode(WIFI_STA) on WL_CONNECTED or WIFI_AP on deadline, so WIFI_AP_STA never appears and the radio never rests dual-mode
+- [Phase ?]: 03-05: Join deadline is wrap-safe millis subtraction (D-26 idiom); requestSwitch persists to NVS FIRST then drives the radio so a reboot mid-switch honors the operator's choice
+- [Phase ?]: 03-05: /api/state wifi block carries ssid (JSON-escaped) beyond {mode,ip,joining,errorSsid} — the locked mode-line copy needs it; the password never appears in any response (T-03-12); explicit AP switch clears joinErrorSsid

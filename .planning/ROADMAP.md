@@ -163,7 +163,7 @@ Plans:
 - WiFi mode switching (AP/Station)
 - Comprehensive testing of all features
 
-**Plans:** 4/5 plans executed — tracer dashboard shell first, then map, alerts, gallery, WiFi (sequential waves; every plan owns src/main_basestation.cpp, so file ownership serializes the waves)
+**Plans:** 5/5 plans executed — tracer dashboard shell first, then map, alerts, gallery, WiFi (sequential waves; every plan owns src/main_basestation.cpp, so file ownership serializes the waves)
 
 Plans:
 **Wave 1**
@@ -184,7 +184,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 03-05-PLAN.md — WiFi manager: NVS-backed AP/Station with 20s fallback state machine, POST /wifi, WiFi card with two-step confirm; WEB-06 balloon-boundary negative check (WEB-05)
+- [x] 03-05-PLAN.md — WiFi manager: NVS-backed AP/Station with 20s fallback state machine, POST /wifi, WiFi card with two-step confirm; WEB-06 balloon-boundary negative check (WEB-05)
 
 ## Milestone Definition
 
