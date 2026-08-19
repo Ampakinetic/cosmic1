@@ -239,62 +239,62 @@ void loop() {
     }
     
     uint32_t loopStartTime = millis();
-    
-    try {
-        // Feed watchdog
-        if (Debug.isWatchdogEnabled()) {
-            Debug.feedWatchdog();
-        }
-        
-        // Update system state
-        updateSystemState();
-        
-        // Process main subsystems
-        processSensors();
-        processCommunications();
-        processPowerManagement();
-        processPacketHandling();
-        
-        // Send periodic data
-        if (shouldSendTelemetry()) {
-            sendTelemetryData();
-        }
-        
-        if (shouldSendHeartbeat()) {
-            sendHeartbeatPacket();
-        }
-        
-        if (shouldReportStatus()) {
-            sendStatusReport();
-        }
-        
-        if (shouldUpdatePerformance()) {
-            updatePerformanceMetrics(millis() - loopStartTime);
-        }
-        
-        // Update loop statistics
-        appState.loopCounter++;
-        uint32_t loopTime = millis() - loopStartTime;
-        appState.lastLoopTime = loopTime;
-        
-        if (loopTime > appState.maxLoopTime) {
-            appState.maxLoopTime = loopTime;
-        }
-        
-        appState.loopTimeSum += loopTime;
-        if (appState.loopCounter % 100 == 0) {
-            appState.avgLoopTime = appState.loopTimeSum / 100;
-            appState.loopTimeSum = 0;
-        }
-        
-        // Maintain loop timing
-        if (loopTime < MAIN_LOOP_INTERVAL_MS) {
-            delay(MAIN_LOOP_INTERVAL_MS - loopTime);
-        }
-        
-    } catch (...) {
-        SYS_ERROR("Exception in main loop");
-        handleSystemError("Main loop exception");
+
+    // WR-09: no try/catch — ESP32 Arduino builds compile with exceptions
+    // disabled (and even enabled, faults on this platform abort/reboot
+    // rather than unwinding C++ stacks), so a catch block here can never
+    // catch the failures it wraps — false containment. Fault containment is
+    // the watchdog plus the handleSystemError() call sites at real error
+    // paths.
+    // Feed watchdog
+    if (Debug.isWatchdogEnabled()) {
+        Debug.feedWatchdog();
+    }
+
+    // Update system state
+    updateSystemState();
+
+    // Process main subsystems
+    processSensors();
+    processCommunications();
+    processPowerManagement();
+    processPacketHandling();
+
+    // Send periodic data
+    if (shouldSendTelemetry()) {
+        sendTelemetryData();
+    }
+
+    if (shouldSendHeartbeat()) {
+        sendHeartbeatPacket();
+    }
+
+    if (shouldReportStatus()) {
+        sendStatusReport();
+    }
+
+    if (shouldUpdatePerformance()) {
+        updatePerformanceMetrics(millis() - loopStartTime);
+    }
+
+    // Update loop statistics
+    appState.loopCounter++;
+    uint32_t loopTime = millis() - loopStartTime;
+    appState.lastLoopTime = loopTime;
+
+    if (loopTime > appState.maxLoopTime) {
+        appState.maxLoopTime = loopTime;
+    }
+
+    appState.loopTimeSum += loopTime;
+    if (appState.loopCounter % 100 == 0) {
+        appState.avgLoopTime = appState.loopTimeSum / 100;
+        appState.loopTimeSum = 0;
+    }
+
+    // Maintain loop timing
+    if (loopTime < MAIN_LOOP_INTERVAL_MS) {
+        delay(MAIN_LOOP_INTERVAL_MS - loopTime);
     }
 }
 
