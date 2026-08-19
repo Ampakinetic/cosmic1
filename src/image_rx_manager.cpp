@@ -4,6 +4,16 @@
 #include "command_sender.h"        // window requests ride the Phase 1 machinery
 #include "sd_storage.h"            // stream-to-SD persistence (Pattern 5)
 
+// WR-06: the balloon's arm gate (IMG_MAX_IMAGE_SIZE, image_protocol.h) and
+// the base's manifest-validation bound (MAX_IMAGE_SIZE,
+// base_station_config.h) are a PAIRED constant — the two must stay equal or
+// the balloon would announce manifests the base rejects. Both definitions
+// are visible here via the includes above; tie them at compile time so a
+// one-sided edit fails the build instead of silently reintroducing the
+// rejected-manifest failure mode.
+static_assert(MAX_IMAGE_SIZE == static_cast<int32_t>(IMG_MAX_IMAGE_SIZE),
+              "base manifest bound (MAX_IMAGE_SIZE) must match balloon arm cap (IMG_MAX_IMAGE_SIZE)");
+
 // Debug configuration
 #ifndef DEBUG_IMAGE_RX
 #define DEBUG_IMAGE_RX true
