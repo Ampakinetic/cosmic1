@@ -315,7 +315,7 @@ if (ssid.length()) {
 - **Optimistic WiFi state in the UI** — show the mode the radio is actually in (queried), never the just-submitted form (IN-03 no-fabricated-state extends to WiFi).
 - **`delay()` anywhere in the new paths** — 20s STA wait, tile-fallback detection, alert cooldowns all use the millis-idiom state machines.
 - **Re-sending verbose trajectory objects every poll** — blows heap and stalls the single-threaded server (see Pattern 1 budget math).
-- **New visual language** — map/gallery/alerts/WiFi surfaces reuse the locked tokens (4 font sizes, spacing set, semantic palette); alerts add at most new semantic colors for warning/critical (see Open Questions).
+- **New visual language** — map/gallery/alerts/WiFi surfaces reuse the locked tokens (4 font sizes, spacing set, semantic palette); alerts add at most new semantic colors for warning/critical (resolved in Open Questions (RESOLVED) Q2: red family for critical, amber family for warnings — zero new hues).
 - **Touching balloon behavior beyond the beacon field** — D-41's boundary; the plan's verification should include a negative check (balloon diff limited to beacon-related lines).
 
 ## Don't Hand-Roll
@@ -525,21 +525,27 @@ Note: `include/wifi_config.h` (`const char *WIFI_SSID = "***"`) is NOT included 
 | A5 | u16 millivolts is the right beacon battery encoding (vs flags-bit validity) | Patterns (Pitfall 1/2) | LOW — planner may prefer flags bit1 `batteryValid`; both fit the 19-byte body |
 | A6 | Web Audio beep pattern (oscillator, ~800-1200Hz, short envelope) is acceptable as "beep" for D-42 | Patterns (4) | LOW — presentation detail already in Claude's discretion |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Trajectory payload shape (D-38 discretion)**
+_Closure recorded 2026-08-20 during plan revision: Q1–Q3 are adopted by the Phase 3 plans as marked per question; Q4 is a hardware item whose code-side handling is fixed and whose physical verification is tracked in 03-UAT.md._
+
+1. **Trajectory payload shape (D-38 discretion)** — RESOLVED, adopted by 03-02 Task 1
    - What we know: ring buffer 500-1000 pts; compact encoding ≈ 22-28 B/pt; verbose objects ≈ 55-65 B/pt; single-threaded server constraint.
    - What's unclear: whether full-history-per-poll stays under the acceptable latency at 1000 pts, or a delta-since-seq scheme is needed.
    - Recommendation: implement compact full-track first, measure `/api/state` build+send time at 500/1000 pts, switch to deltas only if the measurement misses the 5s cadence budget.
-2. **Alert banner semantics vs the locked color palette**
+   - Resolution: 03-02 Task 1 ships the compact array-of-arrays full-track in every poll with the cap fixed at 500 (TRAJ_MAX_POINTS), logs the built JSON length at the first full 500-point payload, and keeps the 500 cap if the measurement exceeds ~16 KB — the delta scheme stays an unneeded fallback unless the cadence budget is actually missed.
+2. **Alert banner semantics vs the locked color palette** — RESOLVED, adopted by 03-03 Task 2
    - What we know: palette reserves destructive-red for failures; amber = degraded; green = OK. D-42 needs "color-coded persistent banner row" for warning vs critical.
    - What's unclear: exact new semantic colors for informational-warning vs safety-critical (both amber? amber vs red?).
    - Recommendation: reuse the existing semantic set — critical alerts use the destructive red family, informational warnings the amber family, resolved the green — keeping "no new visual language" literally true; surface in plan-check if a new hue is proposed.
-3. **Landing-detection threshold defaults**
+   - Resolution: no new hue — 03-03 Task 2 (per the UI-SPEC Color table it cites) maps critical alerts to the destructive red family (#ef4444/#7f1d1d/#f87171) and informational warnings to the amber family (#eab308/#713f12/#fbbf24); resolution is disappearance per the D-44 auto-clear lifecycle, not a green row.
+3. **Landing-detection threshold defaults** — RESOLVED, adopted by 03-03 Task 1
    - What we know: no project-blessed numbers for sustained-flat-altitude detection; `EMERGENCY_ALTITUDE_RATE 15` m/s descent is the only anchor.
    - What's unclear: rate floor + persistence window + ground-reference (launch baseline vs absolute).
    - Recommendation: ship conservative defaults (e.g., |rate| < 1 m/s for 60s after having been above ~50 m gain) marked as UAT-calibratable via the Alerts card.
-4. **Does the physical balloon have the GPIO4 divider at all** (feeds A2/Pitfall 2) — hardware verification item for `03-UAT.md`, not resolvable from code.
+   - Resolution: 03-03 Task 1 ships exactly these conservative defaults — landingRateMps 1.0 (|rate| < 1 m/s) sustained for landingStableS 60, gated on > 50 m altitude gain over the launch baseline (AlertThresholds defaults) — overridable from the ⚠️ Alert Thresholds card and UAT-calibratable.
+4. **Does the physical balloon have the GPIO4 divider at all** (feeds A2/Pitfall 2) — hardware verification item for `03-UAT.md`, not resolvable from code — RESOLVED by disposition: code-side handling fixed, physical check deferred to 03-UAT.
+   - Resolution: the plans are safe either way — 03-01 Task 2's 1.8–8 V plausibility gate plus the nonzero-raw check keeps batteryValid false when the divider is absent, so the Battery tile renders the honest placeholder (never a fabricated voltage); physical presence and divider-ratio calibration remain 03-UAT.md hardware items.
 
 ## Environment Availability
 
