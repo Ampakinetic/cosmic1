@@ -19,6 +19,7 @@
 #include "image_rx_manager.h"
 #include "sd_storage.h"
 #include "trajectory_buffer.h"
+#include "alert_engine.h"
 #include "web_assets.h"
 
 // ===========================
@@ -83,6 +84,8 @@ struct BaseStationState {
     uint16_t autoCaptureIntervalAckSec;
     // Event Capture card (D-26): GET_STATUS poll timing
     uint32_t lastStatusPollMs;
+    // Alert engine (D-41..D-44): 1 s evaluation tick timing
+    uint32_t lastAlertTickMs;
 } appState;
 
 // Link considered stale after this long without an ACK (LED truth, IN-03)
@@ -148,6 +151,8 @@ void handleSetWBMode();
 void handleAutoCaptureEnable();
 void handleAutoCaptureDisable();
 void handleSetEventThresholds();
+void handleSetAlertThresholds();
+void handleAlertAck();
 void handleApiState();
 void handleLeafletJs();
 void handleLeafletCss();
@@ -1191,6 +1196,7 @@ void setup() {
     initLoRa();
     initStorage();
     Trajectory().begin();   // D-38: full-flight GPS track ring (base-only)
+    Alerts().begin();       // D-41..D-44: base-side alert engine (base-only)
     initWebServer();
 
     appState.initialized = true;
@@ -1233,6 +1239,13 @@ void loop() {
     // D-38: record one trajectory point per new valid-GPS beacon (pulls
     // the telemetry snapshot — no image_rx_manager changes)
     Trajectory().process();
+
+    // D-41..D-44: base-side alert evaluation on the 1 s millis timer —
+    // never blocks, never touches the radio
+    if (millis() - appState.lastAlertTickMs >= ALERT_PROCESS_INTERVAL_MS) {
+        appState.lastAlertTickMs = millis();
+        Alerts().process();
+    }
 
     // Physical status LED mirrors the computed link truth (WR-10 / IN-03)
     updateLED();
@@ -1331,6 +1344,10 @@ void initWebServer() {
     server.on("/auto-capture", HTTP_POST, handleAutoCaptureEnable);
     server.on("/auto-capture-stop", HTTP_POST, handleAutoCaptureDisable);
     server.on("/set-event-thresholds", HTTP_POST, handleSetEventThresholds);
+    // Alert thresholds + acknowledge (D-43/D-44): base-local NVS writes —
+    // no LoRa traffic
+    server.on("/alerts", HTTP_POST, handleSetAlertThresholds);
+    server.on("/alerts/ack", HTTP_POST, handleAlertAck);
     server.on("/api/state", HTTP_GET, handleApiState);
     server.on("/status", HTTP_GET, handleApiState);  // legacy alias — same serializer
     // Embedded Leaflet (WEB-02): gzipped PROGMEM assets with Content-Encoding
@@ -1989,6 +2006,100 @@ void handleSetEventThresholds() {
     }
 }
 
+// POST /alerts (D-43): the seven base-local alert threshold fields —
+// WR-07 full-value range checks per field BEFORE narrowing (mirrors
+// handleSetEventThresholds), then Alerts().setThresholds revalidates
+// in-module (T-03-08) and persists to NVS. Thresholds never touch LoRa
+// traffic.
+void handleSetAlertThresholds() {
+    if (!server.hasArg("altitude-m") || !server.hasArg("battery-v") ||
+        !server.hasArg("gps-lost-s") || !server.hasArg("rate-mps") ||
+        !server.hasArg("beacon-loss-pct") || !server.hasArg("landing-rate-mps") ||
+        !server.hasArg("landing-stable-s")) {
+        sendResponse(400, "Error", "Missing alert threshold parameters");
+        return;
+    }
+
+    // WR-07: full-value range check before any narrowing — a non-numeric
+    // arg parses to 0 and fails its range
+    long altM = server.arg("altitude-m").toInt();
+    if (altM < ALERT_ALT_WARN_MIN_M || altM > ALERT_ALT_WARN_MAX_M) {
+        sendResponse(400, "Error", "Invalid altitude threshold (100-10000 m)");
+        return;
+    }
+
+    float battV = server.arg("battery-v").toFloat();
+    if (battV < ALERT_BATT_LOW_MIN_V || battV > ALERT_BATT_LOW_MAX_V) {
+        sendResponse(400, "Error", "Invalid battery threshold (2.5-4.5 V)");
+        return;
+    }
+
+    long gpsS = server.arg("gps-lost-s").toInt();
+    if (gpsS < ALERT_GPS_LOST_MIN_S || gpsS > ALERT_GPS_LOST_MAX_S) {
+        sendResponse(400, "Error", "Invalid GPS-lost age (10-300 s)");
+        return;
+    }
+
+    long rateMps = server.arg("rate-mps").toInt();
+    if (rateMps < ALERT_RATE_MIN_MPS || rateMps > ALERT_RATE_MAX_MPS) {
+        sendResponse(400, "Error", "Invalid rate threshold (1-50 m/s)");
+        return;
+    }
+
+    long lossPct = server.arg("beacon-loss-pct").toInt();
+    if (lossPct < ALERT_LOSS_MIN_PCT || lossPct > ALERT_LOSS_MAX_PCT) {
+        sendResponse(400, "Error", "Invalid beacon-loss threshold (10-90 %)");
+        return;
+    }
+
+    float landRate = server.arg("landing-rate-mps").toFloat();
+    if (landRate < ALERT_LAND_RATE_MIN_MPS || landRate > ALERT_LAND_RATE_MAX_MPS) {
+        sendResponse(400, "Error", "Invalid landing rate (0.5-5 m/s)");
+        return;
+    }
+
+    long landStable = server.arg("landing-stable-s").toInt();
+    if (landStable < ALERT_LAND_STABLE_MIN_S || landStable > ALERT_LAND_STABLE_MAX_S) {
+        sendResponse(400, "Error", "Invalid landing stable time (30-600 s)");
+        return;
+    }
+
+    AlertThresholds t;
+    t.altWarnM = static_cast<int32_t>(altM);
+    t.battLowV = battV;
+    t.gpsLostS = static_cast<uint16_t>(gpsS);
+    t.rateLimitMps = static_cast<uint8_t>(rateMps);
+    t.beaconLossPct = static_cast<uint8_t>(lossPct);
+    t.landingRateMps = landRate;
+    t.landingStableS = static_cast<uint16_t>(landStable);
+
+    if (!Alerts().setThresholds(t)) {
+        sendResponse(500, "Error", "Failed to save alert thresholds");
+        return;
+    }
+
+    Serial.printf("Alert thresholds saved: alt %ld m, batt %.1f V, gps %ld s, rate %ld m/s, loss %ld %%, landing %.1f m/s / %ld s\n",
+                  altM, battV, gpsS, rateMps, lossPct, landRate, landStable);
+    sendResponse(200, "OK", "Alert thresholds saved");
+}
+
+// POST /alerts/ack (D-44): clear the latch of ONE critical type — the
+// type arrives as a numeric id 0-5 only (no string reaches the engine);
+// unknown values are rejected
+void handleAlertAck() {
+    if (!server.hasArg("type")) {
+        sendResponse(400, "Error", "Missing type parameter");
+        return;
+    }
+    long type = server.arg("type").toInt();
+    if (type < 0 || type >= ALERT_TYPE_COUNT) {
+        sendResponse(400, "Error", "Invalid alert type (0-5)");
+        return;
+    }
+    Alerts().ack(static_cast<AlertType>(type));
+    sendResponse(200, "OK", "Alert acknowledged");
+}
+
 // LOCKED status vocabulary (UI-SPEC Copywriting Contract) — the single
 // CommandState-to-string mapping shared by lastState and every queue row,
 // so the pinned row and the queue can never diverge
@@ -2125,6 +2236,36 @@ void handleApiState() {
     } else {
         json += "\"telemetry\":null,";
     }
+
+    // D-41..D-44: server-computed alert rows — truth only; the browser
+    // composes the locked banner copy from these live values, and severity
+    // derives from the type. Newest first — the render order of the bar.
+    AlertRow alertRows[ALERT_TYPE_COUNT];
+    uint8_t alertCount = Alerts().getAlertSnapshot(alertRows, ALERT_TYPE_COUNT);
+    json += "\"alerts\":[";
+    for (uint8_t i = 0; i < alertCount; i++) {
+        if (i > 0) {
+            json += ",";
+        }
+        json += "{\"type\":" + String(static_cast<uint8_t>(alertRows[i].type)) + ",";
+        json += "\"sev\":\"" + String(alertTypeIsCritical(alertRows[i].type) ? "critical" : "warning") + "\",";
+        json += "\"latched\":" + String(alertRows[i].latched ? "true" : "false") + ",";
+        json += "\"v1\":" + String(alertRows[i].v1, 1) + ",";
+        json += "\"v2\":" + String(alertRows[i].v2, 1) + "}";
+    }
+    json += "],";
+
+    // D-43: persisted alert thresholds — the Alerts card displays THIS
+    // truth, never the last submitted form
+    AlertThresholds th = Alerts().getThresholds();
+    json += "\"thresholds\":{";
+    json += "\"altWarnM\":" + String(th.altWarnM) + ",";
+    json += "\"battLowV\":" + String(th.battLowV, 1) + ",";
+    json += "\"gpsLostS\":" + String(th.gpsLostS) + ",";
+    json += "\"rateLimitMps\":" + String(th.rateLimitMps) + ",";
+    json += "\"beaconLossPct\":" + String(th.beaconLossPct) + ",";
+    json += "\"landingRateMps\":" + String(th.landingRateMps, 1) + ",";
+    json += "\"landingStableS\":" + String(th.landingStableS) + "},";
 
     // D-38: full-flight trajectory — compact array-of-arrays, OLDEST first
     // ([[lat,lon,altM],...] with fixed 6-decimal lat/lon and integer
