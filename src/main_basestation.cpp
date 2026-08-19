@@ -449,7 +449,7 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             border-radius: 3px;
             outline: none;
         }
-        input[type="number"], select {
+        input[type="number"], input[type="text"], input[type="password"], select {
             width: 100%;
             padding: 8px;
             background: #334155;
@@ -1439,6 +1439,96 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             });
         });
 
+        // ---------- 📶 WiFi card (WEB-05, D-40) ----------
+        // The mode line and the join-error row render ONLY the queried
+        // radio truth from /api/state's wifi block — never the submitted
+        // form; the password never appears in any response, so it never
+        // renders anywhere either. Two-step inline confirm: the ONLY
+        // Phase 3 action that can sever the operator's own connection —
+        // the first click relabels the button to the danger-red Confirm
+        // WiFi Switch, the second click submits, clicking anything else
+        // reverts. No modal.
+        const wifiForm = document.getElementById('wifi-form');
+        const wifiBtn = document.getElementById('wifi-apply-btn');
+        const wifiMsg = document.getElementById('wifi-msg');
+        let wifiArmed = false;
+
+        function wifiDisarm() {
+            if (!wifiArmed) return;
+            wifiArmed = false;
+            setText(wifiBtn, 'Apply WiFi Settings');
+            wifiBtn.className = '';
+        }
+
+        document.addEventListener('click', function (ev) {
+            if (wifiArmed && ev.target !== wifiBtn) wifiDisarm();
+        });
+
+        // Station requires both credential fields; Access Point reads
+        // none — the required flags follow the select so browser
+        // validation mirrors the server's WR-07 rules
+        document.getElementById('wifi-mode').addEventListener('change', function () {
+            const sta = this.value === 'sta';
+            document.getElementById('wifi-ssid').required = sta;
+            document.getElementById('wifi-pass').required = sta;
+        });
+
+        wifiForm.addEventListener('submit', function (ev) {
+            ev.preventDefault();
+            if (!wifiArmed) {
+                wifiArmed = true;
+                setText(wifiBtn, 'Confirm WiFi Switch');
+                wifiBtn.className = 'danger';
+                return;
+            }
+            const els = wifiForm.elements;
+            const body = 'mode=' + encodeURIComponent(els.mode.value)
+                + '&ssid=' + encodeURIComponent(els.ssid.value)
+                + '&password=' + encodeURIComponent(els.password.value);
+            fetch('/wifi', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: body
+            }).then(function (r) {
+                return r.json().then(function (j) { return { ok: r.ok, msg: j.message }; });
+            }).then(function (res) {
+                wifiDisarm();
+                els.password.value = '';   // never keep the password around
+                wifiMsg.style.display = 'block';
+                wifiMsg.className = 'message ' + (res.ok ? 'info' : 'error');
+                setText(wifiMsg, res.msg || 'Failed to apply WiFi settings');
+                pollOnce();
+            }).catch(function (err) {
+                console.error(err);
+                wifiDisarm();
+                wifiMsg.style.display = 'block';
+                wifiMsg.className = 'message error';
+                setText(wifiMsg, 'Failed to apply WiFi settings');
+            });
+        });
+
+        function renderWiFi(data) {
+            const w = data.wifi;
+            if (!w) return;
+            setText(document.getElementById('wifi-mode-line'), w.mode === 'STA'
+                ? ('Mode: Station (' + w.ssid + ') · IP ' + w.ip)
+                : ('Mode: Access Point (' + w.ssid + ') · IP ' + w.ip));
+            const err = document.getElementById('wifi-join-error');
+            if (w.errorSsid) {
+                err.style.display = 'block';
+                setText(err, 'Could not join "' + w.errorSsid
+                    + '" — running in Access Point mode. Check the network name and password, then try again.');
+            } else {
+                err.style.display = 'none';
+            }
+            // Serialize switches (T-03-15): while a join is inside its
+            // deadline the form is disabled — the relabel reverts too
+            Array.prototype.forEach.call(wifiForm.elements, function (el) {
+                el.disabled = w.joining;
+            });
+            if (w.joining) wifiDisarm();
+        }
+
         // ---------- Image Gallery (IMG-06, D-46/D-47/D-48) ----------
         // The grid lists persisted images newest-first (12 per page) through
         // /gallery; /api/state's galleryCount is the ONLY refresh signal —
@@ -1658,6 +1748,9 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             // Alert bar first (D-42): top section of the dashboard
             renderAlerts(data);
             renderAlertThresholds(data);
+
+            // 📶 WiFi card (WEB-05): queried mode line + join-error row
+            renderWiFi(data);
 
             setText(document.getElementById('cmd-sent'), data.sent);
             setText(document.getElementById('cmd-acked'), data.acked);
@@ -2235,6 +2328,44 @@ void handleRoot() {
     html += "</form>";
 
     html += "<div class=\"message info\" id=\"alerts-msg\" style=\"margin-top:16px;\">Thresholds apply on the base station only.</div>";
+
+    html += "</div>";
+
+    // 📶 WiFi card (WEB-05, D-40): LAST settings card (D-45 order). The
+    // mode line and join-error row render ONLY the queried radio truth
+    // from /api/state's wifi block — never the submitted form; the
+    // password never appears in any response, so it never renders
+    // anywhere. The static pre-submit note is ALWAYS visible; the
+    // two-step confirm lives in the footer script (the only Phase 3
+    // action that can sever the operator's own connection).
+    html += "<div class=\"card\">";
+    html += "<h2>📶 WiFi</h2>";
+
+    html += "<div class=\"message info\">Switching modes restarts the base station WiFi. If the new network fails, the base returns to Access Point mode within 20 s.</div>";
+
+    html += "<div id=\"wifi-mode-line\" style=\"margin-top:16px;\">Mode: —</div>";
+
+    html += "<form action=\"/wifi\" method=\"POST\" id=\"wifi-form\" style=\"margin-top:16px;\">";
+    html += "<div class=\"form-group\">";
+    html += "<label>WiFi mode:</label>";
+    html += "<select name=\"mode\" id=\"wifi-mode\">";
+    html += "<option value=\"ap\" selected>Access Point</option>";
+    html += "<option value=\"sta\">Station</option>";
+    html += "</select>";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>Network name (SSID):</label>";
+    html += "<input type=\"text\" name=\"ssid\" id=\"wifi-ssid\" maxlength=\"32\">";
+    html += "</div>";
+    html += "<div class=\"form-group\">";
+    html += "<label>Password:</label>";
+    html += "<input type=\"password\" name=\"password\" id=\"wifi-pass\" minlength=\"8\" maxlength=\"63\">";
+    html += "</div>";
+    html += "<button type=\"submit\" id=\"wifi-apply-btn\">Apply WiFi Settings</button>";
+    html += "</form>";
+
+    html += "<div class=\"message error\" id=\"wifi-join-error\" style=\"display:none;\"></div>";
+    html += "<div class=\"message info\" id=\"wifi-msg\" style=\"display:none;\"></div>";
 
     html += "</div>";
 
