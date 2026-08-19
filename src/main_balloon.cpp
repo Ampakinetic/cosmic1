@@ -694,8 +694,15 @@ void processCommunications() {
 }
 
 void processPowerManagement() {
-    // PowerMgr().update(); // Method doesn't exist
-    
+    // Refresh PowerMgr's cached readings on a ~1s cadence (D-26 millis
+    // idiom) — the telemetry beacon reads PowerMgr().getBatteryVoltage(),
+    // and that value is only as fresh as the last update() call
+    static uint32_t lastPowerUpdateMs = 0;
+    if (millis() - lastPowerUpdateMs >= 1000) {
+        lastPowerUpdateMs = millis();
+        PowerMgr().update();
+    }
+
     // Check power status - use dummy data for now
     PowerData powerData = {3.7f, 0.1f, 85, millis(), true};
     

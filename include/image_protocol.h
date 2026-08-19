@@ -104,7 +104,7 @@ static constexpr uint32_t TELEMETRY_BEACON_INTERVAL_MS = 5000;
 static constexpr size_t   IMG_MANIFEST_BODY_SIZE     = 27;
 
 // Fixed telemetry beacon body size on the wire (see TelemetryBeaconBody)
-static constexpr size_t   IMG_TELEMETRY_BEACON_BODY_SIZE = 17;
+static constexpr size_t   IMG_TELEMETRY_BEACON_BODY_SIZE = 19;
 
 // ===========================
 // Wire Bodies
@@ -145,16 +145,18 @@ struct ImageChunkBody {
     uint8_t  data[IMG_CHUNK_PAYLOAD_SIZE]; // first dataLen bytes valid
 };
 
-// 0x14 body — fixed 17 bytes: seq u16, altitudeCm i32, tempCentiC i16,
-// latE6 i32, lonE6 i32, flags u8 (bit0 gpsValid). Minimal telemetry-over-E32
-// surface; richer telemetry stays Phase 3.
+// 0x14 body — fixed 19 bytes: seq u16, altitudeCm i32, tempCentiC i16,
+// latE6 i32, lonE6 i32, flags u8 (bit0 gpsValid, bit1 batteryValid),
+// batteryMilliV u16. Battery rides the beacon (D-41) so ALRT-02 stays
+// zero-extra-airtime; the mV field is truth only while bit1 is set.
 struct TelemetryBeaconBody {
     uint16_t seq;          // BE16 — rolling beacon sequence
     int32_t  altitudeCm;   // BE32 — altitude in centimeters
     int16_t  tempCentiC;   // BE16 — temperature in centi-degrees C
     int32_t  latE6;        // BE32 — latitude degrees * 1e6
     int32_t  lonE6;        // BE32 — longitude degrees * 1e6
-    uint8_t  flags;        // bit0 gpsValid
+    uint8_t  flags;        // bit0 gpsValid, bit1 batteryValid
+    uint16_t batteryMilliV; // BE16 — battery voltage in millivolts (valid iff bit1)
 };
 
 // ===========================
@@ -200,7 +202,7 @@ struct ImageChunkPacket {
 
 struct TelemetryBeaconPacket {
     PacketType type;        // PACKET_TYPE_TELEMETRY_BEACON (0x14) — factory-assigned
-    TelemetryBeaconBody body; // fixed 17 bytes on the wire
+    TelemetryBeaconBody body; // fixed 19 bytes on the wire
 };
 
 #endif // IMAGE_PROTOCOL_H

@@ -111,6 +111,8 @@ struct TelemetrySnapshot {
     float    lat;          // latE6 / 1e6
     float    lon;          // lonE6 / 1e6
     bool     gpsValid;     // flags bit0
+    uint16_t batteryMv;    // batteryMilliV — truth only while batteryValid
+    bool     batteryValid; // flags bit1
 };
 
 class ImageRxManager {

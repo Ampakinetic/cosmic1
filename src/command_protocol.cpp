@@ -477,7 +477,7 @@ bool CommandProtocol::serializeTelemetryBeacon(const TelemetryBeaconPacket& pkt,
         return false;
     }
 
-    size_t packetLength = CMD_HEADER_SIZE + IMG_TELEMETRY_BEACON_BODY_SIZE + 4; // 7 + 17 + 4 = 28
+    size_t packetLength = CMD_HEADER_SIZE + IMG_TELEMETRY_BEACON_BODY_SIZE + 4; // 7 + 19 + 4 = 30
     if (packetLength > CMD_MAX_PACKET_SIZE) {
         return false;
     }
@@ -493,13 +493,14 @@ bool CommandProtocol::serializeTelemetryBeacon(const TelemetryBeaconPacket& pkt,
     offset += 2;
     buffer[offset++] = 0x00; // CRC8 pad byte
 
-    // Body — 17 bytes, field-by-field
+    // Body — 19 bytes, field-by-field
     writeUint16(buffer + offset, pkt.body.seq); offset += 2;
     writeUint32(buffer + offset, static_cast<uint32_t>(pkt.body.altitudeCm)); offset += 4;
     writeUint16(buffer + offset, static_cast<uint16_t>(pkt.body.tempCentiC)); offset += 2;
     writeUint32(buffer + offset, static_cast<uint32_t>(pkt.body.latE6)); offset += 4;
     writeUint32(buffer + offset, static_cast<uint32_t>(pkt.body.lonE6)); offset += 4;
     buffer[offset++] = pkt.body.flags;
+    writeUint16(buffer + offset, pkt.body.batteryMilliV); offset += 2;
 
     // CRC16 + end bytes
     uint16_t crc16 = calculateCRC16(buffer, offset);
@@ -538,6 +539,7 @@ bool CommandProtocol::deserializeTelemetryBeacon(const uint8_t* buffer, size_t l
     pkt.body.latE6 = static_cast<int32_t>(readUint32(buffer + off)); off += 4;
     pkt.body.lonE6 = static_cast<int32_t>(readUint32(buffer + off)); off += 4;
     pkt.body.flags = buffer[off++];
+    pkt.body.batteryMilliV = readUint16(buffer + off); off += 2;
 
     return true;
 }

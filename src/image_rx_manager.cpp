@@ -300,13 +300,16 @@ void ImageRxManager::onTelemetryBeaconFrame(const uint8_t* frame, size_t length)
     telemetry.lat = static_cast<float>(b.latE6) / 1000000.0f;
     telemetry.lon = static_cast<float>(b.lonE6) / 1000000.0f;
     telemetry.gpsValid = (b.flags & 0x01) != 0;
+    telemetry.batteryMv = b.batteryMilliV;
+    telemetry.batteryValid = (b.flags & 0x02) != 0;
 
     if (DEBUG_IMAGE_RX) {
-        Serial.printf("ImageRx: beacon seq=%u alt=%.1fm temp=%.1fC gps=%s\n",
+        Serial.printf("ImageRx: beacon seq=%u alt=%.1fm temp=%.1fC gps=%s batt=%s\n",
                       telemetry.seq,
                       telemetry.altitudeM,
                       telemetry.tempC,
-                      telemetry.gpsValid ? "valid" : "no-fix");
+                      telemetry.gpsValid ? "valid" : "no-fix",
+                      telemetry.batteryValid ? "valid" : "n/a");
     }
 }
 

@@ -1,6 +1,8 @@
 #include "image_tx_manager.h"
 #include "auto_capture.h"
 #include "sensor_manager.h"
+#include "power_manager.h"
+#include "sensor_pins.h"
 #include <esp_rom_crc.h>
 
 // Debug configuration
@@ -140,7 +142,18 @@ bool ImageTxManager::sendTelemetryBeacon() {
         body.lonE6 = 0;
     }
     body.tempCentiC = static_cast<int16_t>(lroundf(bmp.temperature * 100.0f));
-    body.flags = gpsValid ? 0x01 : 0x00;
+
+    // Battery rides the beacon (D-41 / ALRT-02): mV is truth only when the
+    // sense line actually sees a pack — voltage within physical range AND a
+    // nonzero raw ADC reading. Otherwise batteryMilliV stays 0 (from the {}
+    // init) with bit1 clear, and the base renders the honest absent state.
+    bool batteryValid = false;
+    float batteryV = PowerMgr().getBatteryVoltage();
+    if (batteryV >= 1.8f && batteryV <= 8.0f && analogRead(BATTERY_SENSE_PIN) != 0) {
+        body.batteryMilliV = static_cast<uint16_t>(lroundf(batteryV * 1000.0f));
+        batteryValid = true;
+    }
+    body.flags = static_cast<uint8_t>((gpsValid ? 0x01 : 0x00) | (batteryValid ? 0x02 : 0x00));
 
     TelemetryBeaconPacket pkt = createTelemetryBeaconPacket(body); // factory owns the 0x14 type byte
 

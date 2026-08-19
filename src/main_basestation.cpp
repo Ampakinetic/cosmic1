@@ -1728,7 +1728,9 @@ void handleApiState() {
         json += "\"tempC\":" + String(beacon.tempC, 1) + ",";
         json += "\"lat\":" + String(beacon.lat, 6) + ",";
         json += "\"lon\":" + String(beacon.lon, 6) + ",";
-        json += "\"gpsValid\":" + String(beacon.gpsValid ? "true" : "false") + "},";
+        json += "\"gpsValid\":" + String(beacon.gpsValid ? "true" : "false") + ",";
+        json += "\"batteryMv\":" + String(beacon.batteryMv) + ",";
+        json += "\"batteryValid\":" + String(beacon.batteryValid ? "true" : "false") + "},";
     } else {
         json += "\"telemetry\":null,";
     }

@@ -70,7 +70,7 @@ const PACKET_TYPE_IMAGE_CHUNK = 0x13;
 const PACKET_TYPE_TELEMETRY_BEACON = 0x14;
 const IMG_CHUNK_PAYLOAD_SIZE = 200;
 const IMG_MANIFEST_BODY_SIZE = 27;
-const IMG_TELEMETRY_BEACON_BODY_SIZE = 17;
+const IMG_TELEMETRY_BEACON_BODY_SIZE = 19;
 
 // --- CRC16 (transcribed from CommandProtocol::calculateCRC16) ---
 // Modbus-style: initial 0xFFFF, reflected polynomial 0xA001,
@@ -602,12 +602,12 @@ function deserializeChunk(buffer) {
     return { type: buffer[2], body };
 }
 
-// Transcribes CommandProtocol::serializeTelemetryBeacon — 17-byte body.
+// Transcribes CommandProtocol::serializeTelemetryBeacon — 19-byte body.
 // NOTE: the firmware has no beacon factory yet (transmit side is 02-02,
 // gated behind a blocking decision checkpoint); the packet is constructed
 // with the type set directly, which is what the serializer emits verbatim.
 function serializeTelemetryBeacon(pkt) {
-    const packetLength = CMD_HEADER_SIZE + IMG_TELEMETRY_BEACON_BODY_SIZE + 4; // 28
+    const packetLength = CMD_HEADER_SIZE + IMG_TELEMETRY_BEACON_BODY_SIZE + 4; // 30
     if (packetLength > CMD_MAX_PACKET_SIZE) {
         return null;
     }
@@ -627,6 +627,7 @@ function serializeTelemetryBeacon(pkt) {
     buffer.writeInt32BE(pkt.body.latE6 | 0, offset); offset += 4;
     buffer.writeInt32BE(pkt.body.lonE6 | 0, offset); offset += 4;
     buffer[offset++] = pkt.body.flags;
+    buffer.writeUInt16BE(pkt.body.batteryMilliV | 0, offset); offset += 2;
 
     const crc16 = calculateCRC16(buffer, offset);
     buffer.writeUInt16BE(crc16, offset); offset += 2;
@@ -658,6 +659,7 @@ function deserializeTelemetryBeacon(buffer) {
     body.latE6 = buffer.readInt32BE(off); off += 4;
     body.lonE6 = buffer.readInt32BE(off); off += 4;
     body.flags = buffer[off++];
+    body.batteryMilliV = buffer.readUInt16BE(off); off += 2;
     return { type: buffer[2], body };
 }
 
@@ -914,10 +916,11 @@ function makeTypeDispatchReceiver(acceptedTypes) {
 
 // (img-e) Telemetry beacon round-trip
 {
-    const body = { seq: 4096, altitudeCm: -12345, tempCentiC: -450, latE6: 52367999, lonE6: -13456000, flags: 0x01 };
+    const body = { seq: 4096, altitudeCm: -12345, tempCentiC: -450, latE6: 52367999, lonE6: -13456000,
+                   flags: 0x03, batteryMilliV: 4200 };
     const packet = serializeTelemetryBeacon({ type: PACKET_TYPE_TELEMETRY_BEACON, body });
     assert(packet !== null && packet.length === CMD_HEADER_SIZE + IMG_TELEMETRY_BEACON_BODY_SIZE + 4,
-        '(img-e) beacon serializes to exactly 7+17+4 = 28 bytes');
+        '(img-e) beacon serializes to exactly 7+19+4 = 30 bytes');
     assert(packet[2] === PACKET_TYPE_TELEMETRY_BEACON, '(img-e) beacon packet carries the 0x14 type byte at byte 2');
     assert(validateCRC(packet, packet.length), '(img-e) beacon packet passes validateCRC');
     const round = deserializeTelemetryBeacon(packet);
@@ -927,8 +930,35 @@ function makeTypeDispatchReceiver(acceptedTypes) {
            round.body.tempCentiC === body.tempCentiC &&
            round.body.latE6 === body.latE6 &&
            round.body.lonE6 === body.lonE6 &&
-           round.body.flags === body.flags,
-        '(img-e) beacon round-trip preserves every field including negative int32/int16 values');
+           round.body.flags === body.flags &&
+           round.body.batteryMilliV === body.batteryMilliV,
+        '(img-e) beacon round-trip preserves every field including negative int32/int16 values and batteryMilliV (flags bit1 = batteryValid)');
+}
+
+// (img-e) Rejection: a legacy 17-byte beacon (valid header/body/CRC) must be
+// discarded by the 19-byte deserializer — the base never parses a stale frame
+// shape, mirroring the firmware's strict length gate
+{
+    const legacy = Buffer.alloc(7 + 17 + 4);
+    legacy[0] = CMD_START_BYTE1;
+    legacy[1] = CMD_START_BYTE2;
+    legacy[2] = PACKET_TYPE_TELEMETRY_BEACON;
+    legacy[3] = 0x10;                    // seq low byte (header mirror)
+    legacy.writeUInt16BE(17, 4);         // legacy body length
+    legacy[6] = 0x00;                    // CRC8 pad byte
+    legacy.writeUInt16BE(4096, 7);       // seq
+    legacy.writeInt32BE(-12345, 9);      // altitudeCm
+    legacy.writeInt16BE(-450, 13);       // tempCentiC
+    legacy.writeInt32BE(52367999, 15);   // latE6
+    legacy.writeInt32BE(-13456000, 19);  // lonE6
+    legacy[23] = 0x03;                   // flags
+    legacy.writeUInt16BE(calculateCRC16(legacy, 24), 24);
+    legacy[26] = CMD_END_BYTE1;
+    legacy[27] = CMD_END_BYTE2;
+    assert(legacy.length === 28 && validateCRC(legacy, legacy.length),
+        '(img-e) hand-built legacy 17-byte beacon is a well-formed 28-byte frame (valid CRC)');
+    assert(deserializeTelemetryBeacon(legacy) === null,
+        '(img-e) a legacy 17-byte beacon (valid CRC) is rejected by the 19-byte deserializer');
 }
 
 // (img-f) Window-request and threshold payloads encode/decode symmetrically
