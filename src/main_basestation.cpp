@@ -20,6 +20,7 @@
 #include "sd_storage.h"
 #include "trajectory_buffer.h"
 #include "alert_engine.h"
+#include "wifi_manager.h"
 #include "web_assets.h"
 
 // ===========================
@@ -38,17 +39,11 @@
 #define STATUS_LED_PIN   39
 
 // ===========================
-// WiFi Configuration
-// ===========================
-
-const char* WIFI_SSID = "Cosmic1-BaseStation";
-const char* WIFI_PASSWORD = "balloontrack";
-const int WIFI_CHANNEL = 6;
-const int MAX_CONNECTIONS = 4;
-
-// ===========================
 // Web Server
 // ===========================
+// WiFi configuration lives in wifi_manager.cpp (D-40): the AP credentials
+// are compile-time constants there and only station credentials persist
+// in NVS — relocated verbatim out of this file by plan 03-05.
 
 WebServer server(80);
 
@@ -153,6 +148,7 @@ void handleAutoCaptureDisable();
 void handleSetEventThresholds();
 void handleSetAlertThresholds();
 void handleAlertAck();
+void handleWifiSwitch();
 void handleApiState();
 void handleLeafletJs();
 void handleLeafletCss();
@@ -1793,6 +1789,10 @@ void loop() {
     // Handle web clients
     server.handleClient();
 
+    // D-40 (WEB-05): WiFi mode state machine — resolves station joins and
+    // the 20 s AP fallback without ever blocking the web server above
+    WiFiMgr().update();
+
     // Process LoRa communication
     processLoRa();
 
@@ -1844,14 +1844,16 @@ void initHardware() {
 }
 
 void initWiFi() {
-    Serial.println("Initializing WiFi AP...");
+    Serial.println("Initializing WiFi...");
 
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(WIFI_SSID, WIFI_PASSWORD, WIFI_CHANNEL, 0, MAX_CONNECTIONS);
-
-    IPAddress IP = WiFi.softAPIP();
-    Serial.printf("  AP started: %s\n", WIFI_SSID);
-    Serial.printf("  IP address: %s\n", IP.toString().c_str());
+    // D-40 (WEB-05): the WiFi manager owns the radio — NVS-persisted
+    // mode/credentials, boot Station-first with the 20 s Access Point
+    // fallback, runtime switching that never strands the operator. The
+    // loop ticks WiFiMgr().update() to resolve joins (non-blocking).
+    if (!WiFiMgr().begin()) {
+        Serial.println("  ERROR: WiFi manager initialization failed!");
+        return;
+    }
 
     appState.wifiConnected = true;
 }
@@ -1924,6 +1926,9 @@ void initWebServer() {
     // no LoRa traffic
     server.on("/alerts", HTTP_POST, handleSetAlertThresholds);
     server.on("/alerts/ack", HTTP_POST, handleAlertAck);
+    // WiFi mode switching (WEB-05/D-40): base-local NVS write + radio
+    // state machine — no LoRa traffic
+    server.on("/wifi", HTTP_POST, handleWifiSwitch);
     server.on("/api/state", HTTP_GET, handleApiState);
     server.on("/status", HTTP_GET, handleApiState);  // legacy alias — same serializer
     server.on("/gallery", HTTP_GET, handleGalleryList);  // /gallery/{id} rides handleNotFound (parameter)
@@ -2729,6 +2734,56 @@ void handleAlertAck() {
     sendResponse(200, "OK", "Alert acknowledged");
 }
 
+// POST /wifi (WEB-05, D-40): mode + station credentials. WR-07 bounded
+// validation BEFORE any NVS write (T-03-14): mode enum ("ap" | "sta"),
+// Station requires ssid 1..32 chars and password 8..63 chars; the Access
+// Point reads no credential arguments (its constants are compile-time).
+// requestSwitch persists FIRST, then drives the non-blocking state
+// machine — the current interface keeps serving until the new one
+// confirms. The password is never echoed: not here, not in /api/state,
+// not in any log (T-03-12).
+void handleWifiSwitch() {
+    if (!server.hasArg("mode")) {
+        sendResponse(400, "Error", "Missing mode parameter");
+        return;
+    }
+
+    String mode = server.arg("mode");
+    if (mode == "ap") {
+        if (!WiFiMgr().requestSwitch(WifiMode::ACCESS_POINT, "", "")) {
+            sendResponse(500, "Error", "Failed to apply WiFi settings");
+            return;
+        }
+        sendResponse(200, "OK", "WiFi switch started");
+        return;
+    }
+
+    if (mode != "sta") {
+        sendResponse(400, "Error", "Invalid WiFi mode");
+        return;
+    }
+
+    if (!server.hasArg("ssid") || !server.hasArg("password")) {
+        sendResponse(400, "Error", "Check the network name and password, then try again.");
+        return;
+    }
+
+    String ssid = server.arg("ssid");
+    String pass = server.arg("password");
+    if (ssid.length() < 1 || ssid.length() > WIFI_STA_SSID_MAX_LEN
+            || pass.length() < WIFI_STA_PASS_MIN_LEN
+            || pass.length() > WIFI_STA_PASS_MAX_LEN) {
+        sendResponse(400, "Error", "Check the network name and password, then try again.");
+        return;
+    }
+
+    if (!WiFiMgr().requestSwitch(WifiMode::STATION, ssid, pass)) {
+        sendResponse(500, "Error", "Failed to apply WiFi settings");
+        return;
+    }
+    sendResponse(200, "OK", "WiFi switch started");
+}
+
 // LOCKED status vocabulary (UI-SPEC Copywriting Contract) — the single
 // CommandState-to-string mapping shared by lastState and every queue row,
 // so the pinned row and the queue can never diverge
@@ -2768,6 +2823,22 @@ const char* commandDisplayName(uint8_t commandType) {
         case CameraCommand::SET_EVENT_THRESHOLDS: return "Set Event Thresholds";
     }
     return "Command";
+}
+
+// Minimal JSON string escape for operator-entered values (WiFi ssid):
+// quotes and backslashes are legal in network names and would otherwise
+// corrupt the hand-built /api/state payload
+static String jsonEscape(const String& s) {
+    String out;
+    out.reserve(s.length());
+    for (unsigned int i = 0; i < s.length(); i++) {
+        char c = s.charAt(i);
+        if (c == '"' || c == '\\') {
+            out += '\\';
+        }
+        out += c;
+    }
+    return out;
 }
 
 // GET /api/state (D-33/D-34): ONE combined serializer per poll — telemetry,
@@ -2944,6 +3015,18 @@ void handleApiState() {
     json += "\"storage\":{";
     json += "\"available\":" + String(sd.available ? "true" : "false") + ",";
     json += "\"state\":\"" + String(sdState) + "\"},";
+
+    // WEB-05 (D-40): queried WiFi truth — the serving mode/ssid/IP read
+    // from the radio itself, the join-in-progress flag, and the last
+    // failed-join ssid for the card's error copy. The PASSWORD never
+    // appears in any response (T-03-12).
+    WifiStatus wf = WiFiMgr().getStatus();
+    json += "\"wifi\":{";
+    json += "\"mode\":\"" + String(wf.mode) + "\",";
+    json += "\"ssid\":\"" + jsonEscape(wf.ssid) + "\",";
+    json += "\"ip\":\"" + wf.ip.toString() + "\",";
+    json += "\"joining\":" + String(wf.joining ? "true" : "false") + ",";
+    json += "\"errorSsid\":\"" + jsonEscape(wf.errorSsid) + "\"},";
 
     // IMG-06 (D-36): persisted image count — the poll's ONLY gallery refresh
     // signal; the browser refetches /gallery just when this value changes,
