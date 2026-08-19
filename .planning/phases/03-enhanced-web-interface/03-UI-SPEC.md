@@ -1,7 +1,8 @@
 ---
 phase: 3
 slug: enhanced-web-interface
-status: draft
+status: approved
+reviewed_at: 2026-08-19
 shadcn_initialized: false
 preset: none
 created: 2026-08-19
@@ -171,21 +172,21 @@ No third "informational banner" hue — non-alerting status stays in chips/LEDs 
 
 ## UI Considerations
 
-> Populated per the ui-consideration probe shape. Phase 3 surfaces: E1 alert bar · E2 telemetry panel + stale badge · E3 map (Leaflet + canvas fallback) · E4 gallery grid + pager · E5 gallery detail · E6 WiFi form · E7 alert-threshold form. Empty/error COPY lives in `## Copywriting Contract` — rows below reference it. Coverage: 17 applicable considerations — 14 explicit, 3 backstop, 0 unresolved.
+> Populated per the ui-consideration probe (56 applicable considerations across E1–E7; E3 kinds confirmed at probe time as media + interactive-control + list-collection). Phase 3 surfaces: E1 alert bar · E2 telemetry panel + stale badge · E3 map (Leaflet + canvas fallback) · E4 gallery grid + pager · E5 gallery detail · E6 WiFi form · E7 alert-threshold form. Empty/error COPY lives in `## Copywriting Contract` — rows below reference it. Coverage: 56 applicable — 56 explicit (8 categories × 7 surfaces), plus 3 backstop markers, 0 unresolved.
 
 | Category | Element(s) | Status | Resolution / Reason |
 |----------|------------|--------|---------------------|
-| empty | E1 E2 E3 E4 E6 E7 | ✅ covered (explicit) | Zero alerts = bar hidden entirely (no "all clear" placeholder — green LEDs/chips carry OK); telemetry honest-null copy until beacons ("No telemetry received yet" carried from Phase 2, battery "—"); map "Waiting for GPS fix..." copy; gallery documented empty copy; forms always render complete defaults, never unfilled |
-| loading | E3 E4 E5 E7 | ✅ covered (explicit) | Status-line model everywhere (no spinners/skeletons): tiles fill or the frame shows the offline plot; gallery pages swap on response; detail renders sidecar fields once parsed; threshold inputs disable while the save command is `Sent` (Phase 2 pattern) |
-| error | E1 E2 E3 E4 E6 E7 | ✅ covered (explicit) | Poll failure = stale badge + backoff (not an error message); tile failure = canvas fallback + offline chip (same data); WiFi failure = documented revert copy; 400/500/404 copy per Copywriting Contract; no fabricated fallback content anywhere |
-| populated | E1 E3 E4 | ✅ covered (explicit) | Banners stack newest-first, latched rows persist until acknowledged; map shows full trajectory + banded track + position marker; grid shows 12 items newest-first with kind/incomplete badges |
-| partial | E4 E5 E3 | ✅ covered (explicit) | D-48: incomplete images list normally with the amber badge and the detail shows only verified chunk accounting — never rounded up; short trajectories render whatever points exist (1 point = marker only, no line) |
-| overflow | E1 E2 E4 E6 | ✅ covered (explicit) | Banner flex-wrap at 14px/1.5 (Acknowledge button wraps below text, never clipped); telemetry grid auto-fit collapses to 2 columns ≤480px; gallery grid auto-fills down to 1 column; 32-char SSIDs wrap in inputs; pager centers; no ellipsis/nowrap anywhere |
-| zero-one-many | E1 E3 E4 | ✅ covered (explicit) | 0 alerts = hidden bar; 1..N banners render identically (severity-colored, stacked); trajectory identical at 0/1/many points (documented); gallery numeric pager only — no singular/plural copy divergence |
-| long-text | E2 E5 | ✅ covered (explicit) | Coordinate strings, SSIDs, and sidecar values wrap at 14px/1.5 inside their grid cells/definition list; no truncation in the locked contract |
-| cross-render parity | E3 | 🧪 backstop | { statement: "The canvas fallback and the Leaflet view render the identical trajectory data with the identical altitude banding — verified visually by forcing tile failure (AP mode) with a populated track", verification: backstop } |
-| stale cadence | E2 | 🧪 backstop | { statement: "On forced poll failure the stale badge appears with a live age count and the poll backs off 5→15→30s; on recovery the badge clears and the cadence snaps back to 5s without a page reload", verification: backstop } |
-| audio arm | E1 | 🧪 backstop | { statement: "In a fresh tab with no prior interaction, a new critical alert shows the 'Audio muted until you interact' hint and beeps only after the first gesture; the mute toggle survives reloads within the session", verification: backstop } |
+| empty | E1 E2 E3 E4 E5 E6 E7 | ✅ resolved (explicit) | E1: zero alerts = bar hidden entirely — no "all clear" placeholder (green LEDs/chips carry OK). E2: honest-null copy until beacons ("No telemetry received yet"); battery "—" while batteryValid false. E3: "Waiting for GPS fix…" message; map renders nothing before the first valid fix. E4: "No images received yet — trigger a capture to start."; pager hidden. E5: detail reachable only from a listed image — no empty-detail state. E6/E7: forms always render complete queried/default values, never unfilled |
+| loading | E1 E2 E3 E4 E5 E6 E7 | ✅ resolved (explicit) | Status-line model everywhere — no spinners/skeletons. E1: banners derive atomically from each 5s poll diff. E2: tiles fill from the first successful poll. E3: frame shows the waiting message until data exists; tiles load per Leaflet default. E4: previous grid stays until the new page arrives; list refreshes only when the finalized-image count changes (D-36). E5: definition list renders immediately from the sidecar; image loads progressively. E6: two-step relabel (Confirm WiFi Switch) is the in-flight affordance — no spinner. E7: inputs disable while the save command is Sent (Phase 2 pattern) |
+| error | E1 E2 E3 E4 E5 E6 E7 | ✅ resolved (explicit) | E1: poll failure is NEVER a fabricated banner — it surfaces as E2's stale badge. E2: stale badge + 5→15→30s backoff, clears silently on recovery. E3: tile failure = canvas fallback of the identical track + offline chip. E4: missing routes keep the existing 404 copy; incomplete images keep the amber badge forever (D-48), never an error state. E5: only sidecar-verified fields render; absent fields omitted, never zero-filled. E6: AP-fallback revert copy after join failure; "Failed to apply WiFi settings" on 500. E7: per-field 400 validation copy (mirror of Phase 2); "Failed to save alert thresholds" on 500 |
+| populated | E1 E2 E3 E4 E5 E6 E7 | ✅ resolved (explicit) | E1: banners stack newest-first; latched critical rows persist until Acknowledge. E2: six tiles with live 18px/700 values + counting data age. E3: full trajectory with banded track + current-position circleMarker. E4: 12 items newest-first per page, 3 columns at the 752px content width. E5: full image at max-width 100% + sidecar definition list + Back to Gallery. E6: queried mode line ("Mode: … · IP {ip}") + filled form. E7: seven inputs showing saved threshold values |
+| partial | E1 E2 E3 E4 E5 E6 E7 | ✅ resolved (explicit) | E1: alerts fire only on complete server-computed truth — no partial-banner state. E2: per-field honest-null ("—"/Unknown), never a partial row. E3: short trajectories render whatever points exist — 1 point = marker only, no line. E4: incomplete images list normally with the amber badge, never rounded up (D-48). E5: only sidecar-verified fields; "Position: GPS no fix" when the fix was invalid at capture. E6: required-field validation catches partial Station input; the queried line always shows full truth. E7: range validation per field (WR-07) catches partial input — no partial-save state |
+| overflow | E1 E2 E3 E4 E5 E6 E7 | ✅ resolved (explicit) | E1: banner rows flex-wrap at 14px/1.5 — Acknowledge wraps below text, never clipped. E2: auto-fit grid minmax(110px,1fr) collapses to 2 columns ≤480px. E3: map bounds contain the track; Recenter restores auto-follow after drag (D-39). E4: grid auto-fills down to 1 column; pager centers. E5: detail card grows vertically; image scales to max-width 100%. E6: 32-char SSIDs wrap in inputs; card grows vertically. E7: inputs stack vertically; labels wrap, never truncate |
+| zero-one-many | E1 E2 E3 E4 E5 E6 E7 | ✅ resolved (explicit) | E1: 0 alerts = hidden bar; 1..N banners render identically (severity-colored, stacked). E2: fixed six-tile grid — layout constant, only values change. E3: track identical at 0/1/many points (0 = waiting message, 1 = marker only, many = banded polyline). E4: numeric pager only — no singular/plural copy divergence; 1 page hides the pager. E5: always exactly one image. E6: exactly two mode options. E7: fixed seven inputs |
+| long-text | E1 E2 E3 E4 E5 E6 E7 | ✅ resolved (explicit) | All surfaces wrap at 14px/1.5 and grow vertically — no truncation, ellipsis, or nowrap anywhere in the locked contract. E1: banner detail wraps within the flex row. E2: coordinate strings wrap in grid cells. E3: attribution + chip text wrap within the frame. E4: pager text is fixed-length; filenames never shown on grid items. E5: sidecar values wrap in the definition list. E6: long SSIDs wrap in inputs and in error copy. E7: validation errors wrap in the message row |
+| cross-render parity | E3 | 🧪 resolved (backstop) | { statement: "The canvas fallback and the Leaflet view render the identical trajectory data with the identical altitude banding — verified visually by forcing tile failure (AP mode) with a populated track", verification: backstop } |
+| stale cadence | E2 | 🧪 resolved (backstop) | { statement: "On forced poll failure the stale badge appears with a live age count and the poll backs off 5→15→30s; on recovery the badge clears and the cadence snaps back to 5s without a page reload", verification: backstop } |
+| audio arm | E1 | 🧪 resolved (backstop) | { statement: "In a fresh tab with no prior interaction, a new critical alert shows the 'Audio muted until you interact' hint and beeps only after the first gesture; the mute toggle survives reloads within the session", verification: backstop } |
 
 **Unresolved:** none (0). Landing-detection threshold values and the GPIO4 battery divider are UAT/calibration items (03-RESEARCH Open Questions 3–4), not UI-state gaps — the UI states above are fully specified.
 
@@ -203,11 +204,11 @@ No third "informational banner" hue — non-alerting status stays in chips/LEDs 
 
 ## Checker Sign-Off
 
-- [ ] Dimension 1 Copywriting: PASS
-- [ ] Dimension 2 Visuals: PASS
-- [ ] Dimension 3 Color: PASS
-- [ ] Dimension 4 Typography: PASS
-- [ ] Dimension 5 Spacing: PASS
-- [ ] Dimension 6 Registry Safety: PASS
+- [x] Dimension 1 Copywriting: FLAG → approved (non-blocking: "Acknowledge"/"Recenter"/"Previous/Next" are single-word labels but contextually unambiguous in their inline positions)
+- [x] Dimension 2 Visuals: PASS
+- [x] Dimension 3 Color: PASS
+- [x] Dimension 4 Typography: PASS
+- [x] Dimension 5 Spacing: PASS
+- [x] Dimension 6 Registry Safety: PASS
 
-**Approval:** pending
+**Approval:** approved 2026-08-19 (gsd-ui-checker — 1 non-blocking FLAG on Copywriting; CONTEXT compliance D-33..D-48 verified)
