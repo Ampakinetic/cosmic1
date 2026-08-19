@@ -163,7 +163,7 @@ Plans:
 - WiFi mode switching (AP/Station)
 - Comprehensive testing of all features
 
-**Plans:** 1/5 plans executed — tracer dashboard shell first, then map, alerts, gallery, WiFi (sequential waves; every plan owns src/main_basestation.cpp, so file ownership serializes the waves)
+**Plans:** 2/5 plans executed — tracer dashboard shell first, then map, alerts, gallery, WiFi (sequential waves; every plan owns src/main_basestation.cpp, so file ownership serializes the waves)
 
 Plans:
 **Wave 1**
@@ -172,7 +172,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 03-02-PLAN.md — Map & trajectory: capped GPS ring buffer into /api/state, embedded gzipped Leaflet 1.9.4, altitude-banded track, auto-follow/recenter, offline canvas fallback (WEB-02)
+- [x] 03-02-PLAN.md — Map & trajectory: capped GPS ring buffer into /api/state, embedded gzipped Leaflet 1.9.4, altitude-banded track, auto-follow/recenter, offline canvas fallback (WEB-02)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

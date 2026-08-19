@@ -28,7 +28,7 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 ### Web Interface
 
 - [x] **WEB-01**: Base station web UI displays live telemetry (temperature, altitude, GPS coordinates)
-- [ ] **WEB-02**: Base station web UI displays balloon position on OpenStreetMap
+- [x] **WEB-02**: Base station web UI displays balloon position on OpenStreetMap
 - [x] **WEB-03**: Map and telemetry update every 5 seconds
 - [x] **WEB-04**: UI layout uses top-down design (map/telemetry top, camera/gallery below)
 - [ ] **WEB-05**: Base station supports both AP mode and Station mode WiFi connectivity
@@ -91,7 +91,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | IMG-05 | Phase 2 | Gaps Found |
 | IMG-06 | Phase 3 | Pending |
 | WEB-01 | Phase 3 | Complete |
-| WEB-02 | Phase 3 | Pending |
+| WEB-02 | Phase 3 | Complete |
 | WEB-03 | Phase 3 | Complete |
 | WEB-04 | Phase 3 | Complete |
 | WEB-05 | Phase 3 | Pending |

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 03-01-PLAN.md
-last_updated: "2026-08-19T15:55:26.399Z"
+stopped_at: Completed 03-02-PLAN.md
+last_updated: "2026-08-19T16:24:38.806Z"
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 16
-  completed_plans: 11
+  completed_plans: 12
 current_phase: 2
 current_phase_name: enhanced-web-interface
 ---
@@ -27,10 +27,10 @@ current_phase_name: enhanced-web-interface
 
 ## Current Position
 
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 5
 **Status:** Ready to execute
-**Progress:** [███████░░░] 69% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
+**Progress:** [████████░░] 75% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
 
 ## Progress
 
@@ -122,8 +122,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-19T15:55:26.358Z
-**Stopped at:** Completed 03-01-PLAN.md
+**Last session:** 2026-08-19T16:24:38.770Z
+**Stopped at:** Completed 03-02-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -140,6 +140,7 @@ See: `.planning/PROJECT.md`
 | Phase 02 P04 | ~12 min | 2 tasks | 8 files |
 | Phase 02 P05 | ~21 min | 3 tasks | 8 files |
 | Phase 03 P01 | 23min | 2 tasks | 8 files |
+| Phase 03 P02 | 25min | 2 tasks | 10 files |
 
 ## Decisions
 
@@ -165,3 +166,6 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 02-05: sidecars are kind-suffixed — IMG_{id}_T.JSON for thumbnails vs IMG_{id}.JSON for fulls (mirrors D-31's _T.JPG, the Phase 3 gallery contract) so neither finalization truncates the other's D-30 record; slot-pressure evictions fully reset the slot (*oldest = ImageRxTransfer{}) so a new manifest starts at 0/N
 - [Phase ?]: 03-01: Battery tile JS written in final battery-aware form in Task 1 (renders em-dash under pre-extension JSON), so Task 2 added only the JSON fields
 - [Phase ?]: 03-01: Beacon battery truth gated on voltage in [1.8,8.0] V AND nonzero raw ADC read — floating sense line never reports a fake pack; PowerMgr().update() wired on 1s millis timer in processPowerManagement
+- [Phase ?]: Pull-based trajectory recording: TrajectoryBuffer polls ImageRx().getTelemetrySnapshot() with beacon-seq dedup — producer untouched
+- [Phase ?]: Offline map swap covers (not hides) Leaflet so tile recovery stays live; periodic re-probe every 3rd poll flips back automatically
+- [Phase ?]: TRAJ_MAX_POINTS stays 500: measured 500-point /api/state payload 14,009 B (traj 13,395 B) — under 16 KB budget
