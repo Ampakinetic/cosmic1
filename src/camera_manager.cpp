@@ -1,4 +1,5 @@
 #include "camera_manager.h"
+#include <esp_heap_caps.h>   // heap_caps_malloc — PSRAM-first image buffer (WR-07)
 
 // ===========================
 // Constructor/Destructor
@@ -258,8 +259,15 @@ bool CameraManager::captureImageToBuffer() {
         return false;
     }
     
-    // Copy image data to our buffer
-    currentImage.buffer = (uint8_t*)malloc(fb->len);
+    // Copy image data to our buffer — PSRAM first (WR-07): a full-resolution
+    // SXGA/UXGA JPEG (tens of KB) can exhaust internal DRAM and fail the
+    // capture even with 8 MB PSRAM free, and the platform requires PSRAM for
+    // camera operations. Falls back to plain malloc when PSRAM is not
+    // available so non-PSRAM builds keep working.
+    currentImage.buffer = (uint8_t*)heap_caps_malloc(fb->len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!currentImage.buffer) {
+        currentImage.buffer = (uint8_t*)malloc(fb->len);
+    }
     if (!currentImage.buffer) {
         if (DEBUG_CAMERA) {
             Serial.println("Camera: Failed to allocate memory for image");
