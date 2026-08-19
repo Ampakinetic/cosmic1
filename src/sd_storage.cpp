@@ -370,8 +370,14 @@ bool SdStorage::writeSidecar(const SdImageMetadata& meta) {
 // ===========================
 
 File SdStorage::serveFile(uint16_t imageId, uint8_t kind) {
-    if (!available) {
-        return File(); // degraded — absence reported honestly
+    // WR-05: READ availability is independent of WRITE availability. After a
+    // mid-flight degrade() the card is still mounted and every file already
+    // stored stays servable (the Q5 disk-full policy KEEPS existing files —
+    // serving them must keep working too, or the UI's COMPLETE rows would
+    // 404 and stored-CRC read-backs would fail for healthy files). Only a
+    // failed begin() (no card mounted) has nothing to serve.
+    if (status.initFailed) {
+        return File(); // no card mounted — absence reported honestly
     }
     char path[32];
     imagePath(path, sizeof(path), imageId, kind);

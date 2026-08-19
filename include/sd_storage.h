@@ -117,7 +117,9 @@ public:
     bool finalizeImage(const SdImageMetadata& meta);
 
     // Read-only open of a stored file for the HTTP route (server.streamFile).
-    // The returned File tests false when absent or storage is degraded —
+    // Readable whenever the card mounted successfully — INCLUDING after a
+    // mid-flight write degrade (existing files stay servable, WR-05); only a
+    // failed mount (initFailed) or an absent file yields a false File —
     // absence is reported honestly, never fabricated.
     File serveFile(uint16_t imageId, uint8_t kind);
 
