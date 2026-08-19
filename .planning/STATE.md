@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: Completed 03-03-PLAN.md
-last_updated: "2026-08-19T16:51:56.412Z"
+stopped_at: Completed 03-04-PLAN.md
+last_updated: "2026-08-19T17:15:23.410Z"
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 16
-  completed_plans: 13
+  completed_plans: 14
 current_phase: 2
 current_phase_name: enhanced-web-interface
 ---
@@ -27,10 +27,10 @@ current_phase_name: enhanced-web-interface
 
 ## Current Position
 
-**Current Plan:** 4
+**Current Plan:** 5
 **Total Plans in Phase:** 5
 **Status:** Ready to execute
-**Progress:** [████████░░] 81% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
+**Progress:** [█████████░] 88% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
 
 ## Progress
 
@@ -122,8 +122,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-19T16:51:56.373Z
-**Stopped at:** Completed 03-03-PLAN.md
+**Last session:** 2026-08-19T17:15:23.369Z
+**Stopped at:** Completed 03-04-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -142,6 +142,7 @@ See: `.planning/PROJECT.md`
 | Phase 03 P01 | 23min | 2 tasks | 8 files |
 | Phase 03 P02 | 25min | 2 tasks | 10 files |
 | Phase 03 P03 | 24m | 2 tasks | 4 files |
+| Phase 03 P04 | 19m | 2 tasks | 3 files |
 
 ## Decisions
 
@@ -172,3 +173,6 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: TRAJ_MAX_POINTS stays 500: measured 500-point /api/state payload 14,009 B (traj 13,395 B) — under 16 KB budget
 - [Phase ?]: ALRT-06 beacon loss = (expected - received) over the sliding 60s window: equals interior seq-gap count at the locked 5s cadence but also covers edge loss and total outage
 - [Phase ?]: Critical alerts latch on the condition rising edge; ack while condition persists keeps the row hidden until it clears and re-fires (03-03)
+- [Phase ?]: Gallery index is a fixed static RAM array (1000 entries) built at boot, rebuilt only when finalizeImage's indexVersion advances - pagination never rescans the directory (03-04)
+- [Phase ?]: Sidecar presence bits (SD_SC_PRESENT_*) drive /gallery detail serialization - only sidecar-carried fields render, never zero-filled; gpsValid derives from the null-vs-numeric telemetry triple (03-04)
+- [Phase ?]: Latest Capture card retired in 03-04: the newest gallery grid item is the latest-capture surface; latestThumbId JSON field and /img routes remain

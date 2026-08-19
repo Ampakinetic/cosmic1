@@ -163,7 +163,7 @@ Plans:
 - WiFi mode switching (AP/Station)
 - Comprehensive testing of all features
 
-**Plans:** 3/5 plans executed — tracer dashboard shell first, then map, alerts, gallery, WiFi (sequential waves; every plan owns src/main_basestation.cpp, so file ownership serializes the waves)
+**Plans:** 4/5 plans executed — tracer dashboard shell first, then map, alerts, gallery, WiFi (sequential waves; every plan owns src/main_basestation.cpp, so file ownership serializes the waves)
 
 Plans:
 **Wave 1**
@@ -180,7 +180,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 03-04-PLAN.md — Gallery: SdStorage enumeration + RAM index, /gallery pagination + sidecar detail routes, thumbnail grid + pager + incomplete badges, Latest Capture card absorbed (IMG-06)
+- [x] 03-04-PLAN.md — Gallery: SdStorage enumeration + RAM index, /gallery pagination + sidecar detail routes, thumbnail grid + pager + incomplete badges, Latest Capture card absorbed (IMG-06)
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
