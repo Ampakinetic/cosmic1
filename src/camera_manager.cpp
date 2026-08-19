@@ -306,9 +306,23 @@ bool CameraManager::createThumbnail(const ImageData& source, ThumbnailData& thum
     int originalQuality = currentQuality;
 
     // Thumbnail capture settings: QQVGA at quality 20 keeps the pushed
-    // thumbnail inside the IMG-02 10-second airtime window (research A3)
-    setFrameSize(FRAMESIZE_QQVGA);
-    setQuality(20);
+    // thumbnail inside the IMG-02 10-second airtime window (research A3).
+    // WR-08: the downgrade is VERIFIED — if the sensor rejects the switch the
+    // "thumbnail" would be captured at full resolution/quality (potentially
+    // over the 50 KB cap or the IMG-02 airtime budget), so a failure bails
+    // honestly with settings restored instead of silently producing a
+    // full-size "thumbnail"; the enqueue path's failure branch handles it.
+    if (!setFrameSize(FRAMESIZE_QQVGA) || !setQuality(20)) {
+        if (DEBUG_CAMERA) {
+            Serial.println("Camera: thumbnail downgrade to QQVGA/quality-20 rejected; "
+                           "no thumbnail captured");
+        }
+        thumbnail.buffer = nullptr;
+        thumbnail.valid = false;
+        setFrameSize(originalSize);   // best-effort restore of both settings
+        setQuality(originalQuality);
+        return false;
+    }
 
     // Capture the thumbnail frame — BEFORE any allocation
     camera_fb_t* fb = esp_camera_fb_get();
