@@ -1,6 +1,7 @@
 /**
  * Base Station Firmware
  * Cosmic1 Phase 1 - Command Protocol & Control
+ * Cosmic1 Phase 3 - Enhanced Web Interface (D-45 single-page dashboard)
  *
  * Base station for balloon camera control
  * Sends camera commands via LoRa and displays responses
@@ -145,7 +146,7 @@ void handleSetWBMode();
 void handleAutoCaptureEnable();
 void handleAutoCaptureDisable();
 void handleSetEventThresholds();
-void handleStatus();
+void handleApiState();
 void handleImage(const String& uri);
 void handleNotFound();
 
@@ -175,16 +176,43 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             min-height: 100vh;
             line-height: 1.5;
         }
+        .section-nav {
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            background: #1e293b;
+            border-bottom: 1px solid #475569;
+            padding: 8px 0;
+        }
+        .section-nav .nav-inner {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 24px;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .section-nav a {
+            color: #94a3b8;
+            font-size: 14px;
+            font-weight: bold;
+            text-decoration: none;
+            padding: 8px 0;
+        }
+        .section-nav a:hover,
+        .section-nav a.current {
+            color: #60a5fa;
+        }
         .container {
             max-width: 800px;
             margin: 0 auto;
-            padding: 20px;
+            padding: 24px;
         }
         .header {
             background: linear-gradient(135deg, #1e293b, #334155);
-            padding: 20px;
+            padding: 24px;
             border-radius: 10px;
-            margin-bottom: 20px;
+            margin-bottom: 24px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         }
         .header h1 {
@@ -196,11 +224,11 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             color: #94a3b8;
             font-size: 14px;
         }
-        .status-bar {
+        .telemetry-panel {
             background: #1e293b;
             padding: 16px;
             border-radius: 8px;
-            margin-bottom: 20px;
+            margin-bottom: 8px;
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
             gap: 8px;
@@ -218,17 +246,44 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             font-weight: bold;
             color: #60a5fa;
         }
+        .stale-badge {
+            display: none;
+            margin-top: 8px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: #713f12;
+            color: #fbbf24;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .map-frame {
+            width: 100%;
+            height: 360px;
+            border-radius: 8px;
+            border: 1px solid #475569;
+            background: #0f172a;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
         .card {
             background: #1e293b;
             border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
+            padding: 24px;
+            margin-bottom: 24px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
         }
         .card h2 {
             color: #60a5fa;
             font-size: 18px;
-            margin-bottom: 15px;
+            margin-bottom: 16px;
+        }
+        .queue-counters {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+            gap: 8px;
+            margin-bottom: 16px;
         }
         .button-group {
             display: grid;
@@ -288,7 +343,7 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         .message {
             background: #334155;
             border-radius: 8px;
-            padding: 15px;
+            padding: 16px;
             margin-top: 8px;
             font-size: 14px;
         }
@@ -317,18 +372,18 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         .transfer-row {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             background: #334155;
             border-radius: 8px;
-            padding: 10px 12px;
+            padding: 8px 16px;
             margin-top: 8px;
-            font-size: 13px;
+            font-size: 14px;
             flex-wrap: wrap;
         }
         .transfer-id { font-weight: bold; min-width: 110px; }
         .transfer-kind {
-            font-size: 11px;
-            padding: 2px 6px;
+            font-size: 14px;
+            padding: 2px 8px;
             border-radius: 4px;
             background: #1e3a5f;
             color: #93c5fd;
@@ -349,9 +404,9 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         }
         .progress-fill.done { background: #22c55e; }
         .progress-fill.failed { background: #ef4444; }
-        .transfer-chunks { color: #94a3b8; font-size: 12px; white-space: nowrap; }
+        .transfer-chunks { color: #94a3b8; font-size: 14px; white-space: nowrap; }
         .transfer-state {
-            font-size: 11px;
+            font-size: 14px;
             padding: 2px 8px;
             border-radius: 10px;
             font-weight: bold;
@@ -361,13 +416,23 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         .transfer-state.COMPLETE { background: #065f46; color: #34d399; }
         .transfer-state.INCOMPLETE { background: #7f1d1d; color: #f87171; }
         @media (max-width: 480px) {
-            .status-bar {
+            .telemetry-panel {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .queue-counters {
                 grid-template-columns: repeat(2, 1fr);
             }
         }
     </style>
 </head>
 <body>
+    <nav class="section-nav">
+        <div class="nav-inner">
+            <a href="#map">Map</a>
+            <a href="#capture">Capture</a>
+            <a href="#queue">Queue</a>
+        </div>
+    </nav>
     <div class="container">
         <div class="header">
             <h1>🎈 Cosmic1 Base Station</h1>
@@ -378,6 +443,21 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
 const char HTML_FOOTER[] PROGMEM = R"rawliteral(
     </div>
     <script>
+        // ---------- diff-checked DOM helpers (D-36) ----------
+        // The 5s poll re-renders only what actually changed: every write
+        // goes through these guards and list rebuilds are gated on a
+        // content signature. Server data reaches the DOM exclusively via
+        // textContent / createElement — never innerHTML.
+        function setText(el, text) {
+            if (el && el.textContent !== text) el.textContent = text;
+        }
+        function setClass(el, cls) {
+            if (el && el.className !== cls) el.className = cls;
+        }
+        function setColor(el, color) {
+            if (el && el.style.color !== color) el.style.color = color;
+        }
+
         // Locked status vocabulary -> message class mapping (shared by the
         // pinned last-command row and every queue row)
         function stateClass(s) {
@@ -387,185 +467,332 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             return 'info';
         }
 
-        function updateStatus() {
-            fetch('/status')
-                .then(r => r.json())
-                .then(data => {
-                    document.getElementById('cmd-sent').textContent = data.sent;
-                    document.getElementById('cmd-acked').textContent = data.acked;
-                    document.getElementById('cmd-failed').textContent = data.failed;
-                    document.getElementById('cmd-pending').textContent = data.pending;
+        // ---------- 5s poll with failure backoff (D-33 / D-35) ----------
+        // Named constants, not magic numbers: the normal cadence is 5s and
+        // consecutive failures climb a 15s -> 30s ladder. The next fetch is
+        // scheduled only after the previous one settles, so polls never
+        // overlap; recovery snaps straight back to 5s with no reload.
+        const POLL_INTERVAL_MS = 5000;
+        const POLL_BACKOFF_STEPS = [5000, 15000, 30000];
+        let pollFailCount = 0;
+        let pollTimerId = null;
+        let lastGoodPollMs = 0;
+        const pageLoadMs = Date.now();
 
-                    // LED truth (IN-03): green only on recent ACKed activity,
-                    // red after terminal failure with no ACK since, else yellow
-                    const led = document.getElementById('status-led');
-                    led.className = 'led ' + (data.connected ? 'green' : (data.linkText === 'No link' ? 'red' : 'yellow'));
-                    document.getElementById('link-text').textContent = data.linkText;
+        // Telemetry age is computed client-side from poll timing, so the
+        // Data age tile and the stale badge keep counting between polls
+        let lastTeleRcvMs = 0;
+        let lastTeleAgeMs = 0;
 
-                    // Auto-capture chip — display-only until the command ACKs
-                    const chip = document.getElementById('autocapture-chip');
-                    chip.textContent = data.autoCapture ? ('ON · every ' + data.autoCaptureInterval + 's') : 'OFF';
-                    chip.className = 'message ' + (data.autoCapture ? 'success' : 'info');
-
-                    // Event Capture card (D-26): the chip shows the
-                    // balloon-reported GET_STATUS truth; inputs disable
-                    // while a SET_EVENT_THRESHOLDS command is in flight
-                    const evChip = document.getElementById('event-chip');
-                    const ev = data.eventThresholds;
-                    if (ev) {
-                        evChip.textContent = 'Balloon: ' + (ev.eventsEnabled ? 'ON' : 'OFF')
-                            + ' · alt Δ ' + ev.altM + ' m · dist Δ ' + ev.distM + ' m · spacing ' + ev.spacingS + ' s';
-                        evChip.className = 'message ' + (ev.eventsEnabled ? 'success' : 'info');
-                    } else {
-                        evChip.textContent = 'Balloon values not received yet';
-                        evChip.className = 'message info';
-                    }
-                    const evForm = document.getElementById('event-form');
-                    const evBusy = (data.lastSeq !== 0 && data.lastCmd === 'Set Event Thresholds' && data.lastState === 'Sent')
-                        || (data.queue || []).some(function (e) {
-                            return e.cmd === 'Set Event Thresholds' && e.state === 'Sent';
-                        });
-                    Array.prototype.forEach.call(evForm.elements, function (el) { el.disabled = evBusy; });
-
-                    // Pinned last-command row (empty state before any command)
-                    const nameEl = document.getElementById('lastcmd-name');
-                    const stateEl = document.getElementById('lastcmd-state');
-                    if (data.lastSeq === 0) {
-                        nameEl.textContent = 'No commands yet';
-                        stateEl.textContent = 'Trigger a capture or change a setting — the result of your last command appears here.';
-                        stateEl.className = 'message info';
-                    } else {
-                        nameEl.textContent = data.lastCmd + ' · #' + data.lastSeq;
-                        stateEl.textContent = data.lastState;
-                        stateEl.className = 'message ' + stateClass(data.lastState);
-                    }
-
-                    // D-16: one row per remaining occupied queue slot
-                    const list = document.getElementById('cmd-queue-list');
-                    list.innerHTML = '';
-                    (data.queue || []).forEach(function (e) {
-                        if (e.seq === data.lastSeq) return;
-                        const row = document.createElement('div');
-                        row.className = 'message ' + stateClass(e.state);
-                        row.textContent = e.cmd + ' · #' + e.seq + ' — ' + e.state;
-                        list.appendChild(row);
-                    });
-
-                    // D-20: one row per transfer slot — pushed thumbnails and
-                    // pulled fulls share the same bar and locked vocabulary;
-                    // every value is server-computed truth, the client only
-                    // presents it
-                    const tlist = document.getElementById('transfer-list');
-                    tlist.innerHTML = '';
-                    const transfers = data.transfers || [];
-                    if (transfers.length === 0) {
-                        const empty = document.createElement('div');
-                        empty.className = 'message info';
-                        empty.textContent = 'No image transfers yet — trigger a capture to start one.';
-                        tlist.appendChild(empty);
-                    } else {
-                        transfers.forEach(function (t) {
-                            const row = document.createElement('div');
-                            row.className = 'transfer-row';
-
-                            // Completed rows link to the stored bytes: fulls
-                            // stream from /img/{id} (SD), thumbnails from
-                            // /img/{id}_t.jpg (retained RAM or SD fallback)
-                            let head;
-                            if (t.state === 'COMPLETE') {
-                                head = document.createElement('a');
-                                head.href = t.kind === 'THUMB'
-                                    ? ('/img/' + t.id + '_t.jpg') : ('/img/' + t.id);
-                                head.target = '_blank';
-                                head.style.color = '#60a5fa';
-                                head.style.textDecoration = 'none';
-                            } else {
-                                head = document.createElement('span');
-                            }
-                            head.className = 'transfer-id';
-                            head.textContent = 'Image #' + t.id;
-
-                            const kind = document.createElement('span');
-                            kind.className = 'transfer-kind' + (t.kind === 'FULL' ? ' full' : '');
-                            kind.textContent = t.kind;
-
-                            const track = document.createElement('div');
-                            track.className = 'progress-track';
-                            const fill = document.createElement('div');
-                            fill.className = 'progress-fill'
-                                + (t.state === 'COMPLETE' ? ' done'
-                                   : (t.state === 'INCOMPLETE' ? ' failed' : ''));
-                            fill.style.width = Math.max(0, Math.min(100, t.percent)) + '%';
-                            track.appendChild(fill);
-
-                            const chunks = document.createElement('span');
-                            chunks.className = 'transfer-chunks';
-                            chunks.textContent = t.chunksReceived + '/' + t.chunksTotal
-                                + ' chunks · ' + t.percent + '%';
-
-                            const state = document.createElement('span');
-                            state.className = 'transfer-state ' + t.state;
-                            state.textContent = t.state;
-
-                            row.appendChild(head);
-                            row.appendChild(kind);
-                            row.appendChild(track);
-                            row.appendChild(chunks);
-                            row.appendChild(state);
-                            tlist.appendChild(row);
-                        });
-                    }
-
-                    // Storage chip (IMG-05): honest computed state — green OK,
-                    // amber UNAVAILABLE (no card) or FULL (write failed)
-                    const sd = data.storage;
-                    const sdEl = document.getElementById('storage-state');
-                    sdEl.textContent = sd ? sd.state : 'UNKNOWN';
-                    sdEl.style.color = (sd && sd.state === 'OK') ? '#22c55e' : '#eab308';
-
-                    // Latest capture (IMG-01): swap the image only when a NEW
-                    // CRC-verified id lands; the dataset gate plus per-id src
-                    // means a stale image is never shown under a new id
-                    const thumbId = data.latestThumbId || 0;
-                    const thumbImg = document.getElementById('thumb-img');
-                    const thumbLabel = document.getElementById('thumb-label');
-                    if (thumbId > 0) {
-                        if (thumbImg.dataset.id !== String(thumbId)) {
-                            thumbImg.dataset.id = String(thumbId);
-                            thumbImg.src = '/img/' + thumbId + '_t.jpg';
-                            thumbImg.style.display = 'block';
-                            thumbLabel.textContent = 'Image #' + thumbId + ' — thumbnail received and verified';
-                            thumbLabel.className = 'message success';
-                        }
-                    } else {
-                        thumbImg.removeAttribute('src');
-                        delete thumbImg.dataset.id;
-                        thumbImg.style.display = 'none';
-                        thumbLabel.textContent = 'Waiting for first image...';
-                        thumbLabel.className = 'message info';
-                    }
-
-                    // Telemetry beacon (0x14): absent telemetry stays absent —
-                    // the server sends null until a real beacon arrives
-                    const tchip = document.getElementById('telemetry-chip');
-                    if (data.telemetry) {
-                        const t = data.telemetry;
-                        const age = t.ageMs < 1500 ? 'just now' : Math.round(t.ageMs / 1000) + 's ago';
-                        tchip.textContent = 'Alt ' + t.altitudeM.toFixed(1) + ' m · '
-                            + t.tempC.toFixed(1) + ' °C · '
-                            + (t.gpsValid ? (t.lat.toFixed(5) + ', ' + t.lon.toFixed(5)) : 'GPS no fix')
-                            + ' · ' + age;
-                        tchip.className = 'message ' + (t.ageMs < 15000 ? 'success' : 'info');
-                    } else {
-                        tchip.textContent = 'No telemetry received yet';
-                        tchip.className = 'message info';
-                    }
-                })
-                .catch(err => console.error(err));
+        function pollDelayMs() {
+            if (pollFailCount === 0) return POLL_INTERVAL_MS;
+            return POLL_BACKOFF_STEPS[Math.min(pollFailCount, POLL_BACKOFF_STEPS.length - 1)];
         }
 
-        setInterval(updateStatus, 1000);
-        updateStatus();
+        function scheduleNextPoll() {
+            if (pollTimerId !== null) clearTimeout(pollTimerId);
+            pollTimerId = setTimeout(pollOnce, pollDelayMs());
+        }
+
+        function pollOnce() {
+            pollTimerId = null;
+            fetch('/api/state')
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (data) {
+                    lastGoodPollMs = Date.now();
+                    if (pollFailCount > 0) {
+                        pollFailCount = 0;  // recovery: clear silently, snap to 5s
+                        hideStaleBadge();
+                    }
+                    renderState(data);
+                    scheduleNextPoll();
+                })
+                .catch(function (err) {
+                    console.error(err);
+                    pollFailCount++;
+                    showStaleBadge();
+                    scheduleNextPoll();
+                });
+        }
+
+        // ---------- stale badge (D-35) ----------
+        // Pinned inside the Link tile: after consecutive poll failures the
+        // badge states how old the data is and the current retry cadence.
+        // It clears the moment a poll succeeds again.
+        let staleShown = false;
+        function showStaleBadge() {
+            staleShown = true;
+            document.getElementById('stale-badge').style.display = 'block';
+            renderStaleBadge();
+        }
+        function hideStaleBadge() {
+            staleShown = false;
+            document.getElementById('stale-badge').style.display = 'none';
+        }
+        function staleDataAgeMs() {
+            if (lastTeleRcvMs > 0) return (Date.now() - lastTeleRcvMs) + lastTeleAgeMs;
+            if (lastGoodPollMs > 0) return Date.now() - lastGoodPollMs;
+            return Date.now() - pageLoadMs;
+        }
+        function renderStaleBadge() {
+            if (!staleShown) return;
+            const ageS = Math.max(0, Math.round(staleDataAgeMs() / 1000));
+            setText(document.getElementById('stale-badge'),
+                'Stale — data ' + ageS + ' s old · retrying every ' + (pollDelayMs() / 1000) + ' s');
+        }
+
+        // ---------- telemetry tiles (WEB-01) ----------
+        // Absent data renders honest-null (em-dash / "No fix"), never a
+        // fabricated zero. Battery shows "—" until a valid beacon carries
+        // battery fields (0x14 beacon extension, Task 2).
+        function updateAgeTile() {
+            if (lastTeleRcvMs === 0) {
+                setText(document.getElementById('tele-age'), '—');
+                return;
+            }
+            const ageS = Math.max(0, Math.round(((Date.now() - lastTeleRcvMs) + lastTeleAgeMs) / 1000));
+            setText(document.getElementById('tele-age'), ageS + ' s');
+        }
+
+        function renderTelemetry(data) {
+            const empty = document.getElementById('tele-empty');
+            const t = data.telemetry;
+            if (!t) {
+                empty.style.display = 'block';
+                setText(document.getElementById('tele-alt'), '—');
+                setText(document.getElementById('tele-temp'), '—');
+                setText(document.getElementById('tele-gps'), '—');
+                setText(document.getElementById('tele-batt'), '—');
+                lastTeleRcvMs = 0;
+                updateAgeTile();
+                return;
+            }
+            empty.style.display = 'none';
+            lastTeleRcvMs = Date.now();
+            lastTeleAgeMs = t.ageMs;
+            setText(document.getElementById('tele-alt'), t.altitudeM.toFixed(1) + ' m');
+            setText(document.getElementById('tele-temp'), t.tempC.toFixed(1) + ' °C');
+            setText(document.getElementById('tele-gps'),
+                t.gpsValid ? (t.lat.toFixed(6) + ', ' + t.lon.toFixed(6)) : 'No fix');
+            setText(document.getElementById('tele-batt'),
+                (t.batteryValid && t.batteryMv > 0) ? ((t.batteryMv / 1000).toFixed(1) + ' V') : '—');
+            updateAgeTile();
+        }
+
+        // ---------- section nav (D-45): highlight while scrolling ----------
+        const navLinks = {};
+        const navSections = [];
+        Array.prototype.forEach.call(document.querySelectorAll('.section-nav a'), function (a) {
+            const id = (a.getAttribute('href') || '').slice(1);
+            navLinks[id] = a;
+            const sec = document.getElementById(id);
+            if (sec) navSections.push(sec);
+        });
+        function updateNavCurrent() {
+            let current = navSections.length > 0 ? navSections[0].id : null;
+            for (let i = 0; i < navSections.length; i++) {
+                if (navSections[i].getBoundingClientRect().top <= 140) current = navSections[i].id;
+            }
+            Object.keys(navLinks).forEach(function (id) {
+                setClass(navLinks[id], id === current ? 'current' : '');
+            });
+        }
+        window.addEventListener('scroll', updateNavCurrent, { passive: true });
+
+        // ---------- list renderers with signature gates (D-36) ----------
+        // A list is rebuilt only when its content signature changes; rows
+        // are built with createElement + textContent, never innerHTML.
+        let lastQueueSig = null;
+        function renderQueueList(data) {
+            const rows = (data.queue || []).filter(function (e) { return e.seq !== data.lastSeq; });
+            const sig = rows.map(function (e) { return e.cmd + '|' + e.seq + '|' + e.state; }).join(';');
+            if (sig === lastQueueSig) return;
+            lastQueueSig = sig;
+            const list = document.getElementById('cmd-queue-list');
+            while (list.firstChild) list.removeChild(list.firstChild);
+            rows.forEach(function (e) {
+                const row = document.createElement('div');
+                row.className = 'message ' + stateClass(e.state);
+                row.textContent = e.cmd + ' · #' + e.seq + ' — ' + e.state;
+                list.appendChild(row);
+            });
+        }
+
+        let lastTransferSig = null;
+        function renderTransfers(data) {
+            const transfers = data.transfers || [];
+            const sig = transfers.map(function (t) {
+                return t.id + '|' + t.kind + '|' + t.chunksReceived + '|' + t.chunksTotal
+                    + '|' + t.percent + '|' + t.state;
+            }).join(';');
+            if (sig === lastTransferSig) return;
+            lastTransferSig = sig;
+            const tlist = document.getElementById('transfer-list');
+            while (tlist.firstChild) tlist.removeChild(tlist.firstChild);
+            if (transfers.length === 0) {
+                const emptyRow = document.createElement('div');
+                emptyRow.className = 'message info';
+                emptyRow.textContent = 'No image transfers yet — trigger a capture to start one.';
+                tlist.appendChild(emptyRow);
+                return;
+            }
+            // D-20: one row per transfer slot — pushed thumbnails and pulled
+            // fulls share the same bar and locked vocabulary; every value is
+            // server-computed truth, the client only presents it
+            transfers.forEach(function (t) {
+                const row = document.createElement('div');
+                row.className = 'transfer-row';
+
+                // Completed rows link to the stored bytes: fulls stream
+                // from /img/{id} (SD), thumbnails from /img/{id}_t.jpg
+                // (retained RAM or SD fallback)
+                let head;
+                if (t.state === 'COMPLETE') {
+                    head = document.createElement('a');
+                    head.href = t.kind === 'THUMB'
+                        ? ('/img/' + t.id + '_t.jpg') : ('/img/' + t.id);
+                    head.target = '_blank';
+                    head.style.color = '#60a5fa';
+                    head.style.textDecoration = 'none';
+                } else {
+                    head = document.createElement('span');
+                }
+                head.className = 'transfer-id';
+                head.textContent = 'Image #' + t.id;
+
+                const kind = document.createElement('span');
+                kind.className = 'transfer-kind' + (t.kind === 'FULL' ? ' full' : '');
+                kind.textContent = t.kind;
+
+                const track = document.createElement('div');
+                track.className = 'progress-track';
+                const fill = document.createElement('div');
+                fill.className = 'progress-fill'
+                    + (t.state === 'COMPLETE' ? ' done'
+                       : (t.state === 'INCOMPLETE' ? ' failed' : ''));
+                fill.style.width = Math.max(0, Math.min(100, t.percent)) + '%';
+                track.appendChild(fill);
+
+                const chunks = document.createElement('span');
+                chunks.className = 'transfer-chunks';
+                chunks.textContent = t.chunksReceived + '/' + t.chunksTotal
+                    + ' chunks · ' + t.percent + '%';
+
+                const state = document.createElement('span');
+                state.className = 'transfer-state ' + t.state;
+                state.textContent = t.state;
+
+                row.appendChild(head);
+                row.appendChild(kind);
+                row.appendChild(track);
+                row.appendChild(chunks);
+                row.appendChild(state);
+                tlist.appendChild(row);
+            });
+        }
+
+        // ---------- per-poll state render (D-34: one payload, diff-checked) ----------
+        function renderState(data) {
+            setText(document.getElementById('cmd-sent'), data.sent);
+            setText(document.getElementById('cmd-acked'), data.acked);
+            setText(document.getElementById('cmd-failed'), data.failed);
+            setText(document.getElementById('cmd-pending'), data.pending);
+
+            // LED truth (IN-03): green only on recent ACKed activity, red
+            // after terminal failure with no ACK since, else yellow
+            setClass(document.getElementById('status-led'), 'led '
+                + (data.connected ? 'green' : (data.linkText === 'No link' ? 'red' : 'yellow')));
+            setText(document.getElementById('link-text'), data.linkText);
+
+            // Telemetry panel (WEB-01)
+            renderTelemetry(data);
+
+            // Auto-capture chip — display-only until the command ACKs
+            const chip = document.getElementById('autocapture-chip');
+            setText(chip, data.autoCapture ? ('ON · every ' + data.autoCaptureInterval + 's') : 'OFF');
+            setClass(chip, 'message ' + (data.autoCapture ? 'success' : 'info'));
+
+            // Event Capture card (D-26): the chip shows the balloon-reported
+            // GET_STATUS truth; inputs disable while a SET_EVENT_THRESHOLDS
+            // command is in flight
+            const evChip = document.getElementById('event-chip');
+            const ev = data.eventThresholds;
+            if (ev) {
+                setText(evChip, 'Balloon: ' + (ev.eventsEnabled ? 'ON' : 'OFF')
+                    + ' · alt Δ ' + ev.altM + ' m · dist Δ ' + ev.distM + ' m · spacing ' + ev.spacingS + ' s');
+                setClass(evChip, 'message ' + (ev.eventsEnabled ? 'success' : 'info'));
+            } else {
+                setText(evChip, 'Balloon values not received yet');
+                setClass(evChip, 'message info');
+            }
+            const evForm = document.getElementById('event-form');
+            const evBusy = (data.lastSeq !== 0 && data.lastCmd === 'Set Event Thresholds' && data.lastState === 'Sent')
+                || (data.queue || []).some(function (e) {
+                    return e.cmd === 'Set Event Thresholds' && e.state === 'Sent';
+                });
+            Array.prototype.forEach.call(evForm.elements, function (el) { el.disabled = evBusy; });
+
+            // Pinned last-command row (empty state before any command)
+            const nameEl = document.getElementById('lastcmd-name');
+            const stateEl = document.getElementById('lastcmd-state');
+            if (data.lastSeq === 0) {
+                setText(nameEl, 'No commands yet');
+                setText(stateEl, 'Trigger a capture or change a setting — the result of your last command appears here.');
+                setClass(stateEl, 'message info');
+            } else {
+                setText(nameEl, data.lastCmd + ' · #' + data.lastSeq);
+                setText(stateEl, data.lastState);
+                setClass(stateEl, 'message ' + stateClass(data.lastState));
+            }
+
+            // D-16: one row per remaining occupied queue slot
+            renderQueueList(data);
+
+            // D-20: transfer progress rows
+            renderTransfers(data);
+
+            // Storage chip (IMG-05): honest computed state — green OK, amber
+            // UNAVAILABLE (no card) or FULL (write failed)
+            const sd = data.storage;
+            setText(document.getElementById('storage-state'), sd ? sd.state : 'UNKNOWN');
+            setColor(document.getElementById('storage-state'),
+                (sd && sd.state === 'OK') ? '#22c55e' : '#eab308');
+
+            // Latest capture (IMG-01): swap the image only when a NEW
+            // CRC-verified id lands; the dataset gate plus per-id src means
+            // a stale image is never shown under a new id
+            const thumbId = data.latestThumbId || 0;
+            const thumbImg = document.getElementById('thumb-img');
+            const thumbLabel = document.getElementById('thumb-label');
+            if (thumbId > 0) {
+                if (thumbImg.dataset.id !== String(thumbId)) {
+                    thumbImg.dataset.id = String(thumbId);
+                    thumbImg.src = '/img/' + thumbId + '_t.jpg';
+                    thumbImg.style.display = 'block';
+                    setText(thumbLabel, 'Image #' + thumbId + ' — thumbnail received and verified');
+                    setClass(thumbLabel, 'message success');
+                }
+            } else if (thumbImg.dataset.id !== undefined) {
+                thumbImg.removeAttribute('src');
+                delete thumbImg.dataset.id;
+                thumbImg.style.display = 'none';
+                setText(thumbLabel, 'Waiting for first image...');
+                setClass(thumbLabel, 'message info');
+            }
+        }
+
+        // 1s ticker: the only periodic work between polls is the counting
+        // Data age tile and the stale-badge age readout
+        setInterval(function () {
+            updateAgeTile();
+            renderStaleBadge();
+        }, 1000);
+
+        updateNavCurrent();
+        pollOnce();
     </script>
 </body>
 </html>
@@ -727,7 +954,8 @@ void initWebServer() {
     server.on("/auto-capture", HTTP_POST, handleAutoCaptureEnable);
     server.on("/auto-capture-stop", HTTP_POST, handleAutoCaptureDisable);
     server.on("/set-event-thresholds", HTTP_POST, handleSetEventThresholds);
-    server.on("/status", HTTP_GET, handleStatus);
+    server.on("/api/state", HTTP_GET, handleApiState);
+    server.on("/status", HTTP_GET, handleApiState);  // legacy alias — same serializer
     server.onNotFound(handleNotFound);
 
     server.begin();
@@ -772,51 +1000,51 @@ void processLoRa() {
 void handleRoot() {
     String html = FPSTR(HTML_HEADER);
 
-    // Status bar
-    html += "<div class=\"status-bar\">";
+    // ---- Map & Telemetry section (D-45: the informational anchor) ----
+    html += "<section id=\"map\">";
+
+    // Telemetry panel (WEB-01): six tiles on the auto-fit grid, fed only by
+    // the latest 0x14 beacon snapshot — absent data renders honest-null,
+    // never zero-filled. The stale badge (D-35) is pinned to the Link tile.
+    html += "<div class=\"telemetry-panel\">";
     html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Status</div>";
+    html += "<div class=\"status-label\">Link</div>";
     html += "<div class=\"status-value\"><span id=\"status-led\" class=\"led yellow\"></span><span id=\"link-text\">Unknown</span></div>";
+    html += "<div class=\"stale-badge\" id=\"stale-badge\">Stale</div>";
     html += "</div>";
     html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Sent</div>";
-    html += "<div class=\"status-value\" id=\"cmd-sent\">0</div>";
+    html += "<div class=\"status-label\">Altitude</div>";
+    html += "<div class=\"status-value\" id=\"tele-alt\">—</div>";
     html += "</div>";
     html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Acked</div>";
-    html += "<div class=\"status-value\" id=\"cmd-acked\">0</div>";
+    html += "<div class=\"status-label\">Temperature</div>";
+    html += "<div class=\"status-value\" id=\"tele-temp\">—</div>";
     html += "</div>";
     html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Failed</div>";
-    html += "<div class=\"status-value\" id=\"cmd-failed\">0</div>";
+    html += "<div class=\"status-label\">GPS</div>";
+    html += "<div class=\"status-value\" id=\"tele-gps\">—</div>";
     html += "</div>";
     html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Pending</div>";
-    html += "<div class=\"status-value\" id=\"cmd-pending\">0</div>";
+    html += "<div class=\"status-label\">Battery</div>";
+    html += "<div class=\"status-value\" id=\"tele-batt\">—</div>";
     html += "</div>";
     html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Storage</div>";
-    html += "<div class=\"status-value\" id=\"storage-state\">Unknown</div>";
+    html += "<div class=\"status-label\">Data age</div>";
+    html += "<div class=\"status-value\" id=\"tele-age\">—</div>";
     html += "</div>";
+    html += "<div class=\"message info\" id=\"tele-empty\" style=\"grid-column: 1 / -1;\">No telemetry received yet</div>";
     html += "</div>";
 
-    // Command Queue card (D-16: pinned last command + one row per remaining
-    // occupied slot; server-rendered empty state replaced by the poll script)
-    html += "<div class=\"card\">";
-    html += "<h2>📡 Command Queue</h2>";
-    html += "<div class=\"status-value\" id=\"lastcmd-name\">No commands yet</div>";
-    html += "<div class=\"message info\" id=\"lastcmd-state\">Trigger a capture or change a setting — the result of your last command appears here.</div>";
-    html += "<div id=\"cmd-queue-list\"></div>";
+    // Map frame placeholder (WEB-02 arrives in 03-02): the waiting message
+    // is the honest empty state until a valid GPS fix exists
+    html += "<div class=\"map-frame\">";
+    html += "<div class=\"message info\" id=\"map-waiting\">Waiting for GPS fix — the track appears once the balloon reports a valid position.</div>";
     html += "</div>";
 
-    // Transfer progress card (D-20): one row per transfer slot — pushed
-    // thumbnails and pulled fulls share the SAME panel, progress bar, and
-    // locked state vocabulary; the poll script fills the rows (empty state
-    // until the first manifest arrives)
-    html += "<div class=\"card\">";
-    html += "<h2>📦 Image Transfers</h2>";
-    html += "<div id=\"transfer-list\"></div>";
-    html += "</div>";
+    html += "</section>";
+
+    // ---- Capture & Settings section (D-45 locked order) ----
+    html += "<section id=\"capture\">";
 
     // Capture card
     html += "<div class=\"card\">";
@@ -976,19 +1204,67 @@ void handleRoot() {
     html += "<button type=\"submit\">Save Event Thresholds</button>";
     html += "</form>";
 
-    html += "<div class=\"message info\" id=\"event-chip\" style=\"margin-top:12px;\">Balloon values not received yet</div>";
+    html += "<div class=\"message info\" id=\"event-chip\" style=\"margin-top:16px;\">Balloon values not received yet</div>";
 
     html += "</div>";
 
+    html += "</section>";
+
+    // ---- Queue & Transfers section (D-45: control feedback last) ----
+    html += "<section id=\"queue\">";
+
+    // Command Queue card (D-16: inline counter chips + pinned last command +
+    // one row per remaining occupied slot; rows are filled by the poll script)
+    html += "<div class=\"card\">";
+    html += "<h2>📡 Command Queue</h2>";
+    html += "<div class=\"queue-counters\">";
+    html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Sent</div>";
+    html += "<div class=\"status-value\" id=\"cmd-sent\">0</div>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Acked</div>";
+    html += "<div class=\"status-value\" id=\"cmd-acked\">0</div>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Failed</div>";
+    html += "<div class=\"status-value\" id=\"cmd-failed\">0</div>";
+    html += "</div>";
+    html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Pending</div>";
+    html += "<div class=\"status-value\" id=\"cmd-pending\">0</div>";
+    html += "</div>";
+    html += "</div>";
+    html += "<div class=\"status-value\" id=\"lastcmd-name\">No commands yet</div>";
+    html += "<div class=\"message info\" id=\"lastcmd-state\">Trigger a capture or change a setting — the result of your last command appears here.</div>";
+    html += "<div id=\"cmd-queue-list\"></div>";
+    html += "</div>";
+
+    // Transfer progress card (D-20): one row per transfer slot — pushed
+    // thumbnails and pulled fulls share the SAME panel, progress bar, and
+    // locked state vocabulary; the storage chip (IMG-05) lives here too.
+    // Rows are filled by the poll script (empty state until first manifest)
+    html += "<div class=\"card\">";
+    html += "<h2>📦 Image Transfers</h2>";
+    html += "<div class=\"queue-counters\">";
+    html += "<div class=\"status-item\">";
+    html += "<div class=\"status-label\">Storage</div>";
+    html += "<div class=\"status-value\" id=\"storage-state\">Unknown</div>";
+    html += "</div>";
+    html += "</div>";
+    html += "<div id=\"transfer-list\"></div>";
+    html += "</div>";
+
     // Latest capture card (IMG-01): the newest CRC-verified thumbnail pushed
-    // from the balloon, plus the telemetry-beacon readout (0x14)
+    // from the balloon — the interim gallery surface until 03-04 absorbs it
     html += "<div class=\"card\">";
     html += "<h2>🖼 Latest Capture</h2>";
     html += "<div class=\"message info\" id=\"thumb-label\">Waiting for first image...</div>";
     html += "<img id=\"thumb-img\" alt=\"Balloon camera thumbnail\" ";
-    html += "style=\"width:100%;max-width:320px;border-radius:8px;margin-top:12px;display:none;\">";
-    html += "<div class=\"message info\" id=\"telemetry-chip\" style=\"margin-top:12px;\">No telemetry received yet</div>";
+    html += "style=\"width:100%;max-width:320px;border-radius:8px;margin-top:16px;display:none;\">";
     html += "</div>";
+
+    html += "</section>";
 
     html += FPSTR(HTML_FOOTER);
 
@@ -1367,12 +1643,17 @@ const char* commandDisplayName(uint8_t commandType) {
     return "Command";
 }
 
-void handleStatus() {
+// GET /api/state (D-33/D-34): ONE combined serializer per poll — telemetry,
+// link truth, command queue, transfer progress, storage. The legacy /status
+// path aliases the same handler so nothing that already polls breaks.
+void handleApiState() {
     // D-16: live queue snapshot — every occupied slot of the command table
     CommandQueueEntry entries[MAX_PENDING_COMMANDS];
     uint8_t entryCount = CmdSender().getCommandQueue(entries, MAX_PENDING_COMMANDS);
 
-    String json = "{";
+    String json;
+    json.reserve(4096);
+    json += "{";
     json += "\"sent\":" + String(appState.commandsSent) + ",";
     json += "\"acked\":" + String(appState.commandsAcked) + ",";
     json += "\"failed\":" + String(appState.commandsFailed) + ",";
