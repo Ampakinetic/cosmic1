@@ -607,6 +607,13 @@ bool ImageRxManager::acceptChunk(ImageRxTransfer& t, const ImageChunkBody& c) {
 // ===========================
 
 void ImageRxManager::finalizeTransfer(ImageRxTransfer& t) {
+    // CR-02: flush this id's buffered writes BEFORE the stored-bytes
+    // read-back below — verifyStoredCrc32 reads through a SECOND file
+    // handle, and the write handle's stdio buffer may still hold the final
+    // chunk's bytes (an unflushed short read would fail verification and
+    // finalize a fully-received image INCOMPLETE).
+    SDStorage().flushTransfer(t.imageId, t.imageKind);
+
     // D-23: an image is COMPLETE only after the end-to-end CRC32 over its
     // bytes matches the manifest. Thumbnail bytes live in RAM (the 02-01
     // reassembly); full-image bytes live only on SD, so their CRC is

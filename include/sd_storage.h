@@ -101,6 +101,14 @@ public:
     bool writeChunk(uint16_t imageId, uint8_t kind, uint16_t chunkIndex,
                     uint16_t chunkSize, const uint8_t* data, size_t len);
 
+    // Flush the kind's open write handle for (imageId, kind) if held. CR-02:
+    // Arduino-ESP32 File I/O rides stdio with buffering, so a read-back
+    // through a SECOND handle (stored-CRC verification opens its own FILE*)
+    // cannot see bytes still sitting in the write handle's buffer — flush
+    // before any such read-back or a fully-received image reads short and
+    // fails verification. No-op when this id's handle is not the open one.
+    void flushTransfer(uint16_t imageId, uint8_t kind);
+
     // Close the open file and write the sidecar IMG_{id}.JSON (or
     // IMG_{id}_T.JSON for THUMBNAIL — kind-suffixed so thumbnail and full
     // D-30 records persist independently, 02-05/WR-05) exactly ONCE at

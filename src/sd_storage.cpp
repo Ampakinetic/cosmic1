@@ -235,6 +235,24 @@ bool SdStorage::writeChunk(uint16_t imageId, uint8_t kind, uint16_t chunkIndex,
     return true;
 }
 
+void SdStorage::flushTransfer(uint16_t imageId, uint8_t kind) {
+    // CR-02: stdio-buffered writes are invisible to a second FILE* until
+    // flushed — verifyStoredCrc32 reads through serveFile() while this kind's
+    // write handle may still hold the final chunk's bytes in its stdio
+    // buffer (each writeChunk's seek flushes only the PREVIOUS write). Flush
+    // rather than close so the transfer could keep writing afterwards.
+    if (!available) {
+        return;
+    }
+    File* handle = nullptr;
+    uint16_t* handleId = nullptr;
+    uint32_t* persistedBytes = nullptr;
+    fileFor(kind, &handle, &handleId, &persistedBytes);
+    if (*handle && *handleId == imageId) {
+        handle->flush();
+    }
+}
+
 // ===========================
 // Finalization (sidecar written ONCE — Pitfall 8)
 // ===========================
