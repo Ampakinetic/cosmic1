@@ -157,6 +157,8 @@ void handleApiState();
 void handleLeafletJs();
 void handleLeafletCss();
 void handleImage(const String& uri);
+void handleGalleryList();
+void handleGalleryDetail(const String& uri);
 void handleNotFound();
 
 String commandStateToString(CommandState state, uint8_t retryCount);
@@ -1651,6 +1653,7 @@ void initWebServer() {
     server.on("/alerts/ack", HTTP_POST, handleAlertAck);
     server.on("/api/state", HTTP_GET, handleApiState);
     server.on("/status", HTTP_GET, handleApiState);  // legacy alias — same serializer
+    server.on("/gallery", HTTP_GET, handleGalleryList);  // /gallery/{id} rides handleNotFound (parameter)
     // Embedded Leaflet (WEB-02): gzipped PROGMEM assets with Content-Encoding
     // + a day of cache — the page NEVER references a CDN at runtime
     server.on("/leaflet.js", HTTP_GET, handleLeafletJs);
@@ -2661,6 +2664,12 @@ void handleApiState() {
     json += "\"available\":" + String(sd.available ? "true" : "false") + ",";
     json += "\"state\":\"" + String(sdState) + "\"},";
 
+    // IMG-06 (D-36): persisted image count — the poll's ONLY gallery refresh
+    // signal; the browser refetches /gallery just when this value changes,
+    // never per poll tick
+    SDStorage().ensureIndexCurrent();
+    json += "\"galleryCount\":" + String(SDStorage().getTotalCount()) + ",";
+
     // D-16: one entry per occupied queue slot, same vocabulary as lastState
     json += "\"queue\":[";
     for (uint8_t i = 0; i < entryCount; i++) {
@@ -2784,12 +2793,190 @@ void handleImage(const String& uri) {
     sendResponse(404, "Not Found", "Image not available");
 }
 
+// GET /gallery?page=N (IMG-06, D-46): one page of the newest-first RAM
+// index — 12 entries of {id, hasThumb, hasFull, complete}. `complete`
+// derives from the FULL sidecar's complete flag only (an entry with just
+// thumbnail data is not complete — the grid badges it Incomplete, D-48).
+// Page discipline is WR-07: absent page -> 1; non-numeric, < 1, or >
+// pageCount rejected 400. SD unavailable serves the honest EMPTY listing
+// {page:1, pageCount:1, total:0, entries:[]} — never an error page (the
+// storage chip already surfaces UNAVAILABLE in the panel).
+void handleGalleryList() {
+    uint32_t page = 1;
+    if (server.hasArg("page")) {
+        const String ps = server.arg("page");
+        bool valid = ps.length() > 0;
+        for (unsigned int i = 0; valid && i < ps.length(); i++) {
+            if (!isDigit(ps.charAt(i))) {
+                valid = false;
+            }
+        }
+        long v = valid ? strtol(ps.c_str(), nullptr, 10) : 0;
+        if (!valid || v < 1) {
+            sendResponse(400, "Bad Request", "Invalid page");
+            return;
+        }
+        page = static_cast<uint32_t>(v);
+    }
+
+    SdStorage& sd = SDStorage();
+    sd.ensureIndexCurrent();
+
+    // No card mounted: the empty listing IS the gallery's honest state
+    if (sd.getStatus().initFailed) {
+        server.send(200, "application/json",
+                    "{\"page\":1,\"pageCount\":1,\"total\":0,\"entries\":[]}");
+        return;
+    }
+
+    uint16_t pageCount = sd.getPageCount();
+    if (page > pageCount) {
+        sendResponse(400, "Bad Request", "Page out of range");
+        return;
+    }
+
+    SdGalleryEntry entries[SD_GALLERY_PAGE_SIZE];
+    uint8_t n = sd.getIndexPage(static_cast<uint16_t>(page), entries, SD_GALLERY_PAGE_SIZE);
+
+    String json;
+    json.reserve(384 + static_cast<uint32_t>(n) * 64);
+    json += "{\"page\":" + String(static_cast<unsigned long>(page));
+    json += ",\"pageCount\":" + String(static_cast<unsigned long>(pageCount));
+    json += ",\"total\":" + String(static_cast<unsigned long>(sd.getTotalCount()));
+    json += ",\"entries\":[";
+    for (uint8_t i = 0; i < n; i++) {
+        if (i > 0) {
+            json += ",";
+        }
+        bool complete = false;
+        if (entries[i].hasFullSidecar) {
+            SdImageMetadata meta;
+            if (sd.readSidecarMeta(entries[i].id, false, &meta)
+                    && (meta.present & SD_SC_PRESENT_COMPLETE)) {
+                complete = meta.complete;
+            }
+        }
+        json += "{\"id\":" + String(static_cast<unsigned long>(entries[i].id));
+        json += ",\"hasThumb\":" + String(entries[i].hasThumb ? "true" : "false");
+        json += ",\"hasFull\":" + String(entries[i].hasFull ? "true" : "false");
+        json += ",\"complete\":" + String(complete ? "true" : "false") + "}";
+    }
+    json += "]}";
+    server.send(200, "application/json", json);
+}
+
+// GET /gallery/{id} (IMG-06, D-47): sidecar-parsed detail. The full
+// sidecar is preferred with the thumbnail sidecar as fallback; ONLY
+// sidecar-present fields serialize — absent fields are omitted, never
+// zero-filled. `complete` derives from the FULL sidecar only (thumbnail
+// data alone is not a complete image). 404 when neither a readable
+// sidecar NOR any indexed file exists for the id. The id is parsed with
+// the handleImage discipline — strictly numeric, 1..0xFFFF, validated
+// before any file access (T-03-10: no network-supplied fragment ever
+// reaches a path).
+void handleGalleryDetail(const String& uri) {
+    static const char PREFIX[] = "/gallery/";
+
+    String idStr = uri.substring(strlen(PREFIX));
+    if (idStr.length() == 0) {
+        sendResponse(404, "Not Found", "Missing image id");
+        return;
+    }
+    for (unsigned int i = 0; i < idStr.length(); i++) {
+        if (!isDigit(idStr.charAt(i))) {
+            sendResponse(404, "Not Found", "Invalid image id");
+            return;
+        }
+    }
+    long id = strtol(idStr.c_str(), nullptr, 10);
+    if (id <= 0 || id > 0xFFFF) {
+        sendResponse(404, "Not Found", "Image not available");
+        return;
+    }
+    uint16_t imageId = static_cast<uint16_t>(id);
+
+    SdStorage& sd = SDStorage();
+    sd.ensureIndexCurrent();
+
+    SdGalleryEntry entry;
+    bool haveEntry = sd.findIndexEntry(imageId, &entry);
+
+    SdImageMetadata meta;
+    bool haveMeta = sd.readSidecarMeta(imageId, false, &meta);   // full first
+    bool fromFull = haveMeta;
+    if (!haveMeta) {
+        haveMeta = sd.readSidecarMeta(imageId, true, &meta);     // thumb fallback
+    }
+
+    if (!haveEntry && !haveMeta) {
+        sendResponse(404, "Not Found", "Image not available");
+        return;
+    }
+
+    bool complete = fromFull && (meta.present & SD_SC_PRESENT_COMPLETE) && meta.complete;
+
+    String json;
+    json.reserve(512);
+    json += "{\"id\":" + String(static_cast<unsigned long>(imageId));
+    json += ",\"complete\":" + String(complete ? "true" : "false");
+    json += ",\"hasFull\":" + String((haveEntry && entry.hasFull) ? "true" : "false");
+
+    if (haveMeta) {
+        if (meta.present & SD_SC_PRESENT_CAPTURETIME) {
+            json += ",\"capturedMs\":" + String(static_cast<unsigned long>(meta.captureTimeMs));
+        }
+        if (meta.present & SD_SC_PRESENT_TRIGGER) {
+            // Locked trigger vocabulary — the sidecar's free string never
+            // reaches the browser verbatim (T-03-09); an unrecognized name
+            // maps to "unknown"
+            json += ",\"trigger\":\"" + String(SdStorage::triggerSourceName(meta.captureSource)) + "\"";
+        }
+        // gpsValid is the sidecar's null-vs-numeric telemetry triple: the
+        // writer emits all three keys on every real sidecar, so false means
+        // "no valid fix at capture" and the detail view renders the
+        // "GPS no fix" position copy (D-47)
+        json += ",\"gpsValid\":" + String(meta.telemetryValid ? "true" : "false");
+        if (meta.present & SD_SC_PRESENT_TELEMETRY) {
+            json += ",\"altitudeM\":" + String(meta.altitudeM, 1);
+            json += ",\"lat\":" + String(meta.lat, 6);
+            json += ",\"lon\":" + String(meta.lon, 6);
+        }
+        if (meta.present & SD_SC_PRESENT_CAMERA) {
+            json += ",\"camera\":{";
+            json += "\"resolution\":" + String(static_cast<unsigned long>(meta.resolution));
+            json += ",\"quality\":" + String(static_cast<unsigned long>(meta.quality));
+            json += ",\"brightness\":" + String(static_cast<long>(meta.brightness));
+            json += ",\"contrast\":" + String(static_cast<long>(meta.contrast));
+            json += ",\"saturation\":" + String(static_cast<long>(meta.saturation));
+            json += ",\"exposure\":" + String(static_cast<long>(meta.exposure));
+            json += ",\"wbMode\":" + String(static_cast<unsigned long>(meta.wbMode)) + "}";
+        }
+        if (meta.present & SD_SC_PRESENT_CHUNKS) {
+            json += ",\"chunksReceived\":" + String(static_cast<unsigned long>(meta.chunksReceived));
+            json += ",\"chunksTotal\":" + String(static_cast<unsigned long>(meta.chunksTotal));
+            uint32_t percent = (meta.chunksTotal > 0)
+                ? (static_cast<uint32_t>(meta.chunksReceived) * 100UL / meta.chunksTotal)
+                : 0;
+            if (percent > 100) {
+                percent = 100;
+            }
+            json += ",\"percent\":" + String(static_cast<unsigned long>(percent));
+        }
+    }
+    json += "}";
+    server.send(200, "application/json", json);
+}
+
 void handleNotFound() {
-    // /img/{id} and /img/{id}_t.jpg route here (exact-match routing cannot
-    // express the parameter) — dispatch before the generic 404
+    // /img/{id}, /img/{id}_t.jpg, and /gallery/{id} route here (exact-match
+    // routing cannot express the parameter) — dispatch before the generic 404
     String uri = server.uri();
     if (server.method() == HTTP_GET && uri.startsWith("/img/")) {
         handleImage(uri);
+        return;
+    }
+    if (server.method() == HTTP_GET && uri.startsWith("/gallery/")) {
+        handleGalleryDetail(uri);
         return;
     }
 

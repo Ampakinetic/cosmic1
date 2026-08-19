@@ -31,6 +31,9 @@ SdStorage::SdStorage()
     , fullPersistedBytes(0)
     , thumbFileId(0)
     , thumbPersistedBytes(0)
+    , galleryCount(0)
+    , indexVersion(0)
+    , indexedVersion(0)
 {
     status.available = false;
     status.initFailed = false;
@@ -69,6 +72,11 @@ bool SdStorage::begin() {
     status.available = true;
     status.initFailed = false;
     status.writeFailed = false;
+
+    // Boot enumeration (03-04): one openNextFile walk builds the RAM gallery
+    // index BEFORE any web client can ask for /gallery — pagination later
+    // slices this index, never the directory (Pitfall 5).
+    buildIndex();
 
     Serial.println("SdStorage: card mounted, /images ready");
     return true;
@@ -258,6 +266,15 @@ void SdStorage::flushTransfer(uint16_t imageId, uint8_t kind) {
 // ===========================
 
 bool SdStorage::finalizeImage(const SdImageMetadata& meta) {
+    // Gallery index invalidation (03-04, key_link indexVersion): a
+    // finalization changed /images — at minimum the transfer's file has
+    // existed since openTransfer, and on success a sidecar was just added.
+    // Bumped on EVERY finalize path (both kinds, the degraded early-return
+    // included: a degraded finalize can still leave a partial file behind,
+    // and the directory is the truth). The next gallery request lazily
+    // rebuilds via ensureIndexCurrent() — never a per-request rescan.
+    indexVersion++;
+
     char path[32];
     imagePath(path, sizeof(path), meta.imageId, meta.kind);
 
@@ -385,6 +402,465 @@ File SdStorage::serveFile(uint16_t imageId, uint8_t kind) {
         return File();
     }
     return SD.open(path, FILE_READ);
+}
+
+// ===========================
+// Gallery Index (IMG-06, 03-04)
+// ===========================
+
+// File-class bits for the name parser below (module-internal)
+enum : uint8_t {
+    GF_FULL         = 0x01,   // IMG_{id}.JPG
+    GF_THUMB        = 0x02,   // IMG_{id}_T.JPG
+    GF_FULL_SIDECAR = 0x04,   // IMG_{id}.JSON
+    GF_THUMB_SIDECAR = 0x08   // IMG_{id}_T.JSON
+};
+
+// Match one /images basename against the D-29/D-31/D-32 convention:
+// IMG_{exactly 5 digits} + one of ".JPG" / "_T.JPG" / ".JSON" /
+// "_T.JSON" (ids are %05u zero-padded uint16). Every character is validated
+// BEFORE any number is parsed — a hostile or foreign name can never smuggle
+// a path fragment or an out-of-range id into the index (T-03-10: ids are
+// strictly numeric, 1..0xFFFF, and file names elsewhere are built only
+// from the %05u-formatted id).
+static bool parseGalleryName(const char* base, uint16_t* outId, uint8_t* outFlags) {
+    static const char IMG_PREFIX[] = "IMG_";
+    const size_t plen = strlen(IMG_PREFIX);
+    if (strlen(base) < plen + 5 + 4) return false;   // shortest: IMG_00000.JPG
+    if (strncmp(base, IMG_PREFIX, plen) != 0) return false;
+
+    // Exactly 5 digits, per-character (strtol alone would accept signs,
+    // leading spaces, and hex prefixes)
+    for (size_t i = 0; i < 5; i++) {
+        if (!isdigit((unsigned char)base[plen + i])) return false;
+    }
+
+    const char* suffix = base + plen + 5;
+    uint8_t flags;
+    if      (strcmp(suffix, ".JPG") == 0)   flags = GF_FULL;
+    else if (strcmp(suffix, "_T.JPG") == 0) flags = GF_THUMB;
+    else if (strcmp(suffix, ".JSON") == 0)  flags = GF_FULL_SIDECAR;
+    else if (strcmp(suffix, "_T.JSON") == 0) flags = GF_THUMB_SIDECAR;
+    else return false;
+
+    // 5 validated decimal digits: 1..99999 — the range check rejects the
+    // ids beyond the uint16 image-ID space (id 00000 never exists;
+    // allocateImageId pre-increments from 0)
+    long id = strtol(base + plen, nullptr, 10);
+    if (id < 1 || id > 0xFFFF) return false;
+
+    *outId = static_cast<uint16_t>(id);
+    *outFlags = flags;
+    return true;
+}
+
+// qsort comparator: DESCENDING by id (newest first)
+static int galleryEntryCompare(const void* a, const void* b) {
+    uint16_t ia = static_cast<const SdGalleryEntry*>(a)->id;
+    uint16_t ib = static_cast<const SdGalleryEntry*>(b)->id;
+    return (ia > ib) ? -1 : (ia < ib) ? 1 : 0;
+}
+
+void SdStorage::buildIndex() {
+    galleryCount = 0;
+    indexedVersion = indexVersion;   // single-threaded loop: no interleaving
+
+    // No card mounted: the empty index IS the honest state (/gallery serves
+    // the empty listing; the storage chip reports UNAVAILABLE)
+    if (status.initFailed) {
+        return;
+    }
+
+    File dir = SD.open("/images");
+    if (!dir || !dir.isDirectory()) {
+        Serial.println("SdStorage: /images open failed during index build — index left empty");
+        return;
+    }
+
+    File f;
+    while (f = dir.openNextFile()) {
+        if (!f.isDirectory()) {
+            // f.name() may carry a leading path depending on the core
+            // version — parse the LAST path component only
+            const char* base = f.name();
+            const char* slash = strrchr(base, '/');
+            if (slash) {
+                base = slash + 1;
+            }
+            uint16_t id = 0;
+            uint8_t flags = 0;
+            if (parseGalleryName(base, &id, &flags)) {
+                mergeIntoIndex(id, flags, static_cast<uint32_t>(f.size()));
+            }
+        }
+        f.close();
+    }
+    dir.close();
+
+    sortIndexDescending();
+
+    if (DEBUG_SD_STORAGE) {
+        Serial.printf("SdStorage: gallery index built — %u image(s)%s\n",
+                      static_cast<unsigned>(galleryCount),
+                      galleryCount == SD_GALLERY_MAX_ENTRIES
+                          ? " (cap reached — newest kept)" : "");
+    }
+}
+
+void SdStorage::mergeIntoIndex(uint16_t id, uint8_t galleryFlags, uint32_t fullSize) {
+    SdGalleryEntry* e = nullptr;
+    for (uint16_t i = 0; i < galleryCount; i++) {
+        if (galleryIndex[i].id == id) {
+            e = &galleryIndex[i];
+            break;
+        }
+    }
+    if (e == nullptr) {
+        if (galleryCount < SD_GALLERY_MAX_ENTRIES) {
+            e = &galleryIndex[galleryCount++];
+        } else {
+            // Cap reached: keep the NEWEST 1000 (documented honest
+            // degradation) — evict the oldest indexed id only when the new
+            // one is newer; an older id is honestly beyond the window
+            uint16_t oldest = 0;
+            for (uint16_t i = 1; i < galleryCount; i++) {
+                if (galleryIndex[i].id < galleryIndex[oldest].id) {
+                    oldest = i;
+                }
+            }
+            if (id <= galleryIndex[oldest].id) {
+                return;
+            }
+            e = &galleryIndex[oldest];
+            galleryCount = SD_GALLERY_MAX_ENTRIES;   // (already there; intent)
+        }
+        e->id = id;
+        e->hasThumb = false;
+        e->hasFull = false;
+        e->hasThumbSidecar = false;
+        e->hasFullSidecar = false;
+        e->fullSize = 0;
+    }
+    if (galleryFlags & GF_FULL) {
+        e->hasFull = true;
+        e->fullSize = fullSize;
+    }
+    if (galleryFlags & GF_THUMB)         e->hasThumb = true;
+    if (galleryFlags & GF_FULL_SIDECAR)  e->hasFullSidecar = true;
+    if (galleryFlags & GF_THUMB_SIDECAR) e->hasThumbSidecar = true;
+}
+
+void SdStorage::sortIndexDescending() {
+    if (galleryCount > 1) {
+        qsort(galleryIndex, galleryCount, sizeof(SdGalleryEntry), galleryEntryCompare);
+    }
+}
+
+void SdStorage::ensureIndexCurrent() {
+    if (indexedVersion != indexVersion) {
+        buildIndex();
+    }
+}
+
+uint16_t SdStorage::getTotalCount() const {
+    return galleryCount;
+}
+
+uint16_t SdStorage::getPageCount() const {
+    if (galleryCount == 0) {
+        return 1;   // the honest empty listing is still "page 1 of 1"
+    }
+    return static_cast<uint16_t>(
+        (static_cast<uint32_t>(galleryCount) + SD_GALLERY_PAGE_SIZE - 1)
+        / SD_GALLERY_PAGE_SIZE);
+}
+
+uint8_t SdStorage::getIndexPage(uint16_t pageIdx, SdGalleryEntry* dst, uint8_t max) {
+    if (dst == nullptr || max == 0 || pageIdx < 1) {
+        return 0;
+    }
+    uint32_t start = (static_cast<uint32_t>(pageIdx) - 1) * SD_GALLERY_PAGE_SIZE;
+    if (start >= galleryCount) {
+        return 0;
+    }
+    uint32_t avail = galleryCount - start;
+    uint32_t n = (avail < SD_GALLERY_PAGE_SIZE) ? avail : SD_GALLERY_PAGE_SIZE;
+    if (n > max) {
+        n = max;
+    }
+    memcpy(dst, &galleryIndex[start], static_cast<size_t>(n) * sizeof(SdGalleryEntry));
+    return static_cast<uint8_t>(n);
+}
+
+bool SdStorage::findIndexEntry(uint16_t imageId, SdGalleryEntry* out) const {
+    for (uint16_t i = 0; i < galleryCount; i++) {
+        if (galleryIndex[i].id == imageId) {
+            if (out) {
+                *out = galleryIndex[i];
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+// ===========================
+// Sidecar Parsing (gallery detail, D-47 / T-03-09)
+// ===========================
+
+// Bounded read cap: the hand-built writer emits ~600-700 chars. A hostile
+// card may hold anything — only the first SD_SIDECAR_MAX_BYTES are read;
+// fields beyond the cap parse as absent (honest omission, no overflow).
+static constexpr size_t SD_SIDECAR_MAX_BYTES = 1024;
+
+// Locate "\"key\": in buf — returns the index of the first value character
+// after the colon (spaces skipped), or -1 when absent. The closing quote of
+// the pattern makes key-prefix collisions impossible.
+static int32_t jsonValuePos(const char* buf, const char* key) {
+    char pattern[28];
+    if (snprintf(pattern, sizeof(pattern), "\"%s\":", key) >= static_cast<int>(sizeof(pattern))) {
+        return -1;   // key longer than the scratch pattern — impossible here
+    }
+    const char* hit = strstr(buf, pattern);
+    if (hit == nullptr) {
+        return -1;
+    }
+    int32_t pos = static_cast<int32_t>(hit - buf + strlen(pattern));
+    while (buf[pos] == ' ') {
+        pos++;
+    }
+    return pos;
+}
+
+static bool jsonIsNullAt(const char* buf, int32_t pos) {
+    return pos >= 0 && strncmp(buf + pos, "null", 4) == 0;
+}
+
+// Bounded quoted-string copy into dst (at most dstCap-1 chars + NUL).
+// Overlong values are REJECTED, never truncated mid-token.
+static bool jsonStringAt(const char* buf, int32_t pos, char* dst, size_t dstCap) {
+    if (pos < 0 || buf[pos] != '"') {
+        return false;
+    }
+    const char* start = buf + pos + 1;
+    const char* end = strchr(start, '"');
+    if (end == nullptr) {
+        return false;
+    }
+    size_t len = static_cast<size_t>(end - start);
+    if (len >= dstCap) {
+        return false;
+    }
+    memcpy(dst, start, len);
+    dst[len] = '\0';
+    return true;
+}
+
+// Unsigned integer with a clamp to [0, hi] — a hostile overlong digit run
+// saturates into the clamp, never wraps
+static bool jsonUintAt(const char* buf, int32_t pos, uint32_t hi, uint32_t* out) {
+    if (pos < 0 || !isdigit((unsigned char)buf[pos])) {
+        return false;
+    }
+    char* endp = nullptr;
+    unsigned long v = strtoul(buf + pos, &endp, 10);
+    if (endp == buf + pos) {
+        return false;
+    }
+    if (v > hi) {
+        v = hi;
+    }
+    *out = static_cast<uint32_t>(v);
+    return true;
+}
+
+// Signed integer with a clamp to [lo, hi]
+static bool jsonIntAt(const char* buf, int32_t pos, long lo, long hi, long* out) {
+    if (pos < 0) {
+        return false;
+    }
+    const char* s = buf + pos;
+    size_t i = (s[0] == '-' || s[0] == '+') ? 1 : 0;
+    if (!isdigit((unsigned char)s[i])) {
+        return false;
+    }
+    char* endp = nullptr;
+    long v = strtol(s, &endp, 10);
+    if (endp == s) {
+        return false;
+    }
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    *out = v;
+    return true;
+}
+
+// Float with a clamp to [lo, hi] — lat/lon/altitude ranges make fabricated
+// coordinates impossible to smuggle through
+static bool jsonFloatAt(const char* buf, int32_t pos, float lo, float hi, float* out) {
+    if (pos < 0) {
+        return false;
+    }
+    const char* s = buf + pos;
+    size_t i = (s[0] == '-' || s[0] == '+') ? 1 : 0;
+    if (!isdigit((unsigned char)s[i]) && s[i] != '.') {
+        return false;
+    }
+    char* endp = nullptr;
+    float v = strtof(s, &endp);
+    if (endp == s) {
+        return false;
+    }
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    *out = v;
+    return true;
+}
+
+static bool jsonBoolAt(const char* buf, int32_t pos, bool* out) {
+    if (pos < 0) {
+        return false;
+    }
+    if (strncmp(buf + pos, "true", 4) == 0) {
+        *out = true;
+        return true;
+    }
+    if (strncmp(buf + pos, "false", 5) == 0) {
+        *out = false;
+        return true;
+    }
+    return false;
+}
+
+// Reverse of triggerSourceName: bounded compare against the KNOWN names
+// only — an unknown or hostile string maps to 0xFF, which serializes back
+// through triggerSourceName as "unknown" (no sidecar string ever reaches
+// the browser verbatim)
+static uint8_t captureSourceFromName(const char* name) {
+    if      (strcmp(name, "manual") == 0)         return static_cast<uint8_t>(CaptureSource::MANUAL);
+    else if (strcmp(name, "interval") == 0)       return static_cast<uint8_t>(CaptureSource::INTERVAL);
+    else if (strcmp(name, "event-altitude") == 0) return static_cast<uint8_t>(CaptureSource::EVENT_ALTITUDE);
+    else if (strcmp(name, "event-distance") == 0) return static_cast<uint8_t>(CaptureSource::EVENT_DISTANCE);
+    else if (strcmp(name, "event-phase") == 0)    return static_cast<uint8_t>(CaptureSource::EVENT_PHASE);
+    else return 0xFF;
+}
+
+bool SdStorage::readSidecarMeta(uint16_t imageId, bool thumb, SdImageMetadata* out) {
+    if (out == nullptr || status.initFailed) {
+        return false;
+    }
+
+    char path[32];
+    sidecarPath(path, sizeof(path), imageId,
+                thumb ? static_cast<uint8_t>(ImageKind::THUMBNAIL)
+                      : static_cast<uint8_t>(ImageKind::FULL_IMAGE));
+    if (!SD.exists(path)) {
+        return false;
+    }
+
+    File f = SD.open(path, FILE_READ);
+    if (!f) {
+        return false;
+    }
+    char buf[SD_SIDECAR_MAX_BYTES + 1];
+    size_t got = f.readBytes(buf, SD_SIDECAR_MAX_BYTES);
+    f.close();
+    buf[got] = '\0';
+
+    // Zero the output first — the present bits alone decide what the caller
+    // may render (absent fields omitted, never zero-filled)
+    memset(out, 0, sizeof(*out));
+    out->imageId = imageId;
+    out->kind = thumb ? static_cast<uint8_t>(ImageKind::THUMBNAIL)
+                      : static_cast<uint8_t>(ImageKind::FULL_IMAGE);
+
+    char str[24];
+    uint32_t u = 0;
+    bool b = false;
+
+    int32_t pos = jsonValuePos(buf, "captureTimeMs");
+    if (jsonUintAt(buf, pos, 0xFFFFFFFFUL, &u)) {
+        out->captureTimeMs = u;
+        out->present |= SD_SC_PRESENT_CAPTURETIME;
+    }
+
+    pos = jsonValuePos(buf, "triggerSource");
+    if (jsonStringAt(buf, pos, str, sizeof(str))) {
+        out->captureSource = captureSourceFromName(str);
+        out->present |= SD_SC_PRESENT_TRIGGER;
+    }
+
+    // Telemetry triple: the writer emits altitude/lat/lon all-numeric (a
+    // beacon was received) or all-null. All three must be present, non-null,
+    // and in-range — otherwise the capture had no valid fix and the detail
+    // view renders "GPS no fix" (D-47).
+    int32_t posLat = jsonValuePos(buf, "lat");
+    int32_t posLon = jsonValuePos(buf, "lon");
+    int32_t posAlt = jsonValuePos(buf, "altitudeM");
+    float lat = 0.0f, lon = 0.0f, alt = 0.0f;
+    if (posLat >= 0 && posLon >= 0 && posAlt >= 0
+            && !jsonIsNullAt(buf, posLat) && !jsonIsNullAt(buf, posLon)
+            && !jsonIsNullAt(buf, posAlt)
+            && jsonFloatAt(buf, posLat, -90.0f, 90.0f, &lat)
+            && jsonFloatAt(buf, posLon, -180.0f, 180.0f, &lon)
+            && jsonFloatAt(buf, posAlt, -1000.0f, 100000.0f, &alt)) {
+        out->lat = lat;
+        out->lon = lon;
+        out->altitudeM = alt;
+        out->telemetryValid = true;   // doubles as the detail view's gpsValid
+        out->present |= SD_SC_PRESENT_TELEMETRY;
+    }
+
+    // Camera settings: the writer always emits the 7-field block as a unit —
+    // all seven must parse or the block reads as absent (a partially-parsed
+    // block would zero-fill the missing members)
+    if (jsonValuePos(buf, "cameraSettings") >= 0) {
+        long v[7];
+        if (jsonIntAt(buf, jsonValuePos(buf, "resolution"), 0, 255, &v[0])
+                && jsonIntAt(buf, jsonValuePos(buf, "quality"), 0, 255, &v[1])
+                && jsonIntAt(buf, jsonValuePos(buf, "brightness"), -128, 127, &v[2])
+                && jsonIntAt(buf, jsonValuePos(buf, "contrast"), -128, 127, &v[3])
+                && jsonIntAt(buf, jsonValuePos(buf, "saturation"), -128, 127, &v[4])
+                && jsonIntAt(buf, jsonValuePos(buf, "exposure"), -128, 127, &v[5])
+                && jsonIntAt(buf, jsonValuePos(buf, "wbMode"), 0, 255, &v[6])) {
+            out->resolution = static_cast<uint8_t>(v[0]);
+            out->quality = static_cast<uint8_t>(v[1]);
+            out->brightness = static_cast<int8_t>(v[2]);
+            out->contrast = static_cast<int8_t>(v[3]);
+            out->saturation = static_cast<int8_t>(v[4]);
+            out->exposure = static_cast<int8_t>(v[5]);
+            out->wbMode = static_cast<uint8_t>(v[6]);
+            out->present |= SD_SC_PRESENT_CAMERA;
+        }
+    }
+
+    // Chunk accounting: the pair parses together or not at all
+    int32_t posRecv = jsonValuePos(buf, "chunksReceived");
+    int32_t posTot = jsonValuePos(buf, "chunksTotal");
+    uint32_t recv = 0, tot = 0;
+    if (jsonUintAt(buf, posRecv, 0xFFFF, &recv)
+            && jsonUintAt(buf, posTot, 0xFFFF, &tot)) {
+        out->chunksReceived = static_cast<uint16_t>(recv);
+        out->chunksTotal = static_cast<uint16_t>(tot);
+        out->present |= SD_SC_PRESENT_CHUNKS;
+        if (jsonUintAt(buf, jsonValuePos(buf, "bytesReceived"), 0xFFFFFFFFUL, &u)) {
+            out->bytesReceived = u;
+        }
+    }
+
+    pos = jsonValuePos(buf, "complete");
+    if (jsonBoolAt(buf, pos, &b)) {
+        out->complete = b;
+        out->present |= SD_SC_PRESENT_COMPLETE;
+    }
+
+    pos = jsonValuePos(buf, "storedToSd");
+    if (jsonBoolAt(buf, pos, &b)) {
+        out->storedToSd = b;
+        out->present |= SD_SC_PRESENT_STORED;
+    }
+
+    return true;
 }
 
 // ===========================

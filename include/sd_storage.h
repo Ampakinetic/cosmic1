@@ -58,7 +58,55 @@ struct SdImageMetadata {
     bool     crcMismatch;     // complete == false BECAUSE the CRC disagreed
     bool     storedToSd;      // SET BY SdStorage at finalize from its own
                               // persistence tracking — never caller-fabricated
+
+    // Gallery detail (03-04): sidecar-parse presence mask — one
+    // SD_SC_PRESENT_* bit per field the sidecar ACTUALLY carried, set only
+    // by readSidecarMeta. The /gallery/{id} route serializes ONLY present
+    // fields — absent fields are omitted, never zero-filled (D-47). Stays 0
+    // when the struct is built for WRITING; finalizeImage ignores it.
+    uint16_t present;
 };
+
+// Sidecar field-presence bits (03-04). The writer's telemetry triple
+// (altitudeM/lat/lon) is all-numeric or all-null — one bit covers the
+// triple, and telemetryValid doubles as the detail view's gpsValid (the
+// sidecar records no separate GPS-fix flag; null telemetry IS the
+// "GPS no fix" case).
+static constexpr uint16_t SD_SC_PRESENT_CAPTURETIME = 0x0001;  // captureTimeMs
+static constexpr uint16_t SD_SC_PRESENT_TRIGGER     = 0x0002;  // triggerSource
+static constexpr uint16_t SD_SC_PRESENT_TELEMETRY   = 0x0004;  // altitude/lat/lon
+static constexpr uint16_t SD_SC_PRESENT_CAMERA      = 0x0008;  // cameraSettings{}
+static constexpr uint16_t SD_SC_PRESENT_CHUNKS      = 0x0010;  // chunks n/m
+static constexpr uint16_t SD_SC_PRESENT_COMPLETE    = 0x0020;  // complete
+static constexpr uint16_t SD_SC_PRESENT_STORED      = 0x0040;  // storedToSd
+
+// ===========================
+// Gallery Index (IMG-06, 03-04)
+// ===========================
+
+// One row of the boot-built RAM index over /images. Every flag is directory
+// existence truth from the openNextFile() walk — nothing fabricated. The
+// index is kept sorted DESCENDING by id (ids are unique and monotonically
+// increasing in flight, so descending id = newest-first, a total stable
+// order).
+struct SdGalleryEntry {
+    uint16_t id;
+    bool     hasThumb;         // IMG_{id}_T.JPG exists
+    bool     hasFull;          // IMG_{id}.JPG exists
+    bool     hasThumbSidecar;  // IMG_{id}_T.JSON exists
+    bool     hasFullSidecar;   // IMG_{id}.JSON exists
+    uint32_t fullSize;         // IMG_{id}.JPG size in bytes (0 when absent)
+};
+
+// Index capacity — an EDITABLE constant. ~1000 images ≈ 5.5 h at the 20 s
+// capture cadence; beyond it the NEWEST 1000 images show and older ids
+// honestly leave the gallery (HONEST DEGRADATION, documented here: files
+// are never deleted or recycled to widen the window — full history stays
+// on the card, reachable by mounting it elsewhere).
+static constexpr uint16_t SD_GALLERY_MAX_ENTRIES = 1000;
+
+// Gallery page size (D-46: 12 per page — 3 columns at the 752px content width)
+static constexpr uint8_t SD_GALLERY_PAGE_SIZE = 12;
 
 // Honest availability for the UI / /status (IN-03 discipline: computed
 // truth, never a hardcoded OK). Three distinct, reachable states:
@@ -123,6 +171,51 @@ public:
     // absence is reported honestly, never fabricated.
     File serveFile(uint16_t imageId, uint8_t kind);
 
+    // ---- Gallery enumeration (IMG-06, 03-04) ----
+
+    // Walk /images once (openNextFile) into the RAM index, then sort
+    // descending by id. Called once from begin() after the mount succeeds;
+    // afterwards ONLY lazily via ensureIndexCurrent() when finalizeImage
+    // advanced the version — pagination slices the index, never the
+    // directory (Pitfall 5, T-03-11).
+    void buildIndex();
+
+    // Version counter bumped by EVERY finalizeImage (both kinds); the RAM
+    // index records the version it was built at — differing values mean a
+    // rebuild is due.
+    uint32_t getIndexVersion() const { return indexVersion; }
+    uint32_t getIndexedVersion() const { return indexedVersion; }
+
+    // Rebuild the index when the finalize version advanced. Bounded work
+    // (one directory walk), boot-warm — the gallery handlers call it at the
+    // top of each request, NOT per poll tick.
+    void ensureIndexCurrent();
+
+    uint16_t getTotalCount() const;             // index size (≤ SD_GALLERY_MAX_ENTRIES)
+    uint16_t getPageCount() const;              // ceil(total / 12); ≥ 1 (empty listing = page 1)
+
+    // Copy entries [(pageIdx-1)*12 .. pageIdx*12-1] of the descending index
+    // into dst (1-based pageIdx). Returns how many entries were copied —
+    // exactly the page size except on the last page, so a seam id is never
+    // duplicated or dropped.
+    uint8_t getIndexPage(uint16_t pageIdx, SdGalleryEntry* dst, uint8_t max);
+
+    // Linear lookup by id (index is RAM — no I/O). False = nothing on disk.
+    bool findIndexEntry(uint16_t imageId, SdGalleryEntry* out) const;
+
+    // Read IMG_{id}.JSON (or IMG_{id}_T.JSON when thumb) and parse the
+    // hand-built JSON the writer emits. EVERY value is untrusted input (the
+    // card is removable, T-03-09): bounded scans into fixed buffers, numeric
+    // clamps on every parsed number, and meta.present bits recording which
+    // fields the sidecar actually carried (absent fields omitted, never
+    // zero-filled). Returns false only when the file is absent/unreadable —
+    // a readable-but-garbage sidecar returns true with present == 0.
+    bool readSidecarMeta(uint16_t imageId, bool thumb, SdImageMetadata* out);
+
+    // Locked trigger vocabulary — shared by the sidecar writer and the
+    // /gallery/{id} detail serializer so the two can never diverge.
+    static const char* triggerSourceName(uint8_t captureSource);
+
 private:
     bool available;
     SdStorageStatus status;
@@ -136,11 +229,22 @@ private:
     uint16_t thumbFileId;
     uint32_t thumbPersistedBytes;
 
+    // RAM gallery index (03-04): fixed static array sorted descending by id
+    // (~12 B × 1000 = ~12 KB — static storage, no heap)
+    SdGalleryEntry galleryIndex[SD_GALLERY_MAX_ENTRIES];
+    uint16_t       galleryCount;     // live entries in galleryIndex
+    uint32_t       indexVersion;     // bumped by finalizeImage (both kinds)
+    uint32_t       indexedVersion;   // version the RAM index reflects
+
+    // Merge one walked directory file into its id's index entry (creating
+    // or evicting-at-cap as needed — the cap keeps the NEWEST entries).
+    void mergeIntoIndex(uint16_t id, uint8_t galleryFlags, uint32_t fullSize);
+    void sortIndexDescending();
+
     void degrade(const char* reason);
     void fileFor(uint8_t kind, File** out, uint16_t** outId, uint32_t** outPersisted);
     static void imagePath(char* out, size_t cap, uint16_t imageId, uint8_t kind);
     static void sidecarPath(char* out, size_t cap, uint16_t imageId, uint8_t kind);
-    static const char* triggerSourceName(uint8_t captureSource);
     bool writeSidecar(const SdImageMetadata& meta);
 };
 
