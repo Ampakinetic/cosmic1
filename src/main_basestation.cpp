@@ -537,6 +537,80 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         .transfer-state.RETRYING { background: #713f12; color: #fbbf24; }
         .transfer-state.COMPLETE { background: #065f46; color: #34d399; }
         .transfer-state.INCOMPLETE { background: #7f1d1d; color: #f87171; }
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+        }
+        .gallery-item {
+            position: relative;
+        }
+        .gallery-item img {
+            width: 100%;
+            border-radius: 8px;
+            display: block;
+            cursor: pointer;
+        }
+        .gallery-incomplete {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: #713f12;
+            color: #fbbf24;
+            border: 1px solid #eab308;
+            border-radius: 6px;
+            padding: 2px 8px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .gallery-incomplete.detail-chip {
+            position: static;
+            display: inline-block;
+            margin-top: 8px;
+        }
+        .gallery-detail-img {
+            max-width: 100%;
+            border-radius: 8px;
+            display: block;
+        }
+        .detail-list {
+            margin-top: 16px;
+        }
+        .detail-row {
+            display: flex;
+            gap: 8px;
+            padding: 4px 0;
+            flex-wrap: wrap;
+        }
+        .detail-label {
+            color: #94a3b8;
+            font-size: 14px;
+            min-width: 110px;
+        }
+        .detail-value {
+            color: #e2e8f0;
+            font-size: 14px;
+            word-break: break-word;
+        }
+        .pager {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 16px;
+        }
+        .pager .pager-text {
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        .pager button {
+            padding: 8px 12px;
+            font-size: 14px;
+        }
+        #gallery-detail-card button {
+            margin-top: 16px;
+        }
         @media (max-width: 480px) {
             .telemetry-panel {
                 grid-template-columns: repeat(2, 1fr);
@@ -554,6 +628,7 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             <a href="#map">Map</a>
             <a href="#capture">Capture</a>
             <a href="#queue">Queue</a>
+            <a href="#gallery">Gallery</a>
         </div>
     </nav>
     <div class="container">
@@ -1368,6 +1443,221 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             });
         });
 
+        // ---------- Image Gallery (IMG-06, D-46/D-47/D-48) ----------
+        // The grid lists persisted images newest-first (12 per page) through
+        // /gallery; /api/state's galleryCount is the ONLY refresh signal —
+        // the list loads once and refetches just when the count changes
+        // (D-36), never per poll. The detail view replaces the grid inside
+        // the gallery section (inline card, no modal) and Back restores the
+        // grid without a refetch unless the count changed meanwhile. Every
+        // sidecar-derived string reaches the DOM via textContent only
+        // (T-03-11b — never innerHTML).
+        let galleryCountSeen = null;    // last /api/state galleryCount
+        let galleryPage = 1;            // current 1-based page
+        let galleryDetailId = 0;        // nonzero while the detail card is open
+        let galleryDirty = false;       // count changed while detail was open
+        let galleryFetchSeq = 0;        // stale-response guard
+
+        function galleryEnsureList() {
+            const seq = ++galleryFetchSeq;
+            fetch('/gallery?page=' + galleryPage)
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (j) {
+                    if (seq !== galleryFetchSeq) return;   // a newer fetch won
+                    if (galleryDetailId !== 0) return;     // detail card is open
+                    galleryPage = j.page;
+                    renderGalleryList(j);
+                })
+                .catch(function (err) {
+                    console.error(err);   // keep whatever grid is shown
+                });
+        }
+
+        function onGalleryCount(count) {
+            if (count === galleryCountSeen) return;
+            const first = (galleryCountSeen === null);
+            galleryCountSeen = count;
+            if (galleryDetailId !== 0 && !first) {
+                galleryDirty = true;     // refetch deferred to Back to Gallery
+            } else {
+                galleryEnsureList();
+            }
+        }
+
+        function renderGalleryList(j) {
+            const empty = document.getElementById('gallery-empty');
+            const grid = document.getElementById('gallery-grid');
+            const pager = document.getElementById('gallery-pager');
+
+            while (grid.firstChild) grid.removeChild(grid.firstChild);
+            while (pager.firstChild) pager.removeChild(pager.firstChild);
+
+            if (!j.entries || j.entries.length === 0) {
+                // E4 empty: honest copy, grid and pager hidden
+                empty.style.display = 'block';
+                grid.style.display = 'none';
+                pager.style.display = 'none';
+                return;
+            }
+
+            empty.style.display = 'none';
+            grid.style.display = 'grid';
+
+            // Newest-first — the first tile is the latest capture (the role
+            // of 03-01's interim card, absorbed here)
+            j.entries.forEach(function (e) {
+                const item = document.createElement('div');
+                item.className = 'gallery-item';
+                const img = document.createElement('img');
+                img.src = '/img/' + e.id + '_t.jpg';
+                img.alt = 'Image #' + e.id + ' thumbnail';
+                img.addEventListener('click', function () { openGalleryDetail(e.id); });
+                item.appendChild(img);
+                if (!e.complete) {
+                    // D-48: incomplete images stay listed and badged —
+                    // never hidden, filtered, or recycled
+                    const chip = document.createElement('span');
+                    chip.className = 'gallery-incomplete';
+                    chip.textContent = 'Incomplete';
+                    item.appendChild(chip);
+                }
+                grid.appendChild(item);
+            });
+
+            // Pager: Previous / Next + "Page n of m" + numbered standard
+            // buttons, centered — hidden entirely on a single page (E4)
+            if (j.pageCount > 1) {
+                pager.appendChild(pagerButton('Previous', j.page - 1, j.page > 1));
+                const text = document.createElement('span');
+                text.className = 'pager-text';
+                text.textContent = 'Page ' + j.page + ' of ' + j.pageCount;
+                pager.appendChild(text);
+                pager.appendChild(pagerButton('Next', j.page + 1, j.page < j.pageCount));
+                for (let p = 1; p <= j.pageCount; p++) {
+                    pager.appendChild(pagerButton(String(p), p, p !== j.page));
+                }
+                pager.style.display = 'flex';
+            } else {
+                pager.style.display = 'none';
+            }
+        }
+
+        function pagerButton(label, page, enabled) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = label;
+            b.disabled = !enabled;
+            b.addEventListener('click', function () {
+                galleryPage = page;
+                galleryEnsureList();   // E4 loading: the old grid stays visible
+            });
+            return b;
+        }
+
+        function openGalleryDetail(id) {
+            galleryDetailId = id;
+            fetch('/gallery/' + id)
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (d) { renderGalleryDetail(d); })
+                .catch(function (err) {
+                    console.error(err);
+                    closeGalleryDetail();
+                });
+        }
+
+        function detailRow(list, label, value) {
+            const row = document.createElement('div');
+            row.className = 'detail-row';
+            const l = document.createElement('span');
+            l.className = 'detail-label';
+            l.textContent = label;
+            const v = document.createElement('span');
+            v.className = 'detail-value';
+            v.textContent = value;
+            row.appendChild(l);
+            row.appendChild(v);
+            list.appendChild(row);
+        }
+
+        function renderGalleryDetail(d) {
+            const card = document.getElementById('gallery-detail-card');
+            while (card.firstChild) card.removeChild(card.firstChild);
+
+            // D-47: the full-size image only when the sidecar verified the
+            // image complete; the thumbnail otherwise, with the Incomplete
+            // badge still visible
+            const img = document.createElement('img');
+            img.className = 'gallery-detail-img';
+            img.src = (d.complete && d.hasFull) ? ('/img/' + d.id) : ('/img/' + d.id + '_t.jpg');
+            img.alt = 'Image #' + d.id;
+            card.appendChild(img);
+            if (!d.complete) {
+                const chip = document.createElement('span');
+                chip.className = 'gallery-incomplete detail-chip';
+                chip.textContent = 'Incomplete';
+                card.appendChild(chip);
+            }
+
+            // Definition list — ONLY sidecar-present fields render (the
+            // route omits absent fields; they are never zero-filled)
+            const list = document.createElement('div');
+            list.className = 'detail-list';
+            if (typeof d.capturedMs === 'number') {
+                detailRow(list, 'Captured', d.capturedMs + ' ms');
+            }
+            if (d.trigger) {
+                detailRow(list, 'Trigger', d.trigger);
+            }
+            if (typeof d.altitudeM === 'number') {
+                detailRow(list, 'Altitude', d.altitudeM + ' m');
+            }
+            if (d.gpsValid === true && typeof d.lat === 'number' && typeof d.lon === 'number') {
+                detailRow(list, 'Position', d.lat.toFixed(6) + ', ' + d.lon.toFixed(6));
+            } else if (d.gpsValid === false) {
+                detailRow(list, 'Position', 'GPS no fix');
+            }
+            if (d.camera) {
+                detailRow(list, 'Camera', 'resolution ' + d.camera.resolution
+                    + ' · quality ' + d.camera.quality
+                    + ' · brightness ' + d.camera.brightness
+                    + ' · contrast ' + d.camera.contrast
+                    + ' · saturation ' + d.camera.saturation
+                    + ' · exposure ' + d.camera.exposure
+                    + ' · wb ' + d.camera.wbMode);
+            }
+            if (typeof d.chunksReceived === 'number' && typeof d.chunksTotal === 'number') {
+                const pct = (typeof d.percent === 'number') ? (' · ' + d.percent + '%') : '';
+                detailRow(list, 'Chunks', d.chunksReceived + '/' + d.chunksTotal + pct);
+            }
+            detailRow(list, 'Status', d.complete ? 'Complete' : 'Incomplete');
+            card.appendChild(list);
+
+            const back = document.createElement('button');
+            back.type = 'button';
+            back.textContent = 'Back to Gallery';
+            back.addEventListener('click', closeGalleryDetail);
+            card.appendChild(back);
+
+            document.getElementById('gallery-list-card').style.display = 'none';
+            card.style.display = 'block';
+        }
+
+        function closeGalleryDetail() {
+            galleryDetailId = 0;
+            document.getElementById('gallery-detail-card').style.display = 'none';
+            document.getElementById('gallery-list-card').style.display = 'block';
+            if (galleryDirty) {
+                galleryDirty = false;
+                galleryEnsureList();   // the count changed while detail was open
+            }
+        }
+
         function renderState(data) {
             // Alert bar first (D-42): top section of the dashboard
             renderAlerts(data);
@@ -1441,27 +1731,10 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             setColor(document.getElementById('storage-state'),
                 (sd && sd.state === 'OK') ? '#22c55e' : '#eab308');
 
-            // Latest capture (IMG-01): swap the image only when a NEW
-            // CRC-verified id lands; the dataset gate plus per-id src means
-            // a stale image is never shown under a new id
-            const thumbId = data.latestThumbId || 0;
-            const thumbImg = document.getElementById('thumb-img');
-            const thumbLabel = document.getElementById('thumb-label');
-            if (thumbId > 0) {
-                if (thumbImg.dataset.id !== String(thumbId)) {
-                    thumbImg.dataset.id = String(thumbId);
-                    thumbImg.src = '/img/' + thumbId + '_t.jpg';
-                    thumbImg.style.display = 'block';
-                    setText(thumbLabel, 'Image #' + thumbId + ' — thumbnail received and verified');
-                    setClass(thumbLabel, 'message success');
-                }
-            } else if (thumbImg.dataset.id !== undefined) {
-                thumbImg.removeAttribute('src');
-                delete thumbImg.dataset.id;
-                thumbImg.style.display = 'none';
-                setText(thumbLabel, 'Waiting for first image...');
-                setClass(thumbLabel, 'message info');
-            }
+            // Image Gallery (IMG-06, D-36): galleryCount is the poll's ONLY
+            // gallery signal — the list refetches just when it changes; tile
+            // images keep browser caching, nothing refetches per poll
+            onGalleryCount(data.galleryCount || 0);
         }
 
         // 1s ticker: the only periodic work between polls is the counting
@@ -2007,15 +2280,23 @@ void handleRoot() {
     html += "<div id=\"transfer-list\"></div>";
     html += "</div>";
 
-    // Latest capture card (IMG-01): the newest CRC-verified thumbnail pushed
-    // from the balloon — the interim gallery surface until 03-04 absorbs it
-    html += "<div class=\"card\">";
-    html += "<h2>🖼 Latest Capture</h2>";
-    html += "<div class=\"message info\" id=\"thumb-label\">Waiting for first image...</div>";
-    html += "<img id=\"thumb-img\" alt=\"Balloon camera thumbnail\" ";
-    html += "style=\"width:100%;max-width:320px;border-radius:8px;margin-top:16px;display:none;\">";
-    html += "</div>";
+    html += "</section>";
 
+    // ---- Image Gallery section (D-45: gallery LAST; IMG-06, D-46..D-48) ----
+    // Every persisted image of the flight, newest-first, 12 per page. This
+    // absorbs 03-01's interim latest-thumbnail surface: the newest grid item
+    // (first tile of page 1) is the latest capture now. Grid, pager, and the
+    // inline detail card are driven by the footer script's gallery block;
+    // tiles load through the existing /img/{id}_t.jpg route (no parallel
+    // serving path).
+    html += "<section id=\"gallery\">";
+    html += "<div class=\"card\" id=\"gallery-list-card\">";
+    html += "<h2>🖼 Image Gallery</h2>";
+    html += "<div class=\"message info\" id=\"gallery-empty\" style=\"display:none;\">No images received yet — trigger a capture to start.</div>";
+    html += "<div class=\"gallery-grid\" id=\"gallery-grid\"></div>";
+    html += "<div class=\"pager\" id=\"gallery-pager\" style=\"display:none;\"></div>";
+    html += "</div>";
+    html += "<div class=\"card\" id=\"gallery-detail-card\" style=\"display:none;\"></div>";
     html += "</section>";
 
     html += FPSTR(HTML_FOOTER);
