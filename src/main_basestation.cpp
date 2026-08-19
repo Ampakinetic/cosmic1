@@ -19,6 +19,7 @@
 #include "image_rx_manager.h"
 #include "sd_storage.h"
 #include "trajectory_buffer.h"
+#include "web_assets.h"
 
 // ===========================
 // Pin Configuration
@@ -148,6 +149,8 @@ void handleAutoCaptureEnable();
 void handleAutoCaptureDisable();
 void handleSetEventThresholds();
 void handleApiState();
+void handleLeafletJs();
+void handleLeafletCss();
 void handleImage(const String& uri);
 void handleNotFound();
 
@@ -168,6 +171,8 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Cosmic1 - Base Station Camera Control</title>
+    <link rel="stylesheet" href="/leaflet.css">
+    <script src="/leaflet.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -258,6 +263,7 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             font-weight: bold;
         }
         .map-frame {
+            position: relative;
             width: 100%;
             height: 360px;
             border-radius: 8px;
@@ -267,6 +273,64 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             display: flex;
             align-items: center;
             justify-content: center;
+        }
+        #map-leaflet {
+            width: 100%;
+            height: 100%;
+            border-radius: 8px;
+            display: none;   /* the tiled view shows once a track exists */
+        }
+        #map-canvas {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            right: 16px;
+            bottom: 16px;
+            border-radius: 8px;
+            background: #0f172a;
+            display: none;   /* D-37 offline fallback — covers the tile view */
+            z-index: 1500;  /* opaque over every Leaflet pane */
+        }
+        .map-recenter {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            display: none;  /* visible only after drag/zoom cancels follow */
+            z-index: 2000;
+        }
+        .map-offline-chip {
+            position: absolute;
+            bottom: 8px;
+            left: 8px;
+            display: none;
+            z-index: 2000;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: #713f12;
+            color: #fbbf24;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        /* Leaflet chrome harmonized to the locked tokens (UI-SPEC): the
+           shipped ~12px attribution/zoom text moves to Body 14px on
+           #1e293b surfaces — an explicit harmonization obligation */
+        .leaflet-container {
+            background: #0f172a;
+            font-size: 14px;
+        }
+        .leaflet-control-attribution {
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        .leaflet-control-attribution a {
+            color: #94a3b8;
+        }
+        .leaflet-control-zoom a {
+            background: #1e293b;
+            color: #e2e8f0;
+            border-color: #475569;
+            font-size: 14px;
         }
         .card {
             background: #1e293b;
@@ -583,6 +647,310 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             updateAgeTile();
         }
 
+        // ---------- map & trajectory (WEB-02, D-37/D-38/D-39) ----------
+        // Two render paths, ONE data path: the Leaflet/OSM view and the
+        // offline canvas fallback both consume the identical traj array
+        // from this poll payload — tile failure is a render swap, never a
+        // data change. Before the first valid GPS fix the waiting message
+        // is the only rendered state; a recorded fix only exists while
+        // gpsValid was true, so no guessed or stale position ever renders.
+        const OSM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+        const BAND_GREEN = '#22c55e';   // altitude band: below 1000 m
+        const BAND_AMBER = '#eab308';   // altitude band: 1000-3000 m
+        const BAND_RED = '#ef4444';     // altitude band: above 3000 m
+        function bandColor(altM) {
+            return altM < 1000 ? BAND_GREEN : (altM <= 3000 ? BAND_AMBER : BAND_RED);
+        }
+
+        const mapEls = {
+            waiting: document.getElementById('map-waiting'),
+            leaflet: document.getElementById('map-leaflet'),
+            canvas: document.getElementById('map-canvas'),
+            recenter: document.getElementById('map-recenter'),
+            offline: document.getElementById('map-offline')
+        };
+        const mapState = {
+            leaf: null, osm: null, posMarker: null, trackLayers: [],
+            follow: true, offline: false, surfaceShown: false, firstFit: true,
+            tilesOk: 0, programmaticView: false, lastTrajCount: -1,
+            lastTraj: null, newest: null, offlineRetryCount: 0
+        };
+
+        // D-39: any user drag/zoom cancels auto-follow and reveals the
+        // Recenter chip; our own setView/fitBounds set programmaticView so
+        // they never look like user input
+        function cancelFollow() {
+            if (!mapState.follow) return;
+            mapState.follow = false;
+            mapEls.recenter.style.display = 'block';
+        }
+        mapEls.recenter.addEventListener('click', function () {
+            mapState.follow = true;
+            mapEls.recenter.style.display = 'none';
+            if (mapState.leaf && mapState.newest) {
+                mapState.programmaticView = true;
+                mapState.leaf.setView(mapState.newest, Math.max(mapState.leaf.getZoom(), 13));
+                mapState.programmaticView = false;
+            }
+        });
+
+        function initLeaflet() {
+            if (mapState.leaf) return;
+            if (typeof L === 'undefined') return;  // library missing — caller degrades
+            const map = L.map('map-leaflet');
+            mapState.leaf = map;
+            const osm = L.tileLayer(OSM_TILE_URL, {
+                maxZoom: 19,
+                // Required attribution — retained verbatim in the tiled view
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'
+            });
+            mapState.osm = osm;
+            osm.addTo(map);
+
+            // D-37 tile-failure detection: an error while NO tile has ever
+            // loaded (AP mode fails fast) flips to the offline fallback
+            osm.on('tileerror', function () {
+                if (mapState.tilesOk === 0) setMapOffline(true);
+            });
+            // A later successful tile load restores the Leaflet path
+            osm.on('tileload', function () {
+                mapState.tilesOk++;
+                if (mapState.offline) setMapOffline(false);
+            });
+
+            map.on('dragstart', cancelFollow);
+            map.on('zoomstart', function () {
+                if (!mapState.programmaticView) cancelFollow();
+            });
+        }
+
+        // Render-path swap ONLY: hide/show the two surfaces inside the same
+        // frame; the underlying traj data and banding never change
+        function setMapOffline(off) {
+            if (off === mapState.offline) return;
+            mapState.offline = off;
+            mapEls.offline.style.display = off ? 'block' : 'none';
+            if (!mapState.surfaceShown) return;
+            mapEls.canvas.style.display = off ? 'block' : 'none';
+            if (off) {
+                renderCanvasFallback();
+                mapEls.recenter.style.display = 'none';  // canvas auto-fits
+            } else {
+                mapEls.recenter.style.display = mapState.follow ? 'none' : 'block';
+                if (mapState.leaf) mapState.leaf.invalidateSize();
+            }
+        }
+
+        // First recorded fix: retire the waiting message and bring up the
+        // map surface (tiled view, or the canvas if tiles already failed)
+        function showMapSurface() {
+            if (mapState.surfaceShown) return;
+            if (typeof L === 'undefined') {
+                // Library failed to load (cannot happen while firmware
+                // serves it — degrade honestly to the offline plot)
+                mapState.offline = true;
+                mapState.surfaceShown = true;
+                mapEls.waiting.style.display = 'none';
+                mapEls.canvas.style.display = 'block';
+                mapEls.offline.style.display = 'block';
+                renderCanvasFallback();
+                return;
+            }
+            initLeaflet();
+            if (!mapState.leaf) return;
+            mapState.surfaceShown = true;
+            mapEls.waiting.style.display = 'none';
+            if (mapState.offline) {
+                mapEls.canvas.style.display = 'block';
+                renderCanvasFallback();
+            } else {
+                mapEls.leaflet.style.display = 'block';
+                mapState.leaf.invalidateSize();
+                // D-37: ~8 s with zero successful tiles -> offline fallback
+                setTimeout(function () {
+                    if (mapState.tilesOk === 0) setMapOffline(true);
+                }, 8000);
+            }
+        }
+
+        // Track polylines — altitude-banded, rebuilt ONLY when trajCount
+        // changes (D-36 diff discipline); 1 point renders a marker only
+        function rebuildTrack(traj) {
+            if (!mapState.leaf) return;
+            mapState.trackLayers.forEach(function (l) { mapState.leaf.removeLayer(l); });
+            mapState.trackLayers = [];
+            if (traj.length < 2) return;
+            // One polyline per maximal same-band run; the transition pair
+            // joins the run it ends (colored by the END point's band)
+            let start = 0;
+            for (let i = 1; i < traj.length; i++) {
+                const bandChange = bandColor(traj[i][2]) !== bandColor(traj[i - 1][2])
+                    || i === traj.length - 1;
+                if (!bandChange) continue;
+                const pts = [];
+                for (let j = start; j <= i; j++) pts.push([traj[j][0], traj[j][1]]);
+                const line = L.polyline(pts, {
+                    color: bandColor(traj[i][2]),
+                    weight: 3,
+                    opacity: 0.9
+                }).addTo(mapState.leaf);
+                mapState.trackLayers.push(line);
+                start = i;
+            }
+        }
+
+        // Current position: circleMarker only (no L.marker image assets,
+        // Pitfall 8) — updates EVERY poll while online
+        function updateMarker(p) {
+            if (!mapState.leaf) return;
+            const ll = [p[0], p[1]];
+            if (!mapState.posMarker) {
+                mapState.posMarker = L.circleMarker(ll, {
+                    radius: 8,
+                    color: '#0f172a',
+                    weight: 2,
+                    fillColor: '#22c55e',
+                    fillOpacity: 1
+                }).addTo(mapState.leaf);
+            } else {
+                mapState.posMarker.setLatLng(ll);
+            }
+        }
+
+        // D-37 offline fallback: the identical traj array auto-scaled onto
+        // a canvas inside the same frame — banded track, current dot, grid
+        // lines and coordinate labels. Uniform scale keeps the shape honest.
+        function renderCanvasFallback() {
+            const traj = mapState.lastTraj || [];
+            if (traj.length === 0) return;
+            const canvas = mapEls.canvas;
+            const w = canvas.clientWidth || 0;
+            const h = canvas.clientHeight || 0;
+            if (w === 0 || h === 0) return;
+            if (canvas.width !== w) canvas.width = w;
+            if (canvas.height !== h) canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, w, h);
+
+            let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+            traj.forEach(function (p) {
+                if (p[0] < minLat) minLat = p[0];
+                if (p[0] > maxLat) maxLat = p[0];
+                if (p[1] < minLon) minLon = p[1];
+                if (p[1] > maxLon) maxLon = p[1];
+            });
+            let latSpan = maxLat - minLat;
+            let lonSpan = maxLon - minLon;
+            if (latSpan < 1e-6) latSpan = 1e-4;   // degenerate track: center it
+            if (lonSpan < 1e-6) lonSpan = 1e-4;
+            const margin = 24;
+            const latOff = ((h - 2 * margin) - latSpan * ((h - 2 * margin) / latSpan)) / 2;
+            const lonOff = ((w - 2 * margin) - lonSpan * ((w - 2 * margin) / lonSpan)) / 2;
+            const s = Math.min((w - 2 * margin) / lonSpan, (h - 2 * margin) / latSpan);
+            function xy(p) {
+                return [margin + lonOff + (p[1] - minLon) * s,
+                        h - (margin + latOff + (p[0] - minLat) * s)];
+            }
+
+            // Grid + corner coordinate labels
+            ctx.strokeStyle = '#475569';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            for (let g = 1; g <= 3; g++) {
+                ctx.moveTo((w / 4) * g, 0); ctx.lineTo((w / 4) * g, h);
+                ctx.moveTo(0, (h / 4) * g); ctx.lineTo(w, (h / 4) * g);
+            }
+            ctx.stroke();
+            ctx.fillStyle = '#94a3b8';
+            ctx.font = '14px sans-serif';
+            ctx.textAlign = 'left';
+            ctx.fillText(minLat.toFixed(4) + ', ' + minLon.toFixed(4), 8, h - 8);
+            ctx.textAlign = 'right';
+            ctx.fillText(maxLat.toFixed(4) + ', ' + maxLon.toFixed(4), w - 8, 20);
+
+            // Identical altitude banding to the Leaflet path
+            if (traj.length >= 2) {
+                ctx.lineWidth = 3;
+                for (let i = 1; i < traj.length; i++) {
+                    const a = xy(traj[i - 1]);
+                    const b = xy(traj[i]);
+                    ctx.strokeStyle = bandColor(traj[i][2]);
+                    ctx.beginPath();
+                    ctx.moveTo(a[0], a[1]);
+                    ctx.lineTo(b[0], b[1]);
+                    ctx.stroke();
+                }
+            }
+
+            // Current position dot — same colors as the circleMarker
+            const n = xy(traj[traj.length - 1]);
+            ctx.beginPath();
+            ctx.arc(n[0], n[1], 6, 0, Math.PI * 2);
+            ctx.fillStyle = '#22c55e';
+            ctx.fill();
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#0f172a';
+            ctx.stroke();
+        }
+
+        function renderMap(data) {
+            const traj = data.traj || [];
+            // E3 empty truth: no recorded fix yet -> ONLY the waiting
+            // message renders (no marker, no track, no tiles requested)
+            if (!data.trajCount || traj.length === 0) return;
+            mapState.lastTraj = traj;
+
+            showMapSurface();
+
+            const newest = traj[traj.length - 1];
+            mapState.newest = [newest[0], newest[1]];
+
+            // D-36: track rebuilds only when trajCount changes; the
+            // position marker updates every poll
+            if (data.trajCount !== mapState.lastTrajCount) {
+                mapState.lastTrajCount = data.trajCount;
+                rebuildTrack(traj);
+                if (mapState.offline) renderCanvasFallback();
+            }
+            if (!mapState.offline) updateMarker(newest);
+
+            if (mapState.leaf) {
+                if (!mapState.offline && mapState.follow) {
+                    // D-39 auto-follow: first data fits the whole flight,
+                    // then every update re-centers on the newest fix
+                    mapState.programmaticView = true;
+                    if (mapState.firstFit) {
+                        mapState.firstFit = false;
+                        if (traj.length >= 2) {
+                            const bounds = L.latLngBounds(traj.map(function (p) {
+                                return [p[0], p[1]];
+                            }));
+                            mapState.leaf.fitBounds(bounds, { padding: [16, 16] });
+                        } else {
+                            // Single point: fitBounds on a zero-size bounds
+                            // pins maxZoom — settle at a street-level view
+                            mapState.leaf.setView(mapState.newest, 16);
+                        }
+                    } else {
+                        mapState.leaf.setView(mapState.newest,
+                            Math.max(mapState.leaf.getZoom(), 13));
+                    }
+                    mapState.programmaticView = false;
+                } else if (mapState.offline) {
+                    // Recovery probe: while offline, periodically nudge the
+                    // (covered) tile view so Leaflet re-requests tiles — a
+                    // single success flips back via the tileload handler
+                    mapState.offlineRetryCount++;
+                    if (mapState.offlineRetryCount % 3 === 0) {
+                        mapState.programmaticView = true;
+                        mapState.leaf.setView(mapState.newest, mapState.leaf.getZoom());
+                        mapState.programmaticView = false;
+                    }
+                }
+            }
+        }
+
         // ---------- section nav (D-45): highlight while scrolling ----------
         const navLinks = {};
         const navSections = [];
@@ -710,6 +1078,9 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
 
             // Telemetry panel (WEB-01)
             renderTelemetry(data);
+
+            // Map + trajectory (WEB-02) — same poll payload, one renderer
+            renderMap(data);
 
             // Auto-capture chip — display-only until the command ACKs
             const chip = document.getElementById('autocapture-chip');
@@ -962,6 +1333,10 @@ void initWebServer() {
     server.on("/set-event-thresholds", HTTP_POST, handleSetEventThresholds);
     server.on("/api/state", HTTP_GET, handleApiState);
     server.on("/status", HTTP_GET, handleApiState);  // legacy alias — same serializer
+    // Embedded Leaflet (WEB-02): gzipped PROGMEM assets with Content-Encoding
+    // + a day of cache — the page NEVER references a CDN at runtime
+    server.on("/leaflet.js", HTTP_GET, handleLeafletJs);
+    server.on("/leaflet.css", HTTP_GET, handleLeafletCss);
     server.onNotFound(handleNotFound);
 
     server.begin();
@@ -1041,10 +1416,16 @@ void handleRoot() {
     html += "<div class=\"message info\" id=\"tele-empty\" style=\"grid-column: 1 / -1;\">No telemetry received yet</div>";
     html += "</div>";
 
-    // Map frame placeholder (WEB-02 arrives in 03-02): the waiting message
-    // is the honest empty state until a valid GPS fix exists
-    html += "<div class=\"map-frame\">";
+    // Map frame (WEB-02): embedded Leaflet over OSM tiles with the D-37
+    // offline canvas fallback — both render paths consume the identical
+    // traj array from /api/state. Before the first valid GPS fix the
+    // waiting message is the ONLY rendered state (no guessed position).
+    html += "<div class=\"map-frame\" id=\"map-frame\">";
     html += "<div class=\"message info\" id=\"map-waiting\">Waiting for GPS fix — the track appears once the balloon reports a valid position.</div>";
+    html += "<div id=\"map-leaflet\"></div>";
+    html += "<canvas id=\"map-canvas\"></canvas>";
+    html += "<button type=\"button\" id=\"map-recenter\" class=\"map-recenter\">Recenter</button>";
+    html += "<div id=\"map-offline\" class=\"map-offline-chip\">Offline — tiles unavailable, showing plotted track.</div>";
     html += "</div>";
 
     html += "</section>";
@@ -1818,6 +2199,27 @@ void handleApiState() {
     }
 
     server.send(200, "application/json", json);
+}
+
+// GET /leaflet.js and GET /leaflet.css (WEB-02): the vendored Leaflet 1.9.4
+// dist served from gzipped PROGMEM (web_assets.h) so the dashboard fully
+// loads with no internet — AP mode included. Binary-serve shape (this
+// WebServer core has no raw-pointer send overload) plus Content-Encoding so
+// the browser decompresses and Cache-Control so repeat visits never refetch.
+void handleLeafletJs() {
+    server.sendHeader("Content-Encoding", "gzip");
+    server.sendHeader("Cache-Control", "public, max-age=86400");
+    server.setContentLength(LEAFLET_JS_GZ_LEN);
+    server.send(200, "application/javascript", "");
+    server.sendContent(reinterpret_cast<const char*>(LEAFLET_JS_GZ), LEAFLET_JS_GZ_LEN);
+}
+
+void handleLeafletCss() {
+    server.sendHeader("Content-Encoding", "gzip");
+    server.sendHeader("Cache-Control", "public, max-age=86400");
+    server.setContentLength(LEAFLET_CSS_GZ_LEN);
+    server.send(200, "text/css", "");
+    server.sendContent(reinterpret_cast<const char*>(LEAFLET_CSS_GZ), LEAFLET_CSS_GZ_LEN);
 }
 
 // GET /img/{id}_t.jpg (thumbnail) and GET /img/{id} (full image, IMG-04).
