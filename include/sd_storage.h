@@ -93,7 +93,11 @@ public:
 
     // seek(chunkIndex * chunkSize) + write — out-of-order arrival lands at
     // the right offset (Pattern 5). The manifest's totalSize is never used
-    // to pre-allocate. Returns false (and degrades) when the write fails.
+    // to pre-allocate. When the kind's handle holds a different id (a
+    // thumbnail heal window competing with a newer push), the chunk's file
+    // is re-opened NON-truncating instead of dropped — a drop made the
+    // transfer finalize INCOMPLETE on SD despite 100% chunk reception
+    // (CR-01). Returns false (and degrades) when the write fails.
     bool writeChunk(uint16_t imageId, uint8_t kind, uint16_t chunkIndex,
                     uint16_t chunkSize, const uint8_t* data, size_t len);
 

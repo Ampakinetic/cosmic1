@@ -184,13 +184,36 @@ bool SdStorage::writeChunk(uint16_t imageId, uint8_t kind, uint16_t chunkIndex,
     uint32_t* persistedBytes = nullptr;
     fileFor(kind, &handle, &handleId, &persistedBytes);
     if (!*handle || *handleId != imageId) {
-        // Chunk for a file we are not holding open (transfer superseded or
-        // never opened) — nothing to write into; caller's accounting stands
+        // CR-01 safety net: a chunk for a file this kind's single handle is
+        // not currently holding (e.g. a thumbnail heal window competing with
+        // a newer push — one handle per kind) is REOPENED, never silently
+        // dropped: dropping made the transfer complete its bitmap in RAM
+        // while SD lagged behind, finalizing INCOMPLETE despite 100% chunk
+        // reception. The reopen is deliberately NON-truncating ("r+" when
+        // the file exists): openTransfer's FILE_WRITE ("w") truncates, so
+        // two interleaved ids flipping the handle would destroy each
+        // other's persisted bytes on every flip. ImageRxManager opens fulls
+        // lazily at pull activation, so in practice this is the rare
+        // heal-vs-push path — but a drop here can never again be silent.
         if (DEBUG_SD_STORAGE) {
-            Serial.printf("SdStorage: no open file for image %u kind %u; chunk %u not persisted\n",
+            Serial.printf("SdStorage: reopening file for image %u kind %u for chunk %u "
+                          "(handle held another transfer)\n",
                           imageId, kind, chunkIndex);
         }
-        return false;
+        if (*handle) {
+            handle->close();   // flush the other id's buffered bytes to disk
+            *handle = File();
+        }
+        char path[32];
+        imagePath(path, sizeof(path), imageId, kind);
+        File f = SD.exists(path) ? SD.open(path, "r+") : SD.open(path, FILE_WRITE);
+        if (!f) {
+            degrade("reopen failed (disk full?)");
+            return false;
+        }
+        *handle = f;
+        *handleId = imageId;
+        *persistedBytes = 0;   // accounting restarts at each flip (conservative)
     }
 
     // Pattern 5: seek to the chunk's fixed offset — out-of-order arrival

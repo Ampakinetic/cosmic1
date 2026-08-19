@@ -492,8 +492,20 @@ void ImageRxManager::startTransfer(const ImageManifestBody& m) {
     }
 
     // SD transfer file (degrades internally when storage is unavailable —
-    // accounting continues, nothing persisted)
-    SDStorage().openTransfer(m.imageId, m.imageKind, m.totalSize);
+    // accounting continues, nothing persisted). CR-01: THUMBNAILs open here
+    // (their push chunks follow the manifest on the wire immediately), but a
+    // FULL opens LAZILY — only when it actually becomes the active pull
+    // (activateNextPull / the manifest-while-idle branch below). Opening a
+    // QUEUED full here would steal the active pull's single kind handle:
+    // openTransfer closes the previous partial and writeChunk would then
+    // drop every subsequent chunk of the active pull — 100% reception
+    // finalizing INCOMPLETE. A re-manifested ACTIVE pull still reopens
+    // (truncate) here so the restarted reassembly starts from a file
+    // consistent with its cleared bitmap.
+    if (m.imageKind == static_cast<uint8_t>(ImageKind::THUMBNAIL)
+            || t->pullActive) {
+        SDStorage().openTransfer(m.imageId, m.imageKind, m.totalSize);
+    }
 
     if (DEBUG_IMAGE_RX) {
         Serial.printf("ImageRx: manifest image %u kind %u (%u B, %u chunks of %u, CRC %08X)\n",
@@ -508,6 +520,10 @@ void ImageRxManager::startTransfer(const ImageManifestBody& m) {
         // while idle — the one trigger that starts a pull immediately.
         if (findActivePull() == nullptr) {
             t->pullActive = true;
+            // CR-01: the SD file opens HERE, at activation — a QUEUED
+            // manifest must never touch the kind handle an active pull owns
+            // (see the openTransfer note in the manifest handling above)
+            SDStorage().openTransfer(m.imageId, m.imageKind, m.totalSize);
             uint16_t fm = firstMissingChunk(*t, 0);
             uint16_t count = t->totalChunks - fm;
             if (count > IMG_WINDOW_MAX_CHUNKS) {
@@ -749,6 +765,12 @@ void ImageRxManager::activateNextPull() {
         finalizeTransfer(*best);   // already complete (e.g. re-push)
         return;
     }
+    // CR-01: the SD file opens HERE, at activation (FIFO advance) — never at
+    // manifest time. A QUEUED manifest opening its file stole the active
+    // pull's single kind handle (openTransfer closes the previous partial),
+    // making the active pull silently stop persisting and finalize
+    // INCOMPLETE despite 100% chunk reception.
+    SDStorage().openTransfer(best->imageId, best->imageKind, best->totalSize);
     uint16_t count = best->totalChunks - fm;
     if (count > IMG_WINDOW_MAX_CHUNKS) {
         count = IMG_WINDOW_MAX_CHUNKS;
