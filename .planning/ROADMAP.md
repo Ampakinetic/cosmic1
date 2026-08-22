@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 5/6 plans executed (01-01 tracer + 01-02..01-05 gap closure executed; 01-06 response-path gap closure pending — 3 verifier-confirmed criticals; security gate + hardware UAT before phase complete)
+**Plans:** 6/6 code plans executed + UAT 2026-08-22 (3 pass / 2 issues) → 3 UAT gap-closure plans 01-07..01-09 (G-01-3 blocker: SD mount + image-transfer timeouts; G-01-4 major: raw-JSON navigation). G-01-1 resolved pre-UAT by 1223f46. Security gate after UAT re-test.
 
 Plans:
 **Wave 1**
@@ -65,6 +65,15 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 01-06-PLAN.md — Response-path gap closure: 0x11 type on all ACK/STATUS via createResponsePacket + faithful harness clause (CR-01/WR-05), name-based GET_STATUS resolution mapping + CIF relabel (CR-02/WR-01), terminal-state guard against duplicate-ACK count underflow (CR-03) (CTRL-01/CTRL-02/CTRL-06/PRI-02)
+
+**Wave 5** *(UAT gap closure, 2026-08-23; wave numbers restart for this round — 01-07/01-08 parallel, 01-09 after both)*
+
+- [ ] 01-07-PLAN.md — G-01-4 gap closure: delegated in-page AJAX submit handler on section#capture covering all control forms (fetch + per-form message + pollOnce), riding the PROGMEM footer script (CTRL-01, CTRL-02, CTRL-03, CTRL-04)
+- [ ] 01-08-PLAN.md — G-01-3 gap closure (code half): real E32-900T30D register read/write with echo verification + boot-time 9.6 kbps air-rate enforcement, begin()-integrated fail-open on both boards (IMG-01, IMG-04, PRI-03)
+
+**Wave 6** *(blocked on Wave 5)*
+
+- [ ] 01-09-PLAN.md — G-01-3 gap closure (hardware half): operator checkpoints — SD wiring audit vs base_station_config.h constants + second-card retry + boot-line confirm; flash both boards, bench discriminator run (B1-B4 trace matrix), end-to-end transfer + storage + in-page-submit verification (IMG-01, IMG-02, IMG-04, IMG-05, PRI-03)
 
 ### Phase 2: Image Transmission
 
