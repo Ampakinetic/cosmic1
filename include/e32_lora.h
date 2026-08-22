@@ -94,6 +94,19 @@ enum class E32AirDataRate : uint8_t {
     RATE_19_2kbps = 0x05   // 101: 19.2kbps
 };
 
+// Link target air data rate (plan 01-08, G-01-3 root-cause-B remediation):
+// 9.6 kbps. At the 2.4 kbps factory default each 216-byte chunk frame
+// sub-packs into 4x58-byte RF packets costing ~1.0-1.4 s of air time; at
+// 9.6 kbps that drops to ~0.3-0.4 s (4x less time-on-air), comfortably
+// inside transmit()'s 5 s waitForAuxHigh bound (mechanism B1), quartering
+// the per-chunk sub-packet loss exposure (B2) and halving channel
+// occupation so window requests and GET_STATUS regain airtime (B4).
+// Retune is this single line: 19.2 kbps (RATE_19_2kbps) is the next step
+// up if bench traces still show starvation, 4.8 kbps (RATE_4_8kbps) the
+// step down if range proves marginal.
+constexpr uint8_t E32_TARGET_AIR_DATA_RATE =
+    static_cast<uint8_t>(E32AirDataRate::RATE_9_6kbps);
+
 // ===========================
 // E32 LoRa Driver Class
 // ===========================
@@ -178,6 +191,7 @@ private:
 
     // Private methods
     void setPinsForMode(E32Mode mode);
+    void ensureLinkConfig();
     bool enterConfigMode();
     bool exitConfigMode();
     bool readConfigurationBytes(uint8_t* buffer, size_t length);

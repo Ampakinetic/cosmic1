@@ -131,6 +131,11 @@ bool E32LoRa::begin(HardwareSerial* serial, int8_t rxPin, int8_t txPin,
         Serial.printf("  Baud=%lu\n", baudRate);
     }
 
+    // Boot-time link convergence (plan 01-08): enforce the target air
+    // data rate with zero main-file wiring — both boards call this same
+    // begin(), so both converge on every boot. Fail-open by design.
+    ensureLinkConfig();
+
     return true;
 }
 
@@ -457,6 +462,46 @@ bool E32LoRa::setChannel(uint8_t channel) {
     }
     config.chan = channel;
     return writeConfig(config);
+}
+
+// Boot-time air-rate enforcement (plan 01-08, G-01-3): converges BOTH
+// boards to E32_TARGET_AIR_DATA_RATE on every boot via a read-modify-write
+// that touches ONLY the SPED air-rate bits. Fail-open in every path — a
+// config failure never aborts boot and begin() still returns true (the
+// 1223f46 boot-abort lesson: optional hardware failures must never block
+// boot).
+void E32LoRa::ensureLinkConfig() {
+    E32Config config;
+    if (!readConfig(config)) {
+        // Fail-open: keep the module exactly as-is and continue booting.
+        Serial.println("E32: config read failed - using module as-is");
+        return;
+    }
+
+    uint8_t current = e32AirRateIndex(config.sped);
+    if (current == E32_TARGET_AIR_DATA_RATE) {
+        Serial.printf("E32: air rate already %s\n", airRateToString(current));
+        return;
+    }
+
+    // Patch ONLY the air-rate bits [2:0]: UART baud index, parity bits and
+    // every other register (ADDH/ADDL/CHAN/OPTION) pass through from the
+    // fresh read byte-for-byte — the pair stays matched on everything the
+    // firmware does not own.
+    uint8_t patched = static_cast<uint8_t>(
+        (config.sped & ~E32_SPED_AIR_RATE_MASK) | E32_TARGET_AIR_DATA_RATE);
+    if (writeConfigRegisters(config.addh, config.addl, patched,
+                             config.chan, config.option)) {
+        Serial.printf("E32: air data rate %s -> %s (config persisted)\n",
+                      airRateToString(current),
+                      airRateToString(E32_TARGET_AIR_DATA_RATE));
+    } else {
+        // Loud tripwire: a one-board-only rate change severs the pair
+        // until the other board runs this same firmware. The 01-09 bench
+        // session treats this line as a stop condition.
+        Serial.println("E32: ERROR air-rate set FAILED - modules may mismatch,"
+                       " link check required");
+    }
 }
 
 // ===========================
