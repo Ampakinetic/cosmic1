@@ -1847,6 +1847,12 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
 
 void setup() {
     Serial.begin(115200);
+    // UART0/CH340 bridge: app Serial goes to native USB whose pins (19/20)
+    // are reassigned to E32 M0/M1 at initLoRa() — so boot + link diagnostics
+    // live here, visible over the bridge cable (debug session
+    // balloon-no-data-oled-blank)
+    Serial0.begin(115200);
+    Serial0.println("[BOOT] Cosmic1 Base");
     delay(1000);
 
     Serial.println("\n==========================================");
@@ -1947,6 +1953,18 @@ void loop() {
         WifiStatus wifi = WiFiMgr().getStatus();
         oled.wifiJoining = wifi.joining;
         oled.wifiMode = wifi.mode;
+        // Debug session balloon-no-data-oled-blank (link half): serving
+        // interface truth on UART0 — mode + IP + AP clients every 10 s, so
+        // the browser-side "no data" question never depends on reading the
+        // OLED at the right angle
+        static uint32_t lastNetMs = 0;
+        if (millis() - lastNetMs >= 10000) {
+            lastNetMs = millis();
+            Serial0.printf("[NET] %s %s st=%d clients=%d\n",
+                           wifi.joining ? "JOINING" : (wifi.mode ? wifi.mode : "--"),
+                           wifi.ip.toString().c_str(),
+                           (int)WiFi.status(), (int)WiFi.softAPgetStationNum());
+        }
         strlcpy(oled.ip, wifi.ip.toString().c_str(), sizeof(oled.ip));
         oled.sdOk = SDStorage().getStatus().available;
         oled.cmdsSent = static_cast<uint16_t>(CmdSender().getCommandsSent());
@@ -2111,7 +2129,20 @@ void processLoRa() {
 // ===========================
 
 void handleRoot() {
-    String html = FPSTR(HTML_HEADER);
+    // Debug session balloon-no-data-oled-blank (link half): page-load truth
+    // on UART0 — distinguishes "browser never reaches the base" from
+    // "page loads but polls fail"
+    Serial0.println("[API] GET / (page load)");
+    // Page-size fix (debug session balloon-no-data-oled-blank): build ONLY
+    // the dynamic sections here (~9 KB — small, safe). The static header
+    // (13.7 KB) and the footer script (57 KB) stream straight from PROGMEM
+    // below; the page must never exist as one String. The old single-String
+    // build (~80 KB) needed a contiguous heap block a running station
+    // cannot guarantee, and Arduino String::operator+= SILENTLY DROPS the
+    // append when its realloc fails — which shipped the dashboard without
+    // its footer script: tiles frozen at "—", zero /api/state polls, no
+    // stale badge. Same stream pattern as handleLeafletJs.
+    String html;
 
     // ---- Map & Telemetry section (D-45: the informational anchor) ----
     html += "<section id=\"map\">";
@@ -2475,9 +2506,24 @@ void handleRoot() {
     html += "<div class=\"card\" id=\"gallery-detail-card\" style=\"display:none;\"></div>";
     html += "</section>";
 
-    html += FPSTR(HTML_FOOTER);
+    // Stream the page in three parts (header / dynamic sections / footer
+    // script) — see the note at the top of this function for why the page
+    // is never materialized as one String.
+    const size_t headerLen = sizeof(HTML_HEADER) - 1;
+    const size_t footerLen = sizeof(HTML_FOOTER) - 1;
+    server.setContentLength(headerLen + html.length() + footerLen);
+    server.send(200, "text/html", "");
+    server.sendContent(HTML_HEADER, headerLen);
+    server.sendContent(html.c_str(), html.length());
+    server.sendContent(HTML_FOOTER, footerLen);
 
-    server.send(200, "text/html", html);
+    // Debug session balloon-no-data-oled-blank (link half): page truth —
+    // total streamed length + heap state (maxAlloc documents why the old
+    // single-String build failed: largest contiguous block < page size)
+    Serial0.printf("[PAGE] streamed %u bytes (hdr %u + sec %u + ftr %u) heap=%u maxAlloc=%u\n",
+                   (unsigned)(headerLen + html.length() + footerLen),
+                   (unsigned)headerLen, (unsigned)html.length(), (unsigned)footerLen,
+                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
 }
 
 void handleCapture() {
@@ -3228,6 +3274,13 @@ void handleApiState() {
                       static_cast<unsigned>(trajCount), static_cast<unsigned>(json.length()));
     }
 
+    // Debug session balloon-no-data-oled-blank (link half): one line per
+    // /api/state request on UART0 — proves the web poll path is being served
+    // and whether the telemetry snapshot rides along
+    Serial0.printf("[API] /api/state %uB tele=%d seq=%u\n",
+                   (unsigned)json.length(), beacon.valid ? 1 : 0,
+                   (unsigned)beacon.seq);
+
     server.send(200, "application/json", json);
 }
 
@@ -3506,6 +3559,10 @@ void handleNotFound() {
     // /img/{id}, /img/{id}_t.jpg, and /gallery/{id} route here (exact-match
     // routing cannot express the parameter) — dispatch before the generic 404
     String uri = server.uri();
+    // Debug session balloon-no-data-oled-blank (link half): visibility into
+    // whatever the client ACTUALLY asks for when the dashboard "loads but
+    // shows no data" — wrong host/path requests land here
+    Serial0.printf("[HTTP] %s %s -> 404\n", server.method() == HTTP_GET ? "GET" : "?", uri.c_str());
     if (server.method() == HTTP_GET && uri.startsWith("/img/")) {
         handleImage(uri);
         return;

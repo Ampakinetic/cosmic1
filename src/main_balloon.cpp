@@ -11,6 +11,7 @@
 #include <WiFi.h>
 #include <Preferences.h>
 #include <HardwareSerial.h>
+#include <Wire.h>
 #include "balloon_config.h"
 #include "board_config.h"
 #include "sensor_pins.h"
@@ -164,6 +165,11 @@ void onFlightPhaseChanged(FlightPhase newPhase);
 void setup() {
     // Initialize serial communication first
     Serial.begin(SERIAL_BAUD_RATE);
+    // UART0 also speaks to the CH343 USB bridge — with ARDUINO_USB_CDC_ON_BOOT
+    // the app Serial goes to the native USB port, so boot diagnostics are
+    // mirrored here where they are visible over the bridge cable
+    Serial0.begin(115200);
+    Serial0.printf("[BOOT] Cosmic1 Balloon v%s\n", FIRMWARE_VERSION);
     delay(SETUP_DELAY_MS);
     
     // Print welcome message immediately after serial init
@@ -179,6 +185,7 @@ void setup() {
     Serial.println("Initializing debug system...");
     if (!Debug.begin()) {
         Serial.println("FATAL: Failed to initialize debug system!");
+        Serial0.println("[BOOT] abort: debug system");
         return;
     }
     
@@ -199,6 +206,7 @@ void setup() {
     if (!initializeHardware()) {
         Serial.println("FATAL: Hardware initialization failed!");
         SYS_ERROR("Hardware initialization failed");
+        Serial0.println("[BOOT] abort: hardware");
         return;
     }
     Serial.println("Hardware initialization complete");
@@ -206,6 +214,7 @@ void setup() {
     // Initialize subsystems
     if (!initializeSubsystems()) {
         SYS_ERROR("Subsystem initialization failed");
+        Serial0.println("[BOOT] abort: subsystems");
         StatusOLED().showBootStage("BOOT FAILED");
         return;
     }
@@ -213,6 +222,7 @@ void setup() {
     // Configure system
     if (!configureSystem()) {
         SYS_ERROR("System configuration failed");
+        Serial0.println("[BOOT] abort: configure");
         StatusOLED().showBootStage("BOOT FAILED");
         return;
     }
@@ -220,6 +230,7 @@ void setup() {
     // Perform system checks
     if (!performSystemChecks()) {
         SYS_ERROR("System checks failed");
+        Serial0.println("[BOOT] abort: system checks");
         StatusOLED().showBootStage("BOOT FAILED");
         return;
     }
@@ -306,6 +317,19 @@ void loop() {
         oled.upMs = millis();
         oled.freeHeap = ESP.getFreeHeap();
         StatusOLED().render(oled);
+
+        // Beacon TX truth on UART0: one line whenever the 0x14 sequence
+        // advances. ok reflects the E32 transmit result (AUX handshake) —
+        // the link bring-up question answered without the base station.
+        static uint32_t lastBcnSeq = 0;
+        uint32_t bcnSeq = ImageTx().getBeaconSeq();
+        if (bcnSeq != lastBcnSeq) {
+            lastBcnSeq = bcnSeq;
+            Serial0.printf("[BCN] seq=%u sent=%u ok=%d\n",
+                           (unsigned)bcnSeq,
+                           (unsigned)ImageTx().getBeaconsSent(),
+                           ImageTx().getLastBeaconOk() ? 1 : 0);
+        }
     }
 
     // Update loop statistics
@@ -361,17 +385,49 @@ bool initializeSubsystems() {
     // Initialize power management first
     if (!PowerMgr().begin()) {
         SYS_ERROR("Power manager initialization failed");
+        Serial0.println("[BOOT] abort: power manager");
         return false;
     }
     SYS_INFO("Power manager initialized");
-    
+
+    // Debug session balloon-no-data-oled-blank: bus truth BEFORE Sensors
+    // takes it. Sensors().begin() Wire.begin()s GPIO1/2 inside initBMP280,
+    // so prime the same bus explicitly and enumerate every ACKing address.
+    // Expect 0x76 (BMP280) + 0x3C (OLED). Distinguishes: absent sensor vs
+    // 0x77-addressed breakout vs dead bus — before the abort decision runs.
+    {
+        Serial0.print("[BOOT] I2C pre-scan:");
+        Wire.begin(BMP280_SDA_PIN, BMP280_SCL_PIN);
+        for (uint8_t addr = 1; addr < 0x7F; addr++) {
+            Wire.beginTransmission(addr);
+            if (Wire.endTransmission() == 0) {
+                Serial0.printf(" 0x%02X", addr);
+            }
+        }
+        Serial0.println();
+        // CHIP ID register 0xD0 at 0x76: BMP280=0x58, BME280=0x60. Bring-up
+        // truth for the shared bus (found the hard way: an ACK here does
+        // not mean the library probes this address — see sensor_pins.h).
+        Wire.beginTransmission(0x76);
+        Wire.write(0xD0);
+        if (Wire.endTransmission() == 0) {
+            Wire.requestFrom((uint8_t)0x76, (uint8_t)1);
+            uint8_t chipId = Wire.available() ? Wire.read() : 0xFF;
+            Serial0.printf("[BOOT] 0x76 chip id: 0x%02X\n", chipId);
+        } else {
+            Serial0.println("[BOOT] 0x76 reg read NACK");
+        }
+    }
+
     // Initialize sensor manager
     if (!Sensors().begin()) {
         SYS_ERROR("Sensor manager initialization failed");
+        Serial0.println("[BOOT] abort: sensor manager (I2C/BMP280/GPS wiring?)");
         return false;
     }
     SYS_INFO("Sensor manager initialized");
     appState.sensorsActive = true;
+    Serial0.println("[BOOT] sensors ok");
 
     // OLED status screen comes alive the moment the shared I2C bus exists
     // (Sensors owns Wire) — the remaining boot stages are then visible on
@@ -400,13 +456,15 @@ bool initializeSubsystems() {
     // Initialize packet handler
     if (!PacketMgr().begin()) {
         SYS_ERROR("Packet handler initialization failed");
+        Serial0.println("[BOOT] abort: packet handler");
         return false;
     }
     SYS_INFO("Packet handler initialized");
-    
+
     // Initialize system state
     if (!SysState().begin()) {
         SYS_ERROR("System state initialization failed");
+        Serial0.println("[BOOT] abort: system state");
         return false;
     }
     SYS_INFO("System state initialized");

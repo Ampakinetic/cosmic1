@@ -37,21 +37,24 @@ SensorManager::~SensorManager() {
 // ===========================
 
 bool SensorManager::begin() {
-    bool success = true;
-    
-    // Initialize BMP280
+    // Initialize BMP280 — absent hardware degrades to BMP:-- on the status
+    // screen and invalid fields on the beacon; it must never abort the boot:
+    // a telemetry balloon keeps beaconing without a barometer. (The old
+    // abort behavior is what turned a wrong I2C address into total loss of
+    // both the beacon stream and the OLED diagnostics — see debug session
+    // balloon-no-data-oled-blank.)
     if (!initBMP280()) {
         bmp280ErrorCount++;
-        success = false;
+        Serial0.begin(115200);
+        Serial0.println("[BMP] absent at 0x76/0x77 - continuing without barometer");
     }
-    
+
     // Initialize GPS
     if (!initGPS()) {
         gpsErrorCount++;
-        success = false;
     }
-    
-    return success;
+
+    return true;
 }
 
 void SensorManager::end() {
@@ -87,14 +90,32 @@ bool SensorManager::initBMP280() {
     
     // Create BMP280 object - pass &Wire to use our initialized bus
     bmp280 = new Adafruit_BMP280(&Wire);
-    
-    // Begin sensor - library may call Wire.begin() again (generates warning)
-    if (!bmp280->begin(BMP280_ADDRESS)) {
+
+    // Begin sensor: probe BOTH legal BMP280 strappings. The explicit
+    // literals are deliberate — BMP280_I2C_ADDRESS from sensor_pins.h names
+    // this board's 0x76, and the library's own BMP280_ADDRESS macro (0x77)
+    // must never be trusted here (see the collision note in sensor_pins.h).
+    // Library may call Wire.begin() again (generates harmless warning).
+    bool began = bmp280->begin(0x76);
+    uint8_t foundAt = began ? 0x76 : 0;
+    if (!began && bmp280->begin(0x77)) {
+        began = true;
+        foundAt = 0x77;
+    }
+    if (!began) {
+        Serial0.begin(115200);
+        Serial0.println("[BMP] no sensor at 0x76 or 0x77");
         if (DEBUG_SENSORS) {
-            Serial.println("BMP280: Could not find sensor at 0x76");
+            Serial.println("BMP280: Could not find sensor at 0x76/0x77");
         }
+        // Null out so isBMP280Ready() reports false and updateBMP280Data()
+        // null-guard engages — callers continue with degraded data
+        delete bmp280;
+        bmp280 = nullptr;
         return false;
     }
+    Serial0.begin(115200);
+    Serial0.printf("[BMP] initialized at 0x%02X\n", foundAt);
     
     // Configure BMP280 for balloon use
     bmp280->setSampling(Adafruit_BMP280::MODE_NORMAL,

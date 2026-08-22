@@ -36,15 +36,34 @@ bool StatusDisplay::begin(Board board) {
     }
     // BALLOON: Sensors().begin() already owns Wire (shared with the BMP280).
 
+    // Bring-up truth on UART0 (the CH343 USB bridge): a one-shot 7-bit bus
+    // scan answers "which devices actually answer" without a logic analyzer
+    // — expect 0x76 (BMP280, balloon) and 0x3C (this panel)
+    Serial0.begin(115200);
+    Serial0.print("[OLED] I2C scan:");
+    for (uint8_t addr = 1; addr < 0x7F; addr++) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+            Serial0.printf(" 0x%02X", addr);
+        }
+    }
+    Serial0.println();
+
     // periphBegin=false — Adafruit's internal Wire.begin() would drop the
     // explicit pin choice above (and re-begin an already-running bus)
-    if (oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS, true, false) ||
-        oled.begin(SSD1306_SWITCHCAPVCC, 0x3D, true, false)) {
-        present = true;
-    } else {
+    uint8_t addrUsed = 0;
+    if (oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDRESS, true, false)) {
+        addrUsed = OLED_ADDRESS;
+    } else if (oled.begin(SSD1306_SWITCHCAPVCC, 0x3D, true, false)) {
+        addrUsed = 0x3D;
+    }
+    if (addrUsed == 0) {
         // Absent hardware: inert from here on, never a boot failure
+        Serial0.println("[OLED] no panel at 0x3C/0x3D - screen disabled");
         return false;
     }
+    Serial0.printf("[OLED] panel at 0x%02X\n", addrUsed);
+    present = true;
 
     boardName = (board == Board::BASE) ? "BASE" : "BALLOON";
     showBootStage("BOOT");

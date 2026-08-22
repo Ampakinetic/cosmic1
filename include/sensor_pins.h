@@ -13,7 +13,13 @@
 // BMP280 Pressure/Temperature Sensor (I2C)
 #define BMP280_SDA_PIN    1   // I2C0 SDA
 #define BMP280_SCL_PIN    2  // I2C0 SCL
-#define BMP280_ADDRESS    0x76  // Default I2C address (0x77 alternative)
+// NOTE: do NOT name this macro BMP280_ADDRESS — the Adafruit_BMP280 library
+// header defines that same name as (0x77), and since it is included via
+// angle brackets AFTER sensor_pins.h, the library value silently wins at
+// the call site (system-header redefinitions emit no warning). That
+// collision is what made the balloon probe 0x77 while its sensor ACKs at
+// 0x76, aborting boot (debug session balloon-no-data-oled-blank).
+#define BMP280_I2C_ADDRESS 0x76  // This board's strapping (0x77 alternative)
 
 // OLED Display (SSD1306, 128x64, shares I2C bus with BMP280)
 #define OLED_SDA_PIN      1   // Same I2C bus as BMP280

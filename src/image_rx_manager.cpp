@@ -295,6 +295,9 @@ void ImageRxManager::onTelemetryBeaconFrame(const uint8_t* frame, size_t length)
     telemetry.valid = true;
     telemetry.receivedMs = millis();
     telemetry.seq = b.seq;
+    // Debug session balloon-no-data-oled-blank (link half): proof the
+    // balloon->base beacon path accepted a CRC-verified frame end-to-end
+    Serial0.printf("[BCNRX] seq=%u accepted\n", (unsigned)b.seq);
     telemetry.altitudeM = static_cast<float>(b.altitudeCm) / 100.0f;
     telemetry.tempC = static_cast<float>(b.tempCentiC) / 100.0f;
     telemetry.lat = static_cast<float>(b.latE6) / 1000000.0f;

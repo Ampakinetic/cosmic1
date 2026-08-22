@@ -350,7 +350,9 @@ void CommandSender::processIncomingByte(uint8_t byte) {
     }
 
     // Full expected length received: verify the end marker at the framed
-    // position, then validate and dispatch
+    // position, then validate and dispatch. Debug session
+    // balloon-no-data-oled-blank: failure branches log to UART0 — the OK
+    // path is already visible downstream ([BCNRX] / response handling)
     if (receiveBuffer[expectedTotal - 2] == CMD_END_BYTE1 &&
         receiveBuffer[expectedTotal - 1] == CMD_END_BYTE2) {
         if (validatePacket(receiveBuffer, expectedTotal)) {
@@ -377,7 +379,13 @@ void CommandSender::processIncomingByte(uint8_t byte) {
                         break; // unreachable — dispatched above
                 }
             }
+        } else {
+            Serial0.printf("[FRAME] type=%02X len=%u CRC FAIL\n",
+                           frameType, (unsigned)expectedTotal);
         }
+    } else {
+        Serial0.printf("[FRAME] type=%02X len=%u END MARKER MISS\n",
+                       frameType, (unsigned)expectedTotal);
     }
     resetReceiveState();
 }
@@ -507,7 +515,10 @@ bool CommandSender::transmitCommand(TrackedCommand* cmd) {
         return false;
     }
 
-    return lora->transmit(buffer, length);
+    bool txOk = lora->transmit(buffer, length);
+    Serial0.printf("[E32TX] cmd=%02X len=%u ok=%d\n",
+                   (unsigned)cmd->packet.cmd, (unsigned)length, txOk ? 1 : 0);
+    return txOk;
 }
 
 void CommandSender::retryCommand(TrackedCommand* cmd) {
