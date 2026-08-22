@@ -18,10 +18,10 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 
 ### Image Transmission
 
-- [ ] **IMG-01**: Captured images are transmitted from balloon to base station over LoRa
+- [x] **IMG-01**: Captured images are transmitted from balloon to base station over LoRa
 - [ ] **IMG-02**: Thumbnail preview (320x240 or smaller) displays immediately on base station
 - [ ] **IMG-03**: Full resolution images transfer in background after thumbnail
-- [ ] **IMG-04**: Images are chunked into packets for reliable LoRa transmission
+- [x] **IMG-04**: Images are chunked into packets for reliable LoRa transmission
 - [ ] **IMG-05**: Base station stores received images on SD card
 - [x] **IMG-06**: Image gallery displays all received images with pagination
 
@@ -38,7 +38,7 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 
 - [ ] **PRI-01**: Telemetry data always has priority over camera/image data on LoRa link
 - [x] **PRI-02**: Camera commands use retry mechanism with timeout for failed transmissions
-- [ ] **PRI-03**: System gracefully handles LoRa bandwidth limitations
+- [x] **PRI-03**: System gracefully handles LoRa bandwidth limitations
 
 ### Alerts & Monitoring
 
@@ -84,10 +84,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | CTRL-04 | Phase 1 | Complete |
 | CTRL-05 | Phase 2 | Gaps Found |
 | CTRL-06 | Phase 1 | Complete |
-| IMG-01 | Phase 2 | Gaps Found |
+| IMG-01 | Phase 2 | Complete |
 | IMG-02 | Phase 2 | Gaps Found |
 | IMG-03 | Phase 2 | Gaps Found |
-| IMG-04 | Phase 2 | Gaps Found |
+| IMG-04 | Phase 2 | Complete |
 | IMG-05 | Phase 2 | Gaps Found |
 | IMG-06 | Phase 3 | Complete |
 | WEB-01 | Phase 3 | Complete |
@@ -98,7 +98,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | WEB-06 | - | Complete (existing) |
 | PRI-01 | Phase 2 | Gaps Found |
 | PRI-02 | Phase 1 | Complete |
-| PRI-03 | Phase 2 | Gaps Found |
+| PRI-03 | Phase 2 | Complete |
 | ALRT-01 | Phase 3 | Complete |
 | ALRT-02 | Phase 3 | Complete |
 | ALRT-03 | Phase 3 | Complete |

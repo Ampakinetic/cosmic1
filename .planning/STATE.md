@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 01-07-PLAN.md
-last_updated: "2026-08-22T23:34:52.410Z"
+stopped_at: Completed 01-08-PLAN.md
+last_updated: "2026-08-22T23:53:49.348Z"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 19
-  completed_plans: 16
+  completed_plans: 17
 current_phase: 2
 current_phase_name: command-protocol-control
 ---
@@ -27,10 +27,10 @@ current_phase_name: command-protocol-control
 
 ## Current Position
 
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 9
 **Status:** Ready to execute
-**Progress:** [████████░░] 84% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
+**Progress:** [█████████░] 89% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
 
 ## Progress
 
@@ -122,8 +122,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-22T23:34:52.379Z
-**Stopped at:** Completed 01-07-PLAN.md
+**Last session:** 2026-08-22T23:53:49.314Z
+**Stopped at:** Completed 01-08-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -145,6 +145,7 @@ See: `.planning/PROJECT.md`
 | Phase 03 P04 | 19m | 2 tasks | 3 files |
 | Phase 03 P05 | 12 min | 2 tasks | 4 files |
 | Phase 01 P07 | 7min | 2 tasks | 1 files |
+| Phase 01 P08 | 14 min | 2 tasks | 2 files |
 
 ## Decisions
 
@@ -182,3 +183,6 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 03-05: Join deadline is wrap-safe millis subtraction (D-26 idiom); requestSwitch persists to NVS FIRST then drives the radio so a reboot mid-switch honors the operator's choice
 - [Phase ?]: 03-05: /api/state wifi block carries ssid (JSON-escaped) beyond {mode,ip,joining,errorSsid} — the locked mode-line copy needs it; the password never appears in any response (T-03-12); explicit AP switch clears joinErrorSsid
 - [Phase ?]: 01-07: all section#capture control forms submit in-page via ONE delegated submit listener (route from each form's action attribute, generic form.elements serialization, empty body for /capture and /auto-capture-stop) — defaultPrevented + id-skip guards keep alerts-form/wifi-form single-shot; per-form message divs recovered by js-capture-msg marker class render only the server-returned verdict (IN-03); pollOnce() after every settle/catch; addition confined to the HTML_FOOTER PROGMEM literal (1223f46 safe)
+- [Phase ?]: 01-08: E32 register truth from the official manual beats hobby-doc layouts — SPED is [7:6] parity / [5:3] baud / [2:0] air rate (worked example 0x1A), config return frame is HEAD echo 0xC0/0xC2 (0xC1 accepted for older revisions) + five register bytes, factory default C0 00 00 1A 06 04, config-mode UART fixed 9600 8N1
+- [Phase ?]: 01-08: config writes are echo-verified (success only when the module's return frame matches every register byte) and boot-time air-rate enforcement is fail-open inside E32LoRa::begin — both boards converge to 9.6 kbps every boot via a masked read-modify-write touching only SPED bits [2:0]; a failed write logs the loud modules-may-mismatch ERROR (01-09 stop condition) but never aborts boot (1223f46 lesson)
+- [Phase ?]: 01-08: single-lever scope held — air rate is the only lever pulled; pacing/stall-window changes in image_tx/image_rx managers stay out unless the 01-09 discriminator run proves B4 saturation persists at 9.6 kbps

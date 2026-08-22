@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 6/9 plans executed
+**Plans:** 7/9 plans executed
 
 Plans:
 **Wave 1**
@@ -69,7 +69,7 @@ Plans:
 **Wave 5** *(UAT gap closure, 2026-08-23; wave numbers restart for this round — 01-07/01-08 parallel, 01-09 after both)*
 
 - [x] 01-07-PLAN.md — G-01-4 gap closure: delegated in-page AJAX submit handler on section#capture covering all control forms (fetch + per-form message + pollOnce), riding the PROGMEM footer script (CTRL-01, CTRL-02, CTRL-03, CTRL-04)
-- [ ] 01-08-PLAN.md — G-01-3 gap closure (code half): real E32-900T30D register read/write with echo verification + boot-time 9.6 kbps air-rate enforcement, begin()-integrated fail-open on both boards (IMG-01, IMG-04, PRI-03)
+- [x] 01-08-PLAN.md — G-01-3 gap closure (code half): real E32-900T30D register read/write with echo verification + boot-time 9.6 kbps air-rate enforcement, begin()-integrated fail-open on both boards (IMG-01, IMG-04, PRI-03)
 
 **Wave 6** *(blocked on Wave 5)*
 
