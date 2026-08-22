@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 5
-status: verifying
-stopped_at: Completed 03-05-PLAN.md
-last_updated: "2026-08-19T17:37:48.454Z"
+current_plan: 2
+status: executing
+stopped_at: Completed 01-07-PLAN.md
+last_updated: "2026-08-22T23:34:52.410Z"
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 16
-  completed_plans: 15
+  total_plans: 19
+  completed_plans: 16
 current_phase: 2
-current_phase_name: enhanced-web-interface
+current_phase_name: command-protocol-control
 ---
 
 # Project State
@@ -27,10 +27,10 @@ current_phase_name: enhanced-web-interface
 
 ## Current Position
 
-**Current Plan:** 5
-**Total Plans in Phase:** 5
-**Status:** Phase complete — ready for verification
-**Progress:** [█████████░] 94% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
+**Current Plan:** 2
+**Total Plans in Phase:** 9
+**Status:** Ready to execute
+**Progress:** [████████░░] 84% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
 
 ## Progress
 
@@ -93,7 +93,7 @@ See: `.planning/PROJECT.md`
 
 **Core value:** Users can remotely control the balloon camera and view captured images through the base station web interface, with real-time telemetry and map tracking always available.
 
-**Current focus:** Phase 03 — enhanced-web-interface
+**Current focus:** Phase 01 — command-protocol-control
 
 ## Next Steps
 
@@ -122,8 +122,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-19T17:37:36.879Z
-**Stopped at:** Completed 03-05-PLAN.md
+**Last session:** 2026-08-22T23:34:52.379Z
+**Stopped at:** Completed 01-07-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -144,6 +144,7 @@ See: `.planning/PROJECT.md`
 | Phase 03 P03 | 24m | 2 tasks | 4 files |
 | Phase 03 P04 | 19m | 2 tasks | 3 files |
 | Phase 03 P05 | 12 min | 2 tasks | 4 files |
+| Phase 01 P07 | 7min | 2 tasks | 1 files |
 
 ## Decisions
 
@@ -180,3 +181,4 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 03-05: WiFi dual-mode discipline without the dual-mode constant — during a runtime AP-to-STA join the AP keeps serving (WiFi.begin ORs STA into the running mode); update() converges via WiFi.mode(WIFI_STA) on WL_CONNECTED or WIFI_AP on deadline, so WIFI_AP_STA never appears and the radio never rests dual-mode
 - [Phase ?]: 03-05: Join deadline is wrap-safe millis subtraction (D-26 idiom); requestSwitch persists to NVS FIRST then drives the radio so a reboot mid-switch honors the operator's choice
 - [Phase ?]: 03-05: /api/state wifi block carries ssid (JSON-escaped) beyond {mode,ip,joining,errorSsid} — the locked mode-line copy needs it; the password never appears in any response (T-03-12); explicit AP switch clears joinErrorSsid
+- [Phase ?]: 01-07: all section#capture control forms submit in-page via ONE delegated submit listener (route from each form's action attribute, generic form.elements serialization, empty body for /capture and /auto-capture-stop) — defaultPrevented + id-skip guards keep alerts-form/wifi-form single-shot; per-form message divs recovered by js-capture-msg marker class render only the server-returned verdict (IN-03); pollOnce() after every settle/catch; addition confined to the HTML_FOOTER PROGMEM literal (1223f46 safe)
