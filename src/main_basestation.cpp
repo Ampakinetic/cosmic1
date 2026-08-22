@@ -1508,6 +1508,75 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             });
         });
 
+        // ---------- Delegated submit interception for section#capture (G-01-4) ----------
+        // Every Phase 1 control form in the Capture & Settings section was a
+        // native form post — the browser navigated to the bare JSON body and
+        // the operator had to press Back. ONE delegated listener on the
+        // section element intercepts all 11 control forms: the route comes
+        // from each form's own action attribute and serialization is generic
+        // over form.elements, so no route list and no new ids to maintain.
+        // The alerts-form / wifi-form direct handlers sit on the form
+        // elements themselves, run first during bubbling and call
+        // preventDefault — the defaultPrevented guard (plus the explicit id
+        // skip) keeps those Phase 3 posts single-shot.
+        document.getElementById('capture').addEventListener('submit', function (ev) {
+            if (ev.defaultPrevented) return;
+            const form = ev.target;
+            if (form.id === 'alerts-form' || form.id === 'wifi-form') return;
+            ev.preventDefault();  // THE fix: no full-page POST to the JSON body
+
+            // Generic body: every named, non-button control (number inputs
+            // and selects alike); the capture / auto-capture-stop forms
+            // serialize to an empty body — their routes take no arguments
+            const els = form.elements;
+            const pairs = [];
+            for (let i = 0; i < els.length; i++) {
+                const el = els[i];
+                if (!el.name || el.type === 'submit' || el.type === 'button') continue;
+                pairs.push(el.name + '=' + encodeURIComponent(el.value));
+            }
+
+            // Per-form message div: created lazily on first submit,
+            // recovered via the marker class afterwards — zero markup added
+            // to the dynamic section and nothing stored globally
+            let msg = null;
+            if (form.nextSibling && form.nextSibling.className
+                && form.nextSibling.className.indexOf('js-capture-msg') !== -1) {
+                msg = form.nextSibling;
+            } else {
+                msg = document.createElement('div');
+                setClass(msg, 'message info js-capture-msg');
+                form.parentNode.insertBefore(msg, form.nextSibling);
+            }
+
+            // In-flight disable blocks double-submits while a POST is
+            // pending; the poll-driven evBusy pass for event-form re-applies
+            // its own state on the next poll
+            for (let i = 0; i < els.length; i++) els[i].disabled = true;
+
+            fetch(form.getAttribute('action'), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: pairs.join('&')
+            }).then(function (r) {
+                return r.json().then(function (j) { return { ok: r.ok, msg: j.message }; });
+            }).then(function (res) {
+                for (let i = 0; i < els.length; i++) els[i].disabled = false;
+                setClass(msg, 'message ' + (res.ok ? 'success' : 'error') + ' js-capture-msg');
+                // IN-03: only the server-returned verdict — ACK/terminal
+                // wording continues to come exclusively from the polled
+                // queue truth
+                setText(msg, res.msg || (res.ok ? 'Command sent' : 'Failed to send command'));
+                pollOnce();
+            }).catch(function (err) {
+                console.error(err);
+                for (let i = 0; i < els.length; i++) els[i].disabled = false;
+                setClass(msg, 'message error js-capture-msg');
+                setText(msg, 'Failed to send command');
+                pollOnce();
+            });
+        });
+
         function renderWiFi(data) {
             const w = data.wifi;
             if (!w) return;
