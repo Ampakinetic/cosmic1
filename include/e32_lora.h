@@ -8,6 +8,22 @@
 // E32-900T30D LoRa Driver
 // UART-based LoRa transceiver module
 // ===========================
+//
+// Register-protocol ground truth: E32-T Series User Manual (official
+// cdebyte.com PDF for E32-900T30D, sections 6.1-6.7, verified 2026-08-23):
+//   - Sleep mode (M0=1, M1=1) accepts 6-byte control frames. Config-mode
+//     UART is FIXED at 9600 baud 8N1 (6.1) — begin() must open the module
+//     serial at 9600 for config commands to work (both boards do).
+//   - 0xC0 + ADDH ADDL SPED CHAN OPTION : set parameters permanently
+//     (EEPROM). 0xC2 + ... : temporary set (lost on power-down).
+//   - 0xC1 0xC1 0xC1 : read current parameters.
+//   - Both commands return a 6-byte frame: HEAD echo followed by the five
+//     register bytes. HEAD is 0xC0 or 0xC2 per the register table (6.6) and
+//     the manual's read example "C0 00 00 1A 06 44" (6.2); 0xC1 is also
+//     accepted for older firmware revisions.
+//   - Factory default, 900 MHz band (6.7): C0 00 00 1A 06 04
+//     (ADDH=00 ADDL=00 SPED=1A CHAN=06 OPT=04 -> 9600 8N1, 2.4 kbps air,
+//     868.125 MHz, 30 dBm, FEC on).
 
 // E32 Module Modes (M0, M1 pins)
 enum class E32Mode : uint8_t {
@@ -17,47 +33,65 @@ enum class E32Mode : uint8_t {
     MODE_SLEEP = 0x03        // M0=1, M1=1 - Sleep/program mode
 };
 
-// E32 Module Configuration Structure
+// SPED register (0x03) bit layout — manual 6.6 (worked example: 0x1A =
+// 8N1 + 9600 + 2.4 kbps air):
+//   bits [7:6] serial parity | bits [5:3] UART baud | bits [2:0] air rate
+constexpr uint8_t E32_SPED_PARITY_MASK   = 0xC0;  // bits [7:6]
+constexpr uint8_t E32_SPED_BAUD_MASK     = 0x38;  // bits [5:3]
+constexpr uint8_t E32_SPED_AIR_RATE_MASK = 0x07;  // bits [2:0]
+
+// SPED field decoders (manual 6.6)
+inline uint8_t e32ParityBits(uint8_t sped) {
+    return (sped & E32_SPED_PARITY_MASK) >> 6;      // 0=8N1 1=8O1 2=8E1 3=8N1
+}
+inline uint8_t e32UartBaudIndex(uint8_t sped) {
+    return (sped & E32_SPED_BAUD_MASK) >> 3;        // 0..7, see E32UARTSpeed
+}
+inline uint8_t e32AirRateIndex(uint8_t sped) {
+    return sped & E32_SPED_AIR_RATE_MASK;           // see E32AirDataRate
+}
+
+// E32 Module Configuration — mirrors the module's five configuration
+// registers (manual 6.5/6.6). Each byte maps to/from the wire frame
+// byte-for-byte; decoded views come from the SPED helpers above.
 struct E32Config {
-    uint16_t addressHigh;    // High byte of address (0x0000-0xFFFF)
-    uint16_t addressLow;     // Low byte of address (0x0000-0xFFFF)
-    uint8_t uartSpeed;       // UART baud rate
-    uint8_t airDataRate;     // Air data rate
-    uint8_t option;          // Option bits ( FEC, pull-up, etc.)
-    uint8_t transmissionType;// Transmission mode
-    uint8_t channel;         // Communication channel (0-31)
-    uint8_t transparentTransmission; // 0x00 for transparent
-    uint8_t optionBits;      // Additional options
+    uint8_t addh;    // 0x01 ADDH: module address high byte (default 0x00)
+    uint8_t addl;    // 0x02 ADDL: module address low byte (default 0x00)
+    uint8_t sped;    // 0x03 SPED: parity/baud/air-rate bits (default 0x1A)
+    uint8_t chan;    // 0x04 CHAN: RF channel, 900 MHz band 0x00-0x45 (default 0x06)
+    uint8_t option;  // 0x05 OPTION: fixed-transmit/wake-up/FEC/power bits (default 0x04)
 };
 
-// Transmit Power Levels
+// Transmit Power Levels — OPTION register bits [1:0], 30 dBm modules (manual 6.6)
 enum class E32Power : uint8_t {
-    POWER_20dBm = 0x00,  // 20dBm (default)
-    POWER_17dBm = 0x01,  // 17dBm
-    POWER_14dBm = 0x02,  // 14dBm
-    POWER_11dBm = 0x03   // 11dBm
+    POWER_30dBm = 0x00,  // 30dBm (T30D default)
+    POWER_27dBm = 0x01,  // 27dBm
+    POWER_24dBm = 0x02,  // 24dBm
+    POWER_21dBm = 0x03   // 21dBm
 };
 
-// UART Speed Codes
+// UART Speed Codes — SPED register bits [5:3] (manual 6.6)
 enum class E32UARTSpeed : uint8_t {
     BAUD_1200 = 0x00,
     BAUD_2400 = 0x01,
     BAUD_4800 = 0x02,
-    BAUD_9600 = 0x03,    // Default
+    BAUD_9600 = 0x03,    // Factory default (config mode is FIXED here)
     BAUD_19200 = 0x04,
     BAUD_38400 = 0x05,
     BAUD_57600 = 0x06,
     BAUD_115200 = 0x07
 };
 
-// Air Data Rate Codes
+// Air Data Rate Codes — SPED register bits [2:0] (manual 6.6).
+// The T-series has NO 0.3k/1.2k settings: codes 000-010 are ALL 2.4 kbps
+// and 110/111 are both 19.2 kbps, so only the distinct rates are
+// enumerated. Factory default is 2.4 kbps (code 010) per manual 6.7 —
+// the previous "9.6k default" comment here was wrong.
 enum class E32AirDataRate : uint8_t {
-    RATE_0_3kbps = 0x00,
-    RATE_1_2kbps = 0x01,
-    RATE_2_4kbps = 0x02,
-    RATE_4_8kbps = 0x03,
-    RATE_9_6kbps = 0x04,   // Default
-    RATE_19_2kbps = 0x05
+    RATE_2_4kbps = 0x02,   // 010: 2.4kbps — FACTORY DEFAULT
+    RATE_4_8kbps = 0x03,   // 011: 4.8kbps
+    RATE_9_6kbps = 0x04,   // 100: 9.6kbps — link target (plan 01-08)
+    RATE_19_2kbps = 0x05   // 101: 19.2kbps
 };
 
 // ===========================
@@ -94,6 +128,11 @@ public:
     // Configuration
     bool readConfig(E32Config& config);
     bool writeConfig(const E32Config& config);
+    // Raw register frame: 0xC0 + the five registers, echo-verified.
+    // Returns true ONLY when the module's return frame matches every
+    // written register byte (no fabricated success).
+    bool writeConfigRegisters(uint8_t addh, uint8_t addl, uint8_t sped,
+                              uint8_t chan, uint8_t option);
     bool setParameters(uint8_t uartSpeed, uint8_t airDataRate, uint8_t option);
     bool setAddress(uint16_t addressHigh, uint16_t addressLow);
     bool setChannel(uint8_t channel);
@@ -143,9 +182,6 @@ private:
     bool exitConfigMode();
     bool readConfigurationBytes(uint8_t* buffer, size_t length);
     bool writeConfigurationBytes(const uint8_t* buffer, size_t length);
-
-    // CRC calculation for configuration
-    uint8_t calculateConfigCRC(const uint8_t* buffer, size_t length);
 };
 
 // ===========================

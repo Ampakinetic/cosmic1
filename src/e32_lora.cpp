@@ -15,6 +15,50 @@ E32LoRa& E32LoRaModule() {
 }
 
 // ===========================
+// Register Decode Helpers (manual 6.6 tables)
+// ===========================
+
+// Valid HEAD echo bytes of a config return frame (manual 6.2/6.6:
+// 0xC0/0xC2 per the register table; 0xC1 accepted for older revisions)
+static bool isConfigHeadByte(uint8_t b) {
+    return b == 0xC0 || b == 0xC1 || b == 0xC2;
+}
+
+static const char* uartBaudToString(uint8_t index) {
+    static const char* const names[] = {
+        "1200", "2400", "4800", "9600", "19200", "38400", "57600", "115200"
+    };
+    return (index < 8) ? names[index] : "?";
+}
+
+static const char* airRateToString(uint8_t code) {
+    // Codes 000-010 are all 2.4k and 101-111 all 19.2k on the T-series
+    switch (code & 0x07) {
+        case 3:  return "4.8kbps";
+        case 4:  return "9.6kbps";
+        case 0:
+        case 1:
+        case 2:  return "2.4kbps";
+        default: return "19.2kbps";
+    }
+}
+
+static const char* parityToString(uint8_t bits) {
+    switch (bits & 0x03) {
+        case 1:  return "8O1";
+        case 2:  return "8E1";
+        default: return "8N1";   // 0 and 3 are both 8N1 (manual 6.6)
+    }
+}
+
+// Drain stale RX bytes so a config return frame parses from a clean start
+static void drainConfigRx(HardwareSerial* serial) {
+    while (serial->available()) {
+        serial->read();
+    }
+}
+
+// ===========================
 // Constructor/Destructor
 // ===========================
 
@@ -262,85 +306,157 @@ int E32LoRa::read(uint8_t* buffer, size_t maxLength) {
 // ===========================
 
 bool E32LoRa::readConfig(E32Config& config) {
+    // Config-mode UART is fixed at 9600 8N1 (manual 6.1); callers run the
+    // module serial at 9600, so the port is usable as-is here.
     if (!enterConfigMode()) {
         return false;
     }
 
-    // Send read configuration command
+    // Discard any stale RX bytes so the return frame parses from byte 0
+    drainConfigRx(serial);
+
+    // Register-read command (manual 6.2): three 0xC1 bytes in sleep mode
     uint8_t readCmd[] = {0xC1, 0xC1, 0xC1};
     serial->write(readCmd, sizeof(readCmd));
     serial->flush();
 
     delay(100);
 
-    // Read configuration response
+    // Return frame (manual 6.2/6.6): HEAD echo + ADDH ADDL SPED CHAN OPTION
     uint8_t buffer[6];
-    if (readConfigurationBytes(buffer, sizeof(buffer))) {
-        // Parse configuration
-        // Note: This is a simplified implementation
-        // Full configuration reading is more complex
+    if (!readConfigurationBytes(buffer, sizeof(buffer))) {
+        if (DEBUG_E32) {
+            Serial.println("E32: config read - return frame timeout");
+        }
         exitConfigMode();
-        return true;
+        return false;
+    }
+    if (!isConfigHeadByte(buffer[0])) {
+        if (DEBUG_E32) {
+            Serial.printf("E32: config read - bad head byte 0x%02X\n", buffer[0]);
+        }
+        exitConfigMode();
+        return false;
     }
 
+    config.addh   = buffer[1];
+    config.addl   = buffer[2];
+    config.sped   = buffer[3];
+    config.chan   = buffer[4];
+    config.option = buffer[5];
+
     exitConfigMode();
-    return false;
+
+    // Decoded boot-config line: the 01-09 bench confirmation artifact and
+    // the close of the debug session's unknown-module-config blind spot.
+    if (DEBUG_E32) {
+        Serial.printf("E32: cfg ADDH=%02X ADDL=%02X SPED=%02X CHAN=%02X OPT=%02X"
+                      " -> uart %s %s air %s ch %u\n",
+                      config.addh, config.addl, config.sped, config.chan,
+                      config.option,
+                      uartBaudToString(e32UartBaudIndex(config.sped)),
+                      parityToString(e32ParityBits(config.sped)),
+                      airRateToString(e32AirRateIndex(config.sped)),
+                      static_cast<unsigned>(config.chan));
+    }
+
+    return true;
 }
 
 bool E32LoRa::writeConfig(const E32Config& config) {
+    return writeConfigRegisters(config.addh, config.addl, config.sped,
+                                config.chan, config.option);
+}
+
+bool E32LoRa::writeConfigRegisters(uint8_t addh, uint8_t addl, uint8_t sped,
+                                   uint8_t chan, uint8_t option) {
     if (!enterConfigMode()) {
         return false;
     }
 
-    uint8_t buffer[6];
+    // Discard any stale RX bytes so the echo frame parses from byte 0
+    drainConfigRx(serial);
 
-    // Build configuration buffer
-    buffer[0] = (config.addressHigh >> 8) & 0xFF;
-    buffer[1] = config.addressHigh & 0xFF;
-    buffer[2] = (config.addressLow >> 8) & 0xFF;
-    buffer[3] = config.addressLow & 0xFF;
-    buffer[4] = config.uartSpeed;
-    buffer[5] = config.airDataRate;
-
-    // Write configuration
-    if (writeConfigurationBytes(buffer, sizeof(buffer))) {
-        delay(100);
+    // Permanent-set frame (manual 6.1/6.6): 0xC0 + the five registers.
+    // 0xC0 persists across power loss (a 0xC2 head would be temporary).
+    uint8_t frame[6] = {0xC0, addh, addl, sped, chan, option};
+    if (!writeConfigurationBytes(frame, sizeof(frame))) {
         exitConfigMode();
-        return true;
+        return false;
+    }
+
+    delay(100);   // module commits to EEPROM, then answers
+
+    // Echo verification: the module returns HEAD + the five registers.
+    // Success is reported ONLY when every register byte matches what was
+    // written — no fabricated configuration state (01-08 prohibition).
+    uint8_t echo[6];
+    if (!readConfigurationBytes(echo, sizeof(echo))) {
+        if (DEBUG_E32) {
+            Serial.println("E32: config write - no return frame");
+        }
+        exitConfigMode();
+        return false;
+    }
+    if (!isConfigHeadByte(echo[0]) ||
+        echo[1] != addh || echo[2] != addl || echo[3] != sped ||
+        echo[4] != chan || echo[5] != option) {
+        if (DEBUG_E32) {
+            Serial.printf("E32: config write - echo mismatch"
+                          " (got %02X %02X %02X %02X %02X %02X)\n",
+                          echo[0], echo[1], echo[2], echo[3], echo[4], echo[5]);
+        }
+        exitConfigMode();
+        return false;
     }
 
     exitConfigMode();
-    return false;
+    return true;
 }
 
 bool E32LoRa::setParameters(uint8_t uartSpeed, uint8_t airDataRate, uint8_t option) {
+    // Read-modify-write: patch ONLY the baud and air-rate fields of SPED;
+    // parity and every other register pass through from the fresh read.
     E32Config config;
-    config.addressHigh = 0x0000;
-    config.addressLow = 0xFFFF; // Broadcast address
-    config.uartSpeed = uartSpeed;
-    config.airDataRate = airDataRate;
+    if (!readConfig(config)) {
+        return false;
+    }
+    config.sped = static_cast<uint8_t>(
+        (config.sped & ~(E32_SPED_BAUD_MASK | E32_SPED_AIR_RATE_MASK)) |
+        ((uartSpeed << 3) & E32_SPED_BAUD_MASK) |
+        (airDataRate & E32_SPED_AIR_RATE_MASK));
     config.option = option;
-
     return writeConfig(config);
 }
 
 bool E32LoRa::setAddress(uint16_t addressHigh, uint16_t addressLow) {
+    // Read-modify-write. ADDH/ADDL are one byte each (manual 6.5); the
+    // uint16_t parameters keep the legacy signature — only the low bytes
+    // are used.
     E32Config config;
-    config.addressHigh = addressHigh;
-    config.addressLow = addressLow;
-
+    if (!readConfig(config)) {
+        return false;
+    }
+    config.addh = static_cast<uint8_t>(addressHigh & 0xFF);
+    config.addl = static_cast<uint8_t>(addressLow & 0xFF);
     return writeConfig(config);
 }
 
 bool E32LoRa::setChannel(uint8_t channel) {
-    // Channel setting requires full configuration write
-    // This is a placeholder for channel setting
-    if (channel > 31) {
+    // IMPLEMENTED via read-modify-write (not a no-op): CHAN is a whole
+    // register and the factory default 06H confirms the raw channel value
+    // IS the register value. 900 MHz band range 0x00-0x45 (manual 6.5).
+    // NOTE: a channel change severs the pair until BOTH modules match —
+    // no caller uses this today (plan 01-08 keeps the single-lever scope).
+    if (channel > 0x45) {
         return false;
     }
-
-    // Full implementation would read current config, modify channel, write back
-    return true;
+    E32Config config;
+    if (!readConfig(config)) {
+        return false;
+    }
+    config.chan = channel;
+    return writeConfig(config);
 }
 
 // ===========================
@@ -400,10 +516,15 @@ void E32LoRa::resetErrorCounts() {
 
 void E32LoRa::printConfig(const E32Config& config) const {
     Serial.println("=== E32 Configuration ===");
-    Serial.printf("Address: %04X %04X\n", config.addressHigh, config.addressLow);
-    Serial.printf("UART Speed: %d\n", config.uartSpeed);
-    Serial.printf("Air Data Rate: %d\n", config.airDataRate);
-    Serial.printf("Channel: %d\n", config.channel);
+    Serial.printf("Address: %02X %02X\n", config.addh, config.addl);
+    Serial.printf("UART: %s %s\n",
+                  uartBaudToString(e32UartBaudIndex(config.sped)),
+                  parityToString(e32ParityBits(config.sped)));
+    Serial.printf("Air Data Rate: %s\n",
+                  airRateToString(e32AirRateIndex(config.sped)));
+    Serial.printf("Channel: %u\n", static_cast<unsigned>(config.chan));
+    Serial.printf("Registers: ADDH=%02X ADDL=%02X SPED=%02X CHAN=%02X OPT=%02X\n",
+                  config.addh, config.addl, config.sped, config.chan, config.option);
 }
 
 void E32LoRa::printStatus() const {
@@ -469,14 +590,4 @@ bool E32LoRa::writeConfigurationBytes(const uint8_t* buffer, size_t length) {
     serial->flush();
 
     return (written == length);
-}
-
-uint8_t E32LoRa::calculateConfigCRC(const uint8_t* buffer, size_t length) {
-    uint8_t crc = 0;
-
-    for (size_t i = 0; i < length; i++) {
-        crc ^= buffer[i];
-    }
-
-    return crc;
 }
