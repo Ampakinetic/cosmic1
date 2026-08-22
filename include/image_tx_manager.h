@@ -138,6 +138,13 @@ public:
     uint8_t getQueueCount() const;
     const ImageTxEntry* getEntry(uint8_t index) const { return (index < QUEUE_DEPTH) ? &entries[index] : nullptr; }
 
+    // Beacon health for the OLED status screen (status_display) — read-only
+    // views of the transmit-side truth the serial log already prints
+    uint16_t getBeaconSeq() const { return beaconSeq; }
+    uint32_t getBeaconsSent() const { return beaconsSent; }
+    bool getLastBeaconOk() const { return lastBeaconOk; }
+    uint32_t getBeaconAgeMs() const { return millis() - lastBeaconMs; }
+
     // D-21 pull half (02-02): arm a window context on the queued ANNOUNCED
     // entry named by the payload. Decodes PayloadImageWindowRequest
     // (big-endian), validates imageId/range/count BEFORE arming (T-02-04),
@@ -161,6 +168,8 @@ private:
     uint32_t lastBeaconMs;
     uint16_t beaconSeq;      // monotonically increasing, wraps at 65535
     bool firstBeaconLogged;  // transition-only logging: first beacon after boot
+    uint32_t beaconsSent;    // successful transmits (OLED diagnostics)
+    bool lastBeaconOk;       // last attempt's transmit result
 
     // Poll side
     void enqueueCapture(uint16_t imageId);

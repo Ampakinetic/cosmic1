@@ -31,6 +31,8 @@ ImageTxManager::ImageTxManager()
     , lastBeaconMs(0)
     , beaconSeq(0)
     , firstBeaconLogged(false)
+    , beaconsSent(0)
+    , lastBeaconOk(false)
 {
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
         entries[i] = ImageTxEntry{};
@@ -161,6 +163,14 @@ bool ImageTxManager::sendTelemetryBeacon() {
     size_t length = 0;
     bool ok = CommandProtocol::serializeTelemetryBeacon(pkt, buffer, length) &&
               lora->transmit(buffer, length);
+
+    // OLED diagnostics (status_display): latch the attempt result so the
+    // balloon screen can distinguish a dead radio (TX FAIL) from a link the
+    // base is not hearing (seq advancing, OK)
+    lastBeaconOk = ok;
+    if (ok) {
+        beaconsSent++;
+    }
 
     // Transition-only logging (not per beacon): the first beacon after boot
     // and every transmit failure

@@ -22,6 +22,7 @@
 #include "alert_engine.h"
 #include "wifi_manager.h"
 #include "web_assets.h"
+#include "status_display.h"
 
 // ===========================
 // Pin Configuration
@@ -1856,10 +1857,18 @@ void setup() {
     memset(&appState, 0, sizeof(appState));
     strncpy(appState.lastStatus, "Initializing...", sizeof(appState.lastStatus) - 1);
 
+    // OLED status screen comes up first so every later boot stage (and any
+    // hang) is visible on the panel — the base owns its I2C bus
+    StatusOLED().begin(StatusDisplay::Board::BASE);
+
     initHardware();
+    StatusOLED().showBootStage("WIFI");
     initWiFi();
+    StatusOLED().showBootStage("LORA E32");
     initLoRa();
+    StatusOLED().showBootStage("SD CARD");
     initStorage();
+    StatusOLED().showBootStage("WEB");
     Trajectory().begin();   // D-38: full-flight GPS track ring (base-only)
     Alerts().begin();       // D-41..D-44: base-side alert engine (base-only)
     initWebServer();
@@ -1868,6 +1877,7 @@ void setup() {
     strcpy(appState.lastStatus, "System ready");
 
     Serial.println("Setup complete. Base station ready.\n");
+    StatusOLED().showBootStage("READY");
 }
 
 // ===========================
@@ -1918,6 +1928,36 @@ void loop() {
 
     // Physical status LED mirrors the computed link truth (WR-10 / IN-03)
     updateLED();
+
+    // OLED status screen (status_display): 1 Hz refresh — radio truth, the
+    // newest CRC-verified beacon, and the serving WiFi interface, from the
+    // same getters /status and the LED use
+    static uint32_t lastOledMs = 0;
+    if (millis() - lastOledMs >= 1000) {
+        lastOledMs = millis();
+        BaseOledStatus oled{};
+        oled.e32Ready = E32LoRaModule().isReady();
+        oled.auxHigh = E32LoRaModule().isAuxHigh();
+        const TelemetrySnapshot& t = ImageRx().getTelemetrySnapshot();
+        oled.beaconValid = t.valid;
+        oled.beaconSeq = t.seq;
+        oled.beaconAgeMs = t.valid ? (millis() - t.receivedMs) : 0;
+        oled.altitudeM = t.altitudeM;
+        oled.tempC = t.tempC;
+        WifiStatus wifi = WiFiMgr().getStatus();
+        oled.wifiJoining = wifi.joining;
+        oled.wifiMode = wifi.mode;
+        strlcpy(oled.ip, wifi.ip.toString().c_str(), sizeof(oled.ip));
+        oled.sdOk = SDStorage().getStatus().available;
+        oled.cmdsSent = static_cast<uint16_t>(CmdSender().getCommandsSent());
+        oled.cmdsAcked = static_cast<uint16_t>(CmdSender().getCommandsAcked());
+        switch (computeLinkTruth()) {
+            case LinkTruth::READY:   oled.link = "RDY";    break;
+            case LinkTruth::NO_LINK: oled.link = "NO LINK"; break;
+            default:                 oled.link = "UNK";    break;
+        }
+        StatusOLED().render(oled);
+    }
 
     // Small delay
     delay(10);

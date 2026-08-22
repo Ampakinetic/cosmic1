@@ -30,6 +30,9 @@
 #include "command_handler.h"
 #include "auto_capture.h"
 
+// OLED diagnostics (status_display) — bench-visible radio/beacon health
+#include "status_display.h"
+
 // Phase 2: Image Transmission
 #include "image_tx_manager.h"
 
@@ -203,18 +206,21 @@ void setup() {
     // Initialize subsystems
     if (!initializeSubsystems()) {
         SYS_ERROR("Subsystem initialization failed");
+        StatusOLED().showBootStage("BOOT FAILED");
         return;
     }
-    
+
     // Configure system
     if (!configureSystem()) {
         SYS_ERROR("System configuration failed");
+        StatusOLED().showBootStage("BOOT FAILED");
         return;
     }
-    
+
     // Perform system checks
     if (!performSystemChecks()) {
         SYS_ERROR("System checks failed");
+        StatusOLED().showBootStage("BOOT FAILED");
         return;
     }
     
@@ -230,6 +236,7 @@ void setup() {
     SysState().setFlightPhase(FlightPhase::GROUND);
     
     SYS_INFO("System ready - entering main loop");
+    StatusOLED().showBootStage("READY");
 }
 
 void loop() {
@@ -275,6 +282,30 @@ void loop() {
 
     if (shouldUpdatePerformance()) {
         updatePerformanceMetrics(millis() - loopStartTime);
+    }
+
+    // OLED status screen (status_display): 1 Hz refresh from the same live
+    // sources the beacon path reads — radio truth, subsystem health, and
+    // the transmit result the serial log prints
+    static uint32_t lastOledMs = 0;
+    if (millis() - lastOledMs >= 1000) {
+        lastOledMs = millis();
+        BalloonOledStatus oled{};
+        oled.e32Ready = E32LoRaModule().isReady();
+        oled.auxHigh = E32LoRaModule().isAuxHigh();
+        oled.txErrors = E32LoRaModule().getTransmitErrorCount();
+        oled.bmpOk = Sensors().isBMP280Ready();
+        oled.camOk = appState.cameraActive;
+        GPSData gpsNow = Sensors().getGPSData();
+        oled.gpsSats = gpsNow.satellites;
+        oled.batteryV = PowerMgr().getBatteryVoltage();
+        oled.beaconSeq = ImageTx().getBeaconSeq();
+        oled.beaconsSent = ImageTx().getBeaconsSent();
+        oled.lastBeaconOk = ImageTx().getLastBeaconOk();
+        oled.lastBeaconAgeMs = ImageTx().getBeaconAgeMs();
+        oled.upMs = millis();
+        oled.freeHeap = ESP.getFreeHeap();
+        StatusOLED().render(oled);
     }
 
     // Update loop statistics
@@ -341,7 +372,13 @@ bool initializeSubsystems() {
     }
     SYS_INFO("Sensor manager initialized");
     appState.sensorsActive = true;
-    
+
+    // OLED status screen comes alive the moment the shared I2C bus exists
+    // (Sensors owns Wire) — the remaining boot stages are then visible on
+    // the panel, and a hang reads as the stage it stopped at
+    StatusOLED().begin(StatusDisplay::Board::BALLOON);
+    StatusOLED().showBootStage("SENSORS");
+
     // Initialize camera manager
     if (!Camera().begin()) {
         SYS_WARNING("Camera manager initialization failed - continuing without camera");
@@ -350,7 +387,8 @@ bool initializeSubsystems() {
         SYS_INFO("Camera manager initialized");
         appState.cameraActive = true;
     }
-    
+    StatusOLED().showBootStage("CAMERA");
+
     // Initialize LoRa communication
     if (!LoRaComm().begin()) {
         SYS_ERROR("LoRa communication initialization failed");
@@ -380,6 +418,7 @@ bool initializeSubsystems() {
     } else {
         SYS_INFO("E32 LoRa module initialized");
     }
+    StatusOLED().showBootStage("LORA E32");
 
     if (!CmdHandler().begin(&E32LoRaModule(), &Camera())) {
         SYS_WARNING("Command handler initialization failed");
@@ -399,6 +438,7 @@ bool initializeSubsystems() {
     } else {
         SYS_INFO("Image TX module initialized");
     }
+    StatusOLED().showBootStage("IMG TX");
     appState.communicationActive = true;
 
     SYS_INFO("All subsystems initialized successfully");
