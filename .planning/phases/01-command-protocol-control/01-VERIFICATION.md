@@ -1,71 +1,77 @@
 ---
 phase: 01-command-protocol-control
-verified: 2026-08-23T02:25:45Z
+verified: 2026-08-23T22:45:00Z
 status: gaps_found
 score: 4/5 must-haves verified
-behavior_unverified: 1 # SC-3: capture-path execution hardware-proven end-to-end; the settings-adjustment visible-effect + CIF clauses were never explicitly exercised (ride the G-01-5 bench round per 01-UAT.md test 3 note)
+behavior_unverified: 1 # SC-3: capture-command execution hardware-proven (all three post-fix sessions); the settings visible-effect + CIF 400x296 clauses remain operator-unjudged and are now BLOCKED by open gap G-01-8 (the 01-11 settings-series attempt surfaced it — SET_RESOLUTION VGA false-SUCCESS + FB-OVF)
 overrides_applied: 0
 re_verification:
-  previous_status: human_needed
-  previous_score: 1/5
+  previous_status: gaps_found
+  previous_score: 4/5
   gaps_closed:
-    - "Hardware UAT item 1 (SC-2): command round trip over real radios — UAT test 1 PASS on hardware (re-tested after the 1223f46 balloon boot fix; G-01-1 resolved), re-confirmed at the 01-09 bench (trigger ACKed after both boards converged at 9.6 kbps)"
-    - "Hardware UAT item 2 (SC-4): retry/TIMEOUT on degraded link incl. the duplicate-ACK edge — UAT test 2 PASS on hardware; CR-03 terminal-state guard re-confirmed intact at this HEAD (command_sender.cpp:410, before all counter/statistics mutations)"
-    - "Hardware UAT item 4 (SC-5): auto-capture cadence + disable — UAT test 4 PASS on hardware (G-01-4 resolved by 01-07/754f834: delegated in-page AJAX submit on section#capture, verifier-read at main_basestation.cpp:1511-1578; runtime truth operator-confirmed at the 01-09 bench, WINDOWS ledger entry 1 closed fixed)"
-    - "Hardware UAT item 3, G-01-3 half (storage + transfer): RESOLVED on hardware at the 01-09 bench — SD_MMC 1-bit transport switch (794df00, verifier-verified: sd_storage.cpp:55-91 SD_MMC.setPins/begin 1-bit + 'card mounted' verdict; base_station_config.h:41-43 CLK=39/CMD=38/DATA=40), E32 register protocol + boot-time 9.6 kbps enforcement (01-08 e16845a/ce24cd8, verifier-verified: readConfig 0xC1-triple + 6-byte frame + head check e32_lora.cpp:313-369, writeConfigRegisters 0xC0 echo-verified :376-420, ensureLinkConfig fail-open at end of begin() :137/:473-505), operator observed Storage tile OK + a capture completing end-to-end with the full image CRC-verified and rendered from SD; the interim base-only-flash severance event stress-proved the rate enforcement is real and load-bearing"
-    - "Prohibition review item 5 (01-06 plan, flagged judgment-tier): UAT test 5 PASS — human-confirmed on hardware that no fabricated protocol/camera state reaches the wire or UI; the prior round's non-authoritative flag is resolved with human authority"
-  gaps_remaining:
-    - "G-01-5 (new residual from the 01-09 bench, structured below): thumbnail push-burst loss — corrupt preview + honest Incomplete badge while the full completes; UAT test 3 stays 'issue'; WINDOWS ledger entry 2 open (blocks /gsd-ship)"
-  regressions: [] # harness 49/49 exit 0 (verifier-run, grown from 15 to 49 clauses incl. WR-12 type-dispatch teeth); both pio targets SUCCESS (verifier-run); CR-01/CR-02/CR-05 prior closures re-checked at this HEAD; CR-04 Phase-2 deferral honored (thumbnail.buffer nulled on failure paths, camera_manager.cpp:333/:348); raw literal integrity intact (2 openers / 2 closers)
+    - "G-01-5 (round #4's structured gap): RESOLVED — f265556 (branch c) stops booking FAILED on a missed AUX-low after a COMPLETE write (short-write and pre-write readiness stay true failures; verifier-read at src/e32_lora.cpp transmit()); ride-along c67e1a5 (R2 QQVGA guard) closes the thumbnail-sizing quirk. Operator-verified across three post-fix bench sessions 2026-08-24: phantom chunk FAILED 0/0/0 vs ~41/capture baseline, benign 'AUX-low missed after complete write' 31/0/90 — every quoted line and count re-verified against the raw logs by this verifier (balloon.log/base.log, balloon2/base2, balloon3/base3)"
+    - "G-01-6 (escalated sibling, opened after round #4): RESOLVED — 678d4f1 (branch e) persists the image-ID counter to NVS in AutoCapture (restore in begin(), persist-before-issue in allocateImageId, fail-open; verifier-read at src/auto_capture.cpp). Operator-verified: IDs 1..5 sequential across three reboots (balloon2.log:106/:614, balloon3.log:104/:455), gallery index grows 2->3->4->5 with IMG_00002_*..IMG_00005_* appended (base2.log:243/:370, base3.log:84/:302/:528) — log-verified by this verifier"
+    - "WR-01 (folded into 01-10): closed at c9770b1 — zero dummy PowerData (grep '0.1f, 85' == 0, 'batteryPercentage = 85' == 0), batteryReadingValid() at 3 sites, safety branches validity-gated; runtime watch GREEN (0 'Critical battery' across all balloon logs; the lone 'Emergency Shutdown: Enabled' at balloon.log:56 is the documented power_manager.cpp:706 boot config echo)"
+    - "Ride-alongs verified: R1 91bee03 (STATUS_LED 39->41, GPIO41 confirmed free against the base pin map, edge-gated updateLED — zero __digitalWrite/IO-39 lines in all post-fix base logs) and R2 c67e1a5 (thumbnail QQVGA guard — correct sizing 1362-1703 B / 7-9 chunks every session; the guard's bail path never fired, consistent with correct sizes)"
+  gaps_remaining: [] # round #4's gap set is fully closed
+  regressions: [] # harness exit 0 (verifier-run, all clauses); both pio targets SUCCESS (verifier-run, 2 succeeded); CR-03 terminal-state guard intact (command_sender.cpp early-return for ACKED/FAILED/TIMEOUT before storage/decrements); CR-05 gates clean (isTimeToCapture 0 project-wide; captureImage live callers only auto_capture.cpp:280 + command_handler.cpp:212; allocateImageId single authority at auto_capture.cpp:300, both caller paths now NVS-backed); raw literal integrity 2 openers / 2 closers; delegated submit listener intact (main_basestation.cpp:1529); single-lever discipline held (image_protocol.h: PASSES=3, STALL=8000, PREEMPT=5000, HEAL_IDLE=24000 all unchanged); no E32_TARGET_TX_POWER (branch b correctly not selected); galleryCountSeen latch untouched (branch d correctly not selected)
 gaps:
-  - truth: "A triggered capture's thumbnail arrives intact and renders uncorrupted in the gallery (or its D-22 kind-addressed heal recovers it to COMPLETE) while the full image completes — residual clause of 01-09 plan truth 2; recorded as gap G-01-5 in 01-UAT.md"
+  - truth: "A capture triggered while the previous image's transfer/heal is still pending does not prevent that pending transfer's completion — concurrent captures cannot starve or evict an in-flight thumbnail heal or full pull (G-01-7 in 01-UAT.md, WINDOWS entry 3)"
     status: failed
-    reason: "Operator-observed on the 01-09 bench (iteration 5): 'the thumbnail image looks corrupted, and there is an Incomplete message over it. The full image looks good.' The Incomplete badge is the designed honest degradation of a chunk-deficient thumbnail (finalized INCOMPLETE), not sensor corruption. Classified B2/B4-class push-burst transport loss: the full's windowed ARQ recovers losses mid-flight, the thumbnail's blind push burst + post-hoc 3-pass heal did not. The serial discriminator was NOT captured, so B2 (air loss) vs B4 (saturation/margin at the new air rate) vs a heal-servicing defect is not yet named — the outcome-level matrix only eliminated B1 and made B3 unlikely."
+    reason: "Operator bench finding (01-11 post-fix session 2, unspaced back-to-back captures): image 2's thumbnail finalized INCOMPLETE 6/8 after 3 passes (base2.log:296) — its heal starved behind image 2's own full pull, then image 3's window request evicted it (balloon2.log:656 'window request for image 3 supersedes older entry image 2; evicted' — this verifier confirmed both lines in the raw logs and the eviction path at image_tx_manager.cpp:798-801); image 3's full then finalized INCOMPLETE 15/52 (base2.log:498) after five tail-window re-requests (seq 53 initial + 55-59). Session 3's SPACED captures completed 4/4 kinds COMPLETE — concurrency is the discriminated mechanism, not air loss. Interim mitigation documented as operating discipline: space captures (wait for both finalize lines between triggers)"
     artifacts:
-      - path: "src/image_rx_manager.cpp"
-        issue: "thumbnail heal loop: gated until the full pull finishes (:190-196), bounded to 3 passes with finalizeIncomplete (:198-199) — pass bound and stall margins are the code levers"
       - path: "src/image_tx_manager.cpp"
-        issue: "kind-split window arming (:634-732) + thumbBuffer retention — servicing verified present by code read; bench-trace confirmation pending"
-      - path: "include/image_protocol.h"
-        issue: "IMG_WINDOW_STALL_MS / IMG_THUMB_HEAL_IDLE_MS / IMG_RETRANSMIT_MAX_PASSES — pacing levers (01-08's deferred follow-up condition, armed only if B4 confirms)"
+        issue: "supersede/eviction rule (evictEntriesOlderThan :798, 'supersedes older entry ... evicted' :801) — a new capture's FULL window request evicts the previous image's pending-heal entry (:693); the never-evict-a-pending-heal lever"
+      - path: "src/image_rx_manager.cpp"
+        issue: "heal gating behind the active full pull (gates 1/2, :190-216) + immediate window re-request cadence — the serialization / inter-window RX-settle levers for the tail-chunk turnaround friction (13..14 / 14..14 / 49..52-class windows, pass-bounded today)"
     missing:
-      - "Serial discriminator on the thumbnail heal phase (base console: 'image N kind 0 finalized INCOMPLETE (thumbnail push stalled; passes exhausted)' + '[E32TX] cmd=30' heal-request rows + '[FRAME] type=13 CRC FAIL' counts; balloon console: 'THUMBNAIL window armed' + 'window chunk sent|FAILED') — full enumeration in 01-UAT.md G-01-5 missing list"
-      - "Second-capture re-test: whether a fresh capture's thumbnail arrives intact (per-burst vs systematic loss)"
-      - "If B4 push-burst saturation persists at 9.6 kbps: pacing round per 01-08's deferred follow-up condition (image_tx/rx margins, heal pass bound, window size)"
-      - "Ride-along closure of UAT test 3's untested clauses: settings-visibility + CIF 400x296 spot-checks — also closes SC-3's behavior-unverified half below"
+      - "Serialize thumbnail completion (push + heal) before the full pull starts, and/or stop evicting a pending heal entry for a new capture (operator-proposed lever, named in 01-UAT.md)"
+      - "Optional inter-window RX-settle gap for tail-chunk turnaround friction (half-duplex immediate-retransmit collisions)"
+      - "Bench re-verification: back-to-back unspaced captures complete without INCOMPLETE verdicts"
+  - truth: "SET_RESOLUTION to any advertised framesize either works or NACKs honestly — a size larger than the boot-allocated frame buffer must never leave the camera in a state that fails all subsequent captures (G-01-8 in 01-UAT.md, WINDOWS entry 4)"
+    status: failed
+    reason: "Operator bench finding (01-11 session 1 settings series): SET_RESOLUTION value 9 (VGA) returned SUCCESS (balloon.log:582) then flooded 4,379 'cam_hal: FB-OVF' lines and failed all 4 subsequent CAPTURE_NOW commands until reboot — this verifier confirmed all counts in balloon.log. Code defect confirmed: CameraManager::setFrameSize (camera_manager.cpp:397-416) changes only the sensor framesize (s->set_framesize) — no buffer reallocation, no size bound; the PSRAM fb buffers (fb_count=2) stay sized for the boot framesize (QVGA). Latent since 01-04, exposed by the deferred settings series. Scope: the UI advertises values 5-13 (main_basestation.cpp:2324-2335) — values 8-13 (CIF, VGA, SVGA, XGA, SXGA, UXGA) are all larger than the QVGA boot buffer, so the Phase-1 UAT Test 3 CIF 400x296 clause sits inside this defect's blast radius (untested but presumed affected)"
+    artifacts:
+      - path: "src/camera_manager.cpp"
+        issue: "setFrameSize (:397-416) — sensor-only framesize change without reallocation or an allocated-size bound; the fix site (NACK above the allocated buffer, or re-init the camera on size change)"
+      - path: "include/command_protocol.h"
+        issue: "FrameSize wire codes (:65-77) — the NACK bound derives from the boot-allocated buffer size; values 8-13 are all above it at QVGA boot"
+      - path: "src/main_basestation.cpp"
+        issue: "Resolution select advertises values 5-13 (:2324-2335) — the UI currently advertises six values the camera cannot safely accept"
+    missing:
+      - "Bound SET_RESOLUTION to the allocated buffer (NACK above it) or re-init/realloc the camera on a size change"
+      - "Settings visible-effect + CIF 400x296 spot-checks (UAT Test 3 clauses still operator-unjudged — re-run after this fix; also closes this report's one behavior-unverified truth SC-3)"
+      - "Bench re-verification: VGA (and ideally values 10-13) either works or NACKs honestly; boot resolution unaffected after the command"
 deferred:
-  - truth: "Full-resolution gallery image viewer (operator bench wish: the full renders barely larger than its thumbnail)"
+  - truth: "Full-resolution gallery image viewer (operator bench wish; presentation-only)"
     addressed_in: "Phase 3 backlog"
-    evidence: ".planning/todos/pending/2026-08-23-full-resolution-gallery-image-viewer.md (verifier-verified on disk; presentation-only — the /img/{id} SD-streaming data path is hardware-proven)"
+    evidence: ".planning/todos/pending/2026-08-23-full-resolution-gallery-image-viewer.md (verifier-verified on disk; the /img/{id} SD-streaming data path is hardware-proven)"
   - truth: "D-13 separate camera-controls page / D-15 accordion settings groups"
     addressed_in: "Phase 3"
     evidence: "Carried from prior verifications; Phase 3 delivered the single-page dashboard layout (03-01, WEB-04) — informational, superseded in practice"
-  - truth: "CR-04 + WR-11 createThumbnail dangling-buffer double-free (prior deferral to Phase 2)"
-    addressed_in: "Phase 2 (CLOSED)"
-    evidence: "Phase 2 plan 02-01 tracer claims the fix; this verifier confirmed in code: thumbnail.buffer = nullptr on every failure path (camera_manager.cpp:333, :348) and the WR-08 downgrade-verify bail (d19b082). Deferral honored — no longer open"
 behavior_unverified_items:
   - truth: "Balloon receives camera commands and adjusts camera settings accordingly (SC-3)"
-    test: "Send SET_RESOLUTION / SET_SATURATION / SET_EXPOSURE / SET_WB from the UI (in-page via 01-07), capture, and inspect; exercise the CIF 400x296 option"
-    expected: "Visible changes per setting in captured images; the CIF option (real FRAMESIZE_CIF post-01-06 relabel) executes successfully"
-    why_human: "Capture-command execution is hardware-proven end-to-end (01-09 bench), but the settings-adjustment visible-effect clause and the CIF option were never explicitly exercised — 01-UAT.md test 3 note routes them to the G-01-5 re-test round ('images only now flow'). Sensor acceptance and visual assessment need the physical camera"
+    test: "Send SET_RESOLUTION / brightness / saturation / quality from the UI in-page, trigger spaced captures, and compare images pairwise; exercise the CIF 400x296 option after G-01-8's fix lands"
+    expected: "Visible differences per setting in captured images; the CIF option executes and captures at 400x296 (currently blocked: CIF 400x296 exceeds the QVGA boot buffer — same defect class as the proven VGA failure)"
+    why_human: "Capture-command execution is hardware-proven end-to-end (all three 01-11 post-fix sessions: CAPTURE_NOW SUCCESS, images transferred and rendered), but the settings-adjustment visible-effect clauses were never operator-judged — the 01-11 attempt hit the G-01-8 defect (SET_RESOLUTION VGA bricked captures until reboot) before any pairwise comparison could be recorded. Sensor acceptance and visual assessment need the physical camera; the UAT routes these clauses to the G-01-8 closure round"
 ---
 
-# Phase 1: Command Protocol & Control Verification Report (Re-verification #4, after UAT gap closure 01-07/01-08/01-09)
+# Phase 1: Command Protocol & Control Verification Report (Re-verification #5, after gap closure 01-10/01-11)
 
 **Phase Goal:** Establish bidirectional LoRa communication for camera control
-**Verified:** 2026-08-23T02:25:45Z
+**Verified:** 2026-08-23T22:45:00Z
 **Status:** gaps_found
-**Re-verification:** Yes — #4, after UAT gap closure (plans 01-07/754f834, 01-08/e16845a+ce24cd8, 01-09/794df00; docs 625581b, review 5366a93 — all six commits verifier-confirmed in git log with exactly the claimed file sets)
+**Re-verification:** Yes — #5, after gap closure (plans 01-10 c9770b1/3fc35a7, 01-11 f265556/678d4f1/91bee03/c67e1a5; tracking 734baab; docs 04e3047/c1aac84/b513bce/48d217e; fresh review de6c813 — all verifier-confirmed in git log with exactly the claimed file sets)
 
 ## Goal Achievement
 
-The previous round's status was `human_needed` with 5 hardware items. All 5 ran: UAT tests 1, 2, 4, 5 PASS; test 3 split into G-01-3 (RESOLVED on hardware) and a new routed residual G-01-5 (thumbnail push-burst loss). The four behavior-unverified truths of round #3 are now hardware-resolved except SC-3's settings clauses. What keeps the phase open is one observed, unresolved hardware failure — G-01-5 — plus the SC-3 spot-checks that ride its bench round.
+Round #4's structured gap G-01-5 is RESOLVED, its escalated sibling G-01-6 is RESOLVED, and WR-01 is closed — all on operator bench evidence this verifier re-checked line-by-line against the raw logs. The re-verification series then honestly surfaced two NEW open gaps: G-01-7 (concurrent-transfer starvation under unspaced captures) and G-01-8 (SET_RESOLUTION to any framesize above the boot-allocated buffer falsely succeeds and fails all captures until reboot). Both are recorded open in 01-UAT.md and WINDOWS entries 3/4 (which correctly keep /gsd-ship blocked), with named levers and missing lists; the ROADMAP routes them to a Phase-1 remediation round before phase complete.
 
-This verifier independently proved every code claim of the three gap plans in source (details below), ran the wire-format harness (49/49, exit 0) and both firmware builds (SUCCESS) at this HEAD, and re-checked all prior-round closures for regression. The 01-09-SUMMARY evidence table was cross-read against 01-UAT.md and the WINDOWS ledger; the three artifacts agree (G-01-3/G-01-4 resolved with operator evidence; G-01-5 open).
+The phase goal itself — bidirectional LoRa command/control with ACK, retry, manual + auto capture — is achieved and hardware-proven on the CURRENT firmware: commands flowed both directions in all three post-fix sessions (CAPTURE_NOW SUCCESS, images transferred, responses ACKed), the gallery grows across reboots for the first time, and the phantom-failure noise that masked real behavior is gone. What keeps the phase open is the same pattern as round #4: image-reliability/settings residuals in the Phase-2 requirement domain (IMG-02/03 reliability, CTRL-02 resolution clause + visible-effect) that this phase's UAT surfaced, plus the SC-3 spot-checks they block.
+
+This verifier independently: read all five code fixes in source (each substantive, at its trace-named site); ran the wire harness (exit 0) and both firmware builds (2 succeeded) at this HEAD; re-ran every regression gate from prior rounds; and re-verified every load-bearing bench quote against the six untracked raw logs — line numbers and counts match exactly (FB-OVF 4,379; chunk FAILED 0/0/0; benign AUX 31/0/90; END MARKER MISS 5 in session 3; IDs 1..5 sequential; gallery 2->3->4->5; the eviction line at balloon2.log:656; 157 sends / 0 FAILED in session 3).
 
 Note on mode: ROADMAP.md marks Phase 1 `Mode: mvp`, but the goal is not in user-story format, so standard goal-backward verification applies (same determination as all prior rounds).
-
-Note on Phase 2 interlock: 02-VERIFICATION.md (2026-08-19) still reads `gaps_found` over CR-01/CR-02 SD-persistence defects — but the fixes landed the same day (81cba6e lazy-open/reopen 12:32, bc34eab flush-before-verify 12:34, both verifier-confirmed in code: image_rx_manager.cpp:516-542 conditional open, :631 flushTransfer before the stored-CRC read-back). The 01-09 bench (2026-08-22/23) therefore flashed fixed firmware — the operator-observed CRC-verified COMPLETE full is consistent, and D-47 (full servable only when its sidecar verified complete) makes the intact render operator-visible proof. Phase 2's own re-verification round remains that phase's business.
 
 ### Observable Truths
 
@@ -73,61 +79,67 @@ Must-haves are the 5 ROADMAP success criteria (roadmap contract governs; plan mu
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | Base station web interface has camera control section with trigger button and settings forms (SC-1) | ✓ VERIFIED | section#capture at main_basestation.cpp:2266-2512 contains all 13 forms (11 control + the two guarded Phase 3 forms); 21 routes registered; queue panel (:2515) and pollOnce (:692) present; the G-01-4 fix makes every control form submit in-page (delegated listener :1511-1578, verifier-read) |
-| 2 | LoRa command packets transmitted from base station to balloon and acknowledged (SC-2) | ✓ VERIFIED | Hardware UAT test 1 PASS (re-test after 1223f46); 01-09 bench: trigger ACKed with both boards at 9.6 kbps; wire format code-proven by harness clauses (f1)-(f4) (byte 2 == 0x11 on ACK/NACK paths, defective variant provably 0x00); response factories still assign the shared constant (command_protocol.cpp:243/:260/:279/:635) |
-| 3 | Balloon receives camera commands and adjusts camera settings accordingly (SC-3) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Capture-command execution hardware-proven end-to-end (01-09 bench: command ACKed, image transferred, CRC-verified full rendered); 7 sensor setters + name-mapped SET path intact at code level (frameSizeFromEsp now at command_handler.cpp:892, used at :653). The settings visible-effect + CIF 400x296 clauses were never explicitly exercised — 01-UAT.md test 3 note routes them to the G-01-5 re-test round. See behavior_unverified_items |
-| 4 | Failed commands are retried with timeout and user is notified (SC-4) | ✓ VERIFIED | Hardware UAT test 2 PASS on degraded link incl. the duplicate-ACK edge (the prior verifier's precondition was met); CR-03 terminal-state guard re-confirmed at this HEAD: command_sender.cpp:410 returns for ACKED/FAILED/TIMEOUT before response storage, decrements, and statistics |
-| 5 | Both manual trigger and interval-based auto-capture work end-to-end (SC-5) | ✓ VERIFIED | Hardware UAT test 4 PASS (exact cadence incl. a value above 30 s, zero captures after ACKed disable, one image-ID sequence, manual trigger throughout); CR-05 regression gates re-run clean at this HEAD: isTimeToCapture 0 project-wide, live captureImage callers only auto_capture.cpp:247 + command_handler.cpp:212, allocateImageId only at those two authorities, the lone CAMERA_CAPTURE_INTERVAL_MS define in balloon_config.h:36 has zero users (dead constant, informational) |
+| 1 | Base station web interface has camera control section with trigger button and settings forms (SC-1) | ✓ VERIFIED | Regression: section#capture forms intact (resolution form at :2320-2337 with all 9 advertised values); delegated in-page submit listener intact (main_basestation.cpp:1529, form.getAttribute('action')); raw literal integrity 2 openers / 2 closers |
+| 2 | LoRa command packets transmitted from base station to balloon and acknowledged (SC-2) | ✓ VERIFIED | Refreshed on current firmware: commands flowed both directions in all three post-fix sessions (balloon.log:255 CAPTURE_NOW SUCCESS et al.; responses returned — the benign-AUX reclassification did not disturb the ACK path); harness wire clauses all green (verifier-run, exit 0) |
+| 3 | Balloon receives camera commands and adjusts camera settings accordingly (SC-3) | ⚠️ PRESENT_BEHAVIOR_UNVERIFIED | Capture-command execution hardware-proven (three post-fix sessions: captures executed, images transferred CRC-verified, rendered); 7 sensor setters + name-mapped SET path intact (frameSizeFromEsp :892, used at :653). The settings visible-effect + CIF clauses remain operator-unjudged — the 01-11 attempt surfaced G-01-8 (SET_RESOLUTION VGA false-SUCCESS + 4,379 FB-OVF + captures dead until reboot) before any pairwise comparison. CIF 400x296 is inside the same defect class (400x296 > boot QVGA buffer). See behavior_unverified_items and gap G-01-8 |
+| 4 | Failed commands are retried with timeout and user is notified (SC-4) | ✓ VERIFIED | Hardware UAT test 2 PASS (degraded link incl. duplicate-ACK edge) stands; CR-03 terminal-state guard re-confirmed intact at this HEAD (command_sender.cpp early-return for ACKED/FAILED/TIMEOUT before response storage, decrements, statistics) |
+| 5 | Both manual trigger and interval-based auto-capture work end-to-end (SC-5) | ✓ VERIFIED | Hardware UAT test 4 PASS stands; CR-05 gates re-run clean (isTimeToCapture 0; live captureImage callers only auto_capture.cpp:280 + command_handler.cpp:212; allocateImageId single authority, now NVS-durable — the one-sequence truth is STRENGTHENED: IDs persist across reboots, bench-proven 1..5) |
 
-**Score:** 4/5 truths verified (1 present, behavior-unverified — routed to the G-01-5 bench round; no truth carries a code gap)
+**Score:** 4/5 truths verified (1 present, behavior-unverified — blocked by open gap G-01-8; no truth carries an un-routed code gap)
 
 ### Deferred Items
 
 | # | Item | Addressed In | Evidence |
 |---|------|-------------|----------|
-| 1 | Full-resolution gallery image viewer (bench wish; presentation-only) | Phase 3 backlog | Todo file on disk: .planning/todos/pending/2026-08-23-full-resolution-gallery-image-viewer.md |
+| 1 | Full-resolution gallery image viewer (bench wish; presentation-only) | Phase 3 backlog | Todo on disk: .planning/todos/pending/2026-08-23-full-resolution-gallery-image-viewer.md |
 | 2 | D-13/D-15 page-layout preferences | Phase 3 | Carried; superseded by the delivered single-page dashboard (WEB-04) |
-| 3 | CR-04 + WR-11 createThumbnail dangling buffer (prior round's must-fix-before-Phase-2-caller) | Phase 2 — CLOSED | Fix verified in code by this verifier: thumbnail.buffer nulled on every failure path (camera_manager.cpp:333/:348); WR-08 downgrade-verify bail (d19b082) |
 
-### Required Artifacts (this round's gap plans 01-07/01-08/01-09)
+### Required Artifacts (this round's gap plans 01-10/01-11)
 
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
-| `src/main_basestation.cpp` (01-07) | Delegated submit listener on section#capture: defaultPrevented + id guards, generic urlencoded serialization, per-form message div, in-flight disabling, fetch(form action), pollOnce after settle | ✓ VERIFIED | :1522 getElementById('capture') delegated listener; :1523 defaultPrevented guard; :1525 alerts-form/wifi-form skip; :1526 preventDefault; :1531-1537 generic serialization over form.elements; :1542-1550 lazily-created js-capture-msg div; :1555 in-flight disable; :1557-1560 fetch to form.getAttribute('action'); :1569 server message only via setText; :1570/:1576 pollOnce on settle AND catch. Insertion strictly inside the HTML_FOOTER raw literal (opener :638; exactly 2 openers / 2 closers in the file); commit 754f834 is 69 insertions, 0 deletions, this file only |
-| `src/e32_lora.cpp` (01-08) | readConfig/writeConfig register frames with bounded reads, echo verification, decoded boot logging; ensureLinkConfig fail-open enforcement in begin() | ✓ VERIFIED | readConfig :313-369 (0xC1 0xC1 0xC1 at :324, 6-byte bounded frame, isConfigHeadByte accepts {0xC0,0xC1,0xC2} at :23-25, decoded cfg boot line :358-365); writeConfigRegisters :376-420 (0xC0 + five registers, echo compared byte-for-byte :406-408 — success ONLY on match); ensureLinkConfig :473-505 called as begin()'s last step :137 before `return true`; fail-open strings :477/:502 present; setParameters/setAddress/setChannel rebuilt as read-modify-write |
-| `include/e32_lora.h` (01-08) | Register-mirrored E32Config; SPED masks per manual; E32_TARGET_AIR_DATA_RATE = 9.6k with retune rationale; corrected 2.4k factory-default comment | ✓ VERIFIED | E32Config = five registers :57-63; masks PARITY 0xC0 [7:6] / BAUD 0x38 [5:3] / AIR 0x07 [2:0] :39-41; RATE_2_4kbps = 0x02 "FACTORY DEFAULT" :91 with the corrected-comment block :85-89; E32_TARGET_AIR_DATA_RATE = RATE_9_6kbps (0x04) :107-108 with the B1/B2/B4 rationale |
-| `include/base_station_config.h` + `include/sd_storage.h` + `src/sd_storage.cpp` (01-09) | SD_MMC 1-bit transport on the built-in slot pins CLK=39/CMD=38/DATA=40 | ✓ VERIFIED | SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_DATA_PIN) sd_storage.cpp:55; SD_MMC.begin("/sdcard", true /*1-bit*/, ...) :62; failure line names the pins :65-67; success verdict 'card mounted, /images ready' :91; constants :41-43; all storage operations (open/write/sidecar/serve/enumerate) on SD_MMC. GPIO39 STATUS_LED coexistence: pinMode at main_basestation.cpp:2060 precedes SDStorage begin |
+| `src/main_balloon.cpp` (c9770b1, WR-01) | Three dummy PowerData sites replaced with validity-gated PowerMgr reads; batteryReadingValid() helper; one-shot validity-transition warning | ✓ VERIFIED | Helper mirrors the beacon idiom ([1.8,8.0] V AND nonzero raw ADC); updateSystemState lowPowerMode gated on valid; processPowerManagement CRITICAL/LOW branches act only inside `if (powerData.valid)` — triggerEmergency/camera-disable unreachable from a floating line; sendTelemetryData reads PowerMgr directly; thresholds ride VOLTS (documented unit-fix deviation). Gates: '0.1f, 85' = 0, 'batteryPercentage = 85' = 0, batteryReadingValid = 3 |
+| `platformio.ini` (3fc35a7) | CDC_ON_BOOT=0 in both production envs (bench observability deviation) | ✓ VERIFIED | Both envs flipped; test envs keep CDC on; documented Rule-3 deviation — balloon3.log demonstrably carries the full ImageTx/CommandHandler discriminator set |
+| `src/e32_lora.cpp` (f265556, branch c / G-01-5) | Missed AUX-low after a COMPLETE write no longer books FAILED; short-write and pre-write readiness stay true failures; benign log line | ✓ VERIFIED | Short-write gate (sent != length) added BEFORE the AUX handshake; missed AUX-low logs 'treated as sent (bytes left the radio)' and returns true; AUX-high timeout and readiness failure untouched; commit message quotes the discriminating lines (per the trace-named-site clause) |
+| `src/auto_capture.cpp` (678d4f1, branch e / G-01-6) | Image-ID counter persisted to NVS across reboot, fail-open | ✓ VERIFIED | Preferences begin(namespace "imgid", readOnly=false); restore lastImageId in begin(); allocateImageId persists BEFORE handing out the ID (a reboot can never re-issue); fail-open guards logged; e-site deviation (auto_capture.cpp, not plan-anticipated sd_storage.cpp) recorded and trace-forced |
+| `include/base_station_config.h` + `src/main_basestation.cpp` (91bee03, R1) | STATUS_LED remapped off SDMMC-owned GPIO 39; edge-gated writes | ✓ VERIFIED | STATUS_LED_PIN 41 (:47) — verifier confirmed 41 named nowhere else on the base pin map (LoRa 14/48/19/20/21, SD_MMC 39/38/40, OLED I2C 1/2); pinMode at :2067; updateLED writes only on level change (static lastWrittenLevel); post-fix base logs contain ZERO __digitalWrite/IO-39 lines (baseline 3,513-9,563/session) |
+| `src/camera_manager.cpp` (c67e1a5, R2) | Thumbnail frame verified QQVGA-sized before enqueue | ✓ VERIFIED | fb->width/height != 160/120 bails through the existing no-thumbnail failure branch (fb returned, thumbnail.buffer nulled — CR-04 pattern preserved, thumbnail.valid = false, settings restored, distinctive log line); never pushes a full-size frame as a "thumbnail" |
+| `01-UAT.md` evidence blocks | G-01-5/G-01-6 resolved with verbatim evidence; G-01-7/G-01-8 opened; Test 3 note updated | ✓ VERIFIED | All discriminator_evidence/verified_by quotes re-checked against the raw logs — exact text, line numbers, and counts |
+| `.planning/WINDOWS.md` | Entry 2 fixed with evidence; entries 3 (G-01-7) / 4 (G-01-8) open | ✓ VERIFIED | Table and JSON copies consistent; /gsd-ship correctly still blocked |
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
 |------|----|----|--------|---------|
-| section#capture submit events (11 control forms) | fetch POST to each form's own action route | one delegated listener; form.getAttribute('action') supplies the route | ✓ WIRED | All 11 control forms verifier-confirmed inside the section (:2266-2512); no route list hardcoded; empty-body forms (/capture, /auto-capture-stop) serialize correctly |
-| fetch response JSON message field | per-form message div + pollOnce() | r.json() → setClass/setText → pollOnce | ✓ WIRED | :1562-1570; sendResponse emits {status,message} (main_basestation.cpp:3651+) — the handler reads j.message, matching the actual shape |
-| E32LoRa::begin (base initLoRa + balloon begin) | ensureLinkConfig → readConfig → conditional writeConfigRegisters → verified echo | ensure step as begin()'s last step | ✓ WIRED | :137; zero main-file changes for the ensure step (verifier: both mains call plain begin() — main_balloon.cpp:474, main_basestation initLoRa); hardware proof: base-only re-flash severed the pair (rate divergence), balloon re-flash restored it — enforcement demonstrably reads and writes real module state |
-| SPED air-rate bits [2:0] | E32_TARGET_AIR_DATA_RATE comparison + masked patch | read-modify-write preserving all other bits/registers | ✓ WIRED | :481-492; mask 0x07, all other SPED bits and ADDH/ADDL/CHAN/OPTION pass through from the fresh read |
-| Manifest/threshold payloads, window ARQ, SD persistence (cross-phase links the bench exercised) | image_rx/tx managers + SD_MMC storage | full-image announce → windowed pull → CRC read-back → sidecar → /img route | ✓ WIRED | Operator-observed end-to-end on hardware at the 01-09 bench; CR-01/CR-02 fixes verified in code (see Goal Achievement note) |
+| E32LoRa::transmit verdict | All TX callers (command responses, image chunks, beacons) | complete-write + missed-AUX-low -> true; short-write -> false | ✓ WIRED | Bench-proven: 0 chunk FAILED across all post-fix sessions while responses were ACKed and every spaced capture completed; real air loss still covered by END-MARKER/CRC + the D-22 window heal on the base (pass-bounded — the bound's edge is honestly routed as G-01-7's tail-chunk friction) |
+| NVS restore in AutoCapture::begin | lastImageId -> allocateImageId (persist-before-issue) -> both capture authorities (auto_capture.cpp:281, command_handler.cpp:218) | single image-ID authority (CR-05 preserved), now durable | ✓ WIRED | Bench-proven: IDs 1..5 sequential across three reboots; gallery index 2->3->4->5 with IMG_00002_*..IMG_00005_* appended (no overwrite) |
+| computeLinkTruth | updateLED edge-gated digitalWrite on GPIO 41 | level written only when it changes | ✓ WIRED | 0 HAL error lines in all post-fix base logs (was thousands/session, ~7-10 ms blocking each) |
+| createThumbnail QQVGA guard | enqueue's no-thumbnail failure branch | dimension check bails honestly (buffer nulled, settings restored) | ✓ WIRED | Correct sizes observed all sessions (1362-1703 B / 7-9 chunks); the guard firing is code-verified only (never needed at bench — expected, noted) |
+| PowerMgr().update() 1s cadence | batteryReadingValid() -> lowPowerMode + CRITICAL/LOW safety branches | validity gate precedes every safety action | ✓ WIRED | 0 'Critical battery' / no Emergency entry / no camera auto-disable across all balloon logs; beacons batt=valid |
+| Delegated section#capture submit listener (01-07, regression) | fetch POST to each form's action + pollOnce | unchanged by this round | ✓ WIRED | Listener at :1529; raw literals intact 2/2 |
 
 ### Data-Flow Trace (Level 4)
 
 | Artifact | Data Variable | Source | Produces Real Data | Status |
 |----------|--------------|--------|--------------------|--------|
-| Per-form message divs | res.msg | sendResponse {status,message} from each POST route | Yes | ✓ FLOWING — server-returned truth only; ACK/terminal wording still comes exclusively from the polled queue |
-| E32 decoded boot line | ADDH/ADDL/SPED/CHAN/OPTION | parsed 6-byte module return frame | Yes | ✓ FLOWING — measured, never assumed; the severance event proves the values are real |
-| Storage tile / gallery | mount state + /images files | SD_MMC.begin verdict + stored sidecars | Yes | ✓ FLOWING — operator-observed OK + CRC-verified full served from the card |
-| Thumbnail render | IMG_{id}_T.JPG | thumbnail push burst + 3-pass heal | Partial | ✗ DISCONNECTED AT BENCH — the burst loses chunks that the heal did not recover (G-01-5); the honest Incomplete badge + corrupt preview IS the real data state, truthfully displayed |
+| Image-ID sequence | lastImageId | NVS namespace imgid (restored at boot, persisted per issue) | Yes | ✓ FLOWING — measured on hardware across three reboots (IDs 2/3/4/5 on boots 2/3; gallery index reflects the appended files) |
+| TX accounting verdict | transmit() return | serial write completeness + AUX handshake | Yes | ✓ FLOWING — verdict now tracks bytes-actually-written; the phantom signal (booked FAILED with data received) is eliminated 0/0/0 vs 41/capture |
+| Telemetry battery fields | batteryVoltage/Current/Percentage | PowerMgr real reads (was fabricated 3.7/0.1/85) | Yes | ✓ FLOWING — beacons carry batt=valid verdicts; the fabricated 85% is gone (grep 0/0) |
+| Gallery grid | index count | SD_MMC index rebuild after each persist | Yes | ✓ FLOWING — index advances 2->3->4->5 on the fixed firmware (was locked at 6 by the ID-reset overwrite) |
+| Thumbnail render (unspaced captures) | IMG_{id}_T.JPG completeness | push burst + heal, gated behind the active full pull, subject to supersede-eviction | Partial | ✗ DISCONNECTED UNDER CONCURRENCY — G-01-7: with spacing every thumbnail completes (4/4); unspaced, the heal starves and is evicted (INCOMPLETE 6/8, eviction line balloon2.log:656); the honest Incomplete badge displays the true state |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| Wire-format regression suite (49 clauses incl. (f1)-(f4) type-byte teeth, img-g type-dispatch incl. WR-12, img-h status layout) | `node scripts/verify_protocol_roundtrip.mjs` (verifier-run) | All PASS, exit 0 | ✓ PASS |
-| Both firmware targets compile | `pio run -e esp32-s3-balloon -e esp32-s3-basestation` (verifier-run) | 2 succeeded (26.5 s / 26.4 s) | ✓ PASS |
-| 01-07 structure gates | defaultPrevented / getElementById('capture') / form.getAttribute('action') / rawliteral openers | present / present / present / exactly 2 (+2 closers); 3 submit listeners total (alerts :1412, wifi :1477, delegated :1522) | ✓ PASS |
-| 01-08 structure gates | 0xC0 frame / 0xC1 0xC1 0xC1 / ensureLinkConfig ≥2 / 'config read failed' / 'modules may mismatch' | all present | ✓ PASS |
-| CR-05 gates (regression, main_balloon changed since round #3 by 1223f46/9916e7c) | isTimeToCapture count; live captureImage/allocateImageId callers | 0; only auto_capture.cpp:247/:248 + command_handler.cpp:212/:218 | ✓ PASS |
-| CR-03 terminal-state guard (regression) | handleResponse early return | command_sender.cpp:410, before storage/decrements/statistics | ✓ PASS |
-| Thumbnail end-to-end at bench range | operator bench observation (01-09 iteration 5) | corrupt + Incomplete badge while full completes | ✗ FAIL (gap G-01-5) |
+| Wire-format regression suite (all clauses incl. type-byte teeth, PRI order gates) | `node scripts/verify_protocol_roundtrip.mjs` (verifier-run) | All PASS, exit 0 | ✓ PASS |
+| Both firmware targets compile at this HEAD | `pio run -e esp32-s3-balloon -e esp32-s3-basestation` (verifier-run) | 2 succeeded (25.9 s / 25.4 s) | ✓ PASS |
+| 01-10/01-11 grep gates | dummy PowerData / batteryReadingValid / STATUS_LED / pacing constants / E32_TARGET_TX_POWER / galleryCountSeen | 0 / 0 / 3 / all four unchanged / 0 matches / latch untouched | ✓ PASS |
+| G-01-5 closure evidence vs raw logs | grep balloon*.log base*.log | phantom FAILED 0/0/0; benign AUX 31/0/90; session-3 finalize verdicts 4/4 COMPLETE at :75/:237/:290/:524; 157 sends / 0 FAILED; END MARKER MISS 5 all recovered | ✓ PASS |
+| G-01-6 closure evidence vs raw logs | grep balloon2/3.log base2/3.log | IDs 2/3/4/5 at :106/:614/:104/:455; gallery 2->3->4->5 at :243/:370/:84/:302/:528; IMG_00002.JPG complete=true at :232 | ✓ PASS |
+| G-01-8 defect reproduction trail | grep balloon.log | SET_RESOLUTION SUCCESS :582; FB-OVF 4,379; CAPTURE_NOW 1x SUCCESS then 4x FAILED | ✗ FAIL (gap G-01-8 — the defect is real, open, and honestly routed) |
+| G-01-7 defect evidence | grep balloon2.log base2.log | eviction line :656; INCOMPLETE 6/8 at :296 and 15/52 at :498; five tail re-requests seq 53/55-59 | ✗ FAIL (gap G-01-7 — real, open, honestly routed) |
+| WR-01 safety watch | grep 'Critical battery' balloon*.log | 0 / 0 / 0; lone 'Emergency Shutdown: Enabled' at balloon.log:56 is the documented boot config echo | ✓ PASS |
 
 ### Probe Execution
 
@@ -137,58 +149,71 @@ No probes declared in any PLAN/SUMMARY; no `scripts/*/tests/probe-*.sh` exists i
 
 | Requirement | Source Plan | Description | Status | Evidence |
 |-------------|------------|-------------|--------|----------|
-| CTRL-01 | 01-02, 01-03, 01-05, 01-06, 01-07 | Trigger camera capture from base station web UI | ✓ SATISFIED | Hardware UAT test 1 + 01-09 bench (trigger ACKed, capture executed); in-page submit removes the UX blocker (G-01-4 closed, WINDOWS entry 1 fixed) |
-| CTRL-02 | 01-03, 01-04, 01-06, 01-07 | Adjust all camera settings remotely | ✓ SATISFIED (code; visible-effect + CIF spot-checks ride G-01-5 round) | 7/7 forms/routes/handlers; SET path name-mapped; GET_STATUS truthful; forms now exercisable in-page — the explicit per-setting bench spot-check is the G-01-5 ride-along |
-| CTRL-03 | 01-03, 01-04, 01-05, 01-07 | Manual + automatic capture modes | ✓ SATISFIED | Hardware UAT test 4 PASS |
-| CTRL-04 | 01-03, 01-04, 01-05, 01-07 | Automatic capture fixed interval timing | ✓ SATISFIED | Hardware UAT test 4 PASS (exact cadence incl. >30 s value — legacy interleave gone, CR-05 gates re-verified) |
-| CTRL-06 | 01-02, 01-03, 01-06 | Failed commands retried with timeout | ✓ SATISFIED | Hardware UAT test 2 PASS incl. duplicate-ACK edge; CR-03 guard intact |
-| PRI-02 | 01-02, 01-06 | Retry mechanism with timeout for failed transmissions | ✓ SATISFIED | Same evidence as CTRL-06 |
+| CTRL-01 | 01-02..01-07, 01-10 | Trigger camera capture from base station web UI | ✓ SATISFIED | All three post-fix bench sessions: CAPTURE_NOW SUCCESS from the dashboard, images transferred and rendered |
+| CTRL-02 | 01-03/04/06/07, 01-10 | Adjust all camera settings remotely | ⚠ PARTIAL — G-01-8 open | 7/7 forms/routes/handlers execute remotely (sensor-level SET path proven, commands ACKed); BUT the resolution clause is defective for advertised values 8-13 (CIF..UXGA all exceed the boot QVGA buffer; VGA proven to brick captures until reboot, false SUCCESS) and the visible-effect clauses are operator-unjudged. Rides the G-01-8 closure round (this verifier's disconfirmation finding: REQUIREMENTS.md marks CTRL-02 Complete — over-optimistic while G-01-8/WINDOWS entry 4 is open) |
+| CTRL-03 | 01-03/04/05/07 | Manual + automatic capture modes | ✓ SATISFIED | Hardware UAT test 4 PASS; unchanged by this round (CR-05 gates clean) |
+| CTRL-04 | 01-03/04/05/07 | Automatic capture fixed interval timing | ✓ SATISFIED | Hardware UAT test 4 PASS (exact cadence incl. >30 s value) |
+| CTRL-06 | 01-02/03/06 | Failed commands retried with timeout | ✓ SATISFIED | Hardware UAT test 2 PASS; CR-03 guard intact at HEAD |
+| PRI-02 | 01-02, 01-06 | Retry mechanism with timeout | ✓ SATISFIED | Same evidence as CTRL-06 |
+| IMG-01/04/05 (gap-plan anchors) | 01-08/09/10/11 | Transmit / chunked ARQ / SD storage | ✓ SATISFIED | Hardware-proven: transfers complete CRC-verified; IMG_00002_*..IMG_00005_* persisted complete=true on SD |
+| IMG-02/IMG-03 (flipped Complete by 01-11) | 01-08..01-11 | Thumbnail displays immediately; full transfers in background | ⚠ SATISFIED WITH OPEN RESIDUAL (G-01-7) | Proven under spaced captures (4/4 kinds COMPLETE, session 3); unspaced captures can starve/evict (2 INCOMPLETE, session 2). Phase-2-mapped requirements — the residual is honestly routed (WINDOWS entry 3 open, ship blocked); the 01-11 flip is defensible only because the ledger governs ship. Noted for the milestone audit |
+| IMG-06 (flipped Complete by 01-11) | 01-10/01-11 | Gallery displays all received images with pagination | ✓ SATISFIED | Gallery grows across reboots for the first time (2->3->4->5); index rebuild after each persist verified in logs |
+| PRI-03 (flipped Complete by 01-11) | 01-08..01-11 | Gracefully handles LoRa bandwidth limitations | ✓ SATISFIED | 9.6 kbps enforcement, windowed ARQ with pass bounds, real air loss measured tiny and self-healed; the operating note (space captures) is documented |
 
-Orphaned requirements: none. The union of `requirements` fields across 01-02..01-09 covers all six Phase-1-mapped IDs (CTRL-01..04, CTRL-06, PRI-02 — REQUIREMENTS.md marks all six Complete, accurate). The additional IDs claimed by the gap plans (IMG-01/02/04/05, PRI-03 in 01-08/01-09) are Phase-2-mapped requirements whose hardware truths surfaced in Phase 1's UAT — IMG-02 honestly remains "Gaps Found" pending G-01-5; no conflict, no orphan.
+Orphaned requirements: none. The six Phase-1-mapped IDs are all claimed across plans and evidenced. The additional IDs claimed by the gap plans (IMG-01..06, PRI-03) are Phase-2-mapped requirements whose hardware truths surfaced in Phase 1's UAT — their flips are recorded above with the honest residual status.
 
-### Plan Prohibition Verdicts (judgment-tier — autonomous, NON-AUTHORITATIVE)
+### Plan Prohibition Verdicts (judgment/backstop-tier — autonomous, NON-AUTHORITATIVE)
 
 | Plan | Prohibition | Verdict | Notes |
 |------|-------------|---------|-------|
-| 01-06 (prior round, flagged) | MUST NOT report fabricated protocol or camera state | **PASS — human-confirmed** | UAT test 5 PASS on hardware; the prior round's non-authoritative flag is resolved with human authority |
-| 01-07 | MUST NOT render fabricated command state (message shows only the server-returned text; terminal wording stays with the polled queue) | PASS (code level, non-authoritative) — flagged, human review recommended | Verifier-read: setText(msg, res.msg \|\| fallback) :1569; handler never authors a state word; bench-corroborated (operator saw server verdicts in-page). Rides the next bench round |
-| 01-08 | MUST NOT fabricate configuration success (echo-verified writes; boot log states measured rates only) | PASS (code level + hardware-corroborated, non-authoritative) — flagged, human review recommended | Echo comparison :406-408 is wired enforcement in the write path; boot logs name measured rates (:358-365, :483, :495). The severance/recovery event on hardware corroborates that reported config state is real. Operator sees the E32 cfg line at every boot — confirm at the next bench session |
-| 01-09 | MUST NOT mark G-01-3 resolved on code-level evidence alone (operator-observed boot line AND completed transfer required) | SATISFIED | Both hardware truths operator-observed and recorded in 01-09-SUMMARY's evidence table (Storage tile OK; capture end-to-end with CRC-verified full rendered from SD) |
+| 01-10 | MUST NOT fabricate image-transfer or config success | PASS (log level, non-authoritative) — flagged, human review recommended | Every tally/verdict quote re-verified against the raw logs by this verifier (counts exact). The two operator-only observations are attributed as operator-reported in the SUMMARY |
+| 01-10 | MUST NOT mark G-01-5/G-01-6 resolved on code-level evidence alone | PASS (non-authoritative) — flagged, human review recommended | Discipline held: both gaps stayed OPEN after 01-10 (evidence round only); closure happened in 01-11 only after operator bench re-verification |
+| 01-10 | MUST NOT let an invalid battery reading trigger emergency or camera-disable | PASS (code + bench watch, non-authoritative) — flagged, human review recommended | Gate precedes every safety action (verifier-read); watch green: 0 'Critical battery' across all logs. Known residual honestly flagged in UAT: a full-scale float (raw 4095) passes the gate — flight-config item, cannot cause a false emergency (reads as healthy, never critical) |
+| 01-11 | MUST NOT change image pacing constants before the discriminator names the mechanism | PASS (machine-checkable) — flagged per autonomous disposition | All four constants unchanged at HEAD (verifier grep: PASSES=3, STALL=8000, PREEMPT=5000, HEAL_IDLE=24000); single-lever discipline held |
+| 01-11 | MUST NOT add a parallel best-effort thumbnail mechanism (D-22 single heal path) | PASS (code level, non-authoritative) — flagged, human review recommended | No new mechanism: R2 is a guard that bails through the existing failure branch; the heal remains the single reliability path |
+| 01-11 | MUST NOT refetch /gallery on every poll (D-36) | PASS (machine-checkable) | Branch d not selected; galleryCountSeen latch untouched (:1618-1645); refetch stays count-driven |
+| 01-11 | MUST NOT fabricate image-transfer or config success | PASS (log level, non-authoritative) — flagged, human review recommended | Both status flips cite operator-observed console lines; this verifier re-verified the quotes against the raw logs |
+| 01-11 | MUST NOT mark G-01-5/G-01-6 resolved on code-level evidence alone | PASS (non-authoritative) — flagged, human review recommended | Three operator bench sessions on fixed firmware precede the flips; residuals NOT force-closed — routed as new open gaps G-01-7/G-01-8 |
 
 ### Anti-Patterns Found
 
-No TBD/FIXME/XXX in any file modified by 01-07/01-08/01-09 (verifier grep clean). Items below are from the fresh 01-REVIEW.md (5366a93) — each material claim was re-derived by this verifier where load-bearing (WR-05 re-read in source; WR-12 cross-checked against harness clauses; the rest accepted at Warning level with the review's file:line evidence). None blocks the phase goal.
+No TBD/FIXME/XXX in any file modified by 01-10/01-11 (verifier grep clean). The one TODO (platformio.ini:75, lora_comm.cpp rewrite note) is git-blamed to 2e10e834 (2026-06-28) — predates the phase, informational. Items below are from the fresh 01-REVIEW.md (de6c813, 0 Critical / 8 Warning / 17 Info); WR-07/WR-08 are the known-open gaps. None blocks the phase goal beyond the structured gaps.
 
 | File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| src/image_rx_manager.cpp | 190-199 | G-01-5: thumbnail heal 3-pass bound + full-pull gate — the push-burst loss path (structured gap above) | 🛑 Gap (routed) | The one open item; discriminator round decides defect vs transport loss vs pacing |
-| src/main_balloon.cpp | 726-727, 804-805, 915-918 | WR-01 (new): dummy PowerData {3.7f, 0.1f, 85, ...} — emergency/low-power branches permanently unreachable; telemetry carries hardcoded 85% | ⚠️ Warning | Inert safety logic + fabricated telemetry value; real voltage exists via PowerMgr and is simply not wired. Recommend routing to the next gap round or Phase 2 close-out — highest-value warning in the set |
-| include/sensor_pins.h | 52 | WR-03 (new): GPIO4 double-assigned (BATTERY_SENSE_PIN vs camera SCCB SDA on ESP32S3_EYE) — 1 Hz analogRead races camera I2C | ⚠️ Warning | Undocumented hardware collision; not the G-01-5 mechanism (the Incomplete badge indicates chunk loss, not sensor corruption — the discriminator will settle it authoritatively), but fix before flight |
-| src/main_balloon.cpp | 574-577 | WR-02 (carried as WR-13): inverted camera health check — warns when camera is healthy | ⚠️ Warning | False diagnostic only |
-| platformio.ini | 259-314 | WR-04 (new): basestation env missing board_build.partitions — 1.2 MB default app partition vs growing web surface | ⚠️ Warning | Builds today; will fail as assets grow |
-| src/e32_lora.cpp | 591-609 | WR-05 (new, 01-08 code, verifier-confirmed): exitConfigMode ignores saved previousMode (dead local) — correct today only because every caller enters from NORMAL | ⚠️ Warning | Comment/code disagreement; breaks silently if a WOR-mode caller ever enters config |
-| src/main_basestation.cpp | 978-979 | WR-06 (new): canvas-fallback centering offsets identically zero (dead geometry math) | ⚠️ Warning | Cosmetic |
-| Carried Info items | — | IN-01..IN-10 from 01-REVIEW (dead code, stale 17-byte comments, seq-wrap edges, control-char JSON escaping, asymmetric RX buffers, at-least-once re-execution, blocking AUX waits, /api/state side effect, weak AP default) | ℹ️ Info | None in a Phase 1 must-have domain; PRI/IN-10 overlap the pending /gsd-secure-phase 1 gate |
-
-Closed since the prior verification: WR-12 (receive-side type validation) — now wired and harness-proven (img-g clauses: balloon discards CRC-valid 0x11 frames, base discards 0x10, both discard unknown 0x77); WR-07 (E32 config API contradicted datasheet / setChannel silent no-op) — eliminated by 01-08's register rewrite; CR-04/WR-11 — fixed in Phase 2 (verifier-confirmed).
+| src/image_tx_manager.cpp | 693, 798-801 | G-01-7: FULL window request evicts older entries mid-flight — concurrent-transfer starvation | 🛑 Gap (routed) | Structured gap above; interim mitigation documented (space captures) |
+| src/camera_manager.cpp | 397-416 | G-01-8: setFrameSize sensor-only — no buffer realloc/bound | 🛑 Gap (routed) | Structured gap above; UI advertises 6 unsafe values (8-13) |
+| src/command_protocol.cpp | 165-179 | WR-06 (new): serializeResponse silently drops an oversize payload while the header advertises it (latent — createResponsePacket clamps to 50) | ⚠️ Warning | Public protocol API asymmetry vs the fixed serializeCommand; harness should grow the rejection clause. Recommend folding into the next gap round or /gsd-secure-phase 1 |
+| src/main_balloon.cpp | 574-577 | WR-01(review): inverted camera health check — warns when camera healthy (persists) | ⚠️ Warning | False diagnostic only |
+| include/sensor_pins.h | 52 | WR-02(review): GPIO4 double-assigned (battery ADC vs camera SCCB SDA on ESP32S3_EYE) | ⚠️ Warning | Undocumented hardware collision; note — with WR-01(c9770b1) the 1 Hz analogRead now feeds real safety logic, raising this pin's stakes; fix before flight |
+| platformio.ini | (basestation env) | WR-03(review): basestation env missing board_build.partitions — 1.2 MB default app partition vs growing web surface | ⚠️ Warning | Builds today (verifier-run); will fail as assets grow |
+| src/e32_lora.cpp | 591-609 | WR-04(review): exitConfigMode ignores saved previousMode (dead local) | ⚠️ Warning | Correct today only because every caller enters from NORMAL |
+| src/main_basestation.cpp | 978-979 | WR-05(review): canvas-fallback centering offsets identically zero | ⚠️ Warning | Cosmetic |
+| Carried Info items | — | IN-01..IN-17 from 01-REVIEW (dead code, stale comments, seq-wrap edges, control-char JSON escaping, RX buffering, at-least-once re-execution, blocking AUX waits, oversize-drop latent edge, weak AP default, etc.) | ℹ️ Info | None in a Phase-1 must-have domain; IN-10/weak-AP overlap the pending /gsd-secure-phase 1 gate |
 
 ### SUMMARY vs Reality
 
-1. 01-07/01-08/01-09 SUMMARY claims reproduce on this verifier's own reads, greps, harness run, and builds: all six commits exist with exactly the claimed file sets (754f834: 69 insertions in main_basestation.cpp only; e16845a/ce24cd8: e32_lora.{h,cpp} only; 794df00: the three SD files only); the delegated listener, register protocol, enforcement, and SD_MMC transport are all substantive and as described.
-2. The 01-08 manual-conformance deviation (SPED [7:6]/[5:3]/[2:0], HEAD echo 0xC0/0xC2) is visible in the code with the manual citations, and the bench severance event validates that the layout and writes are real.
-3. The 01-09 evidence table honestly marks what was NOT satisfied (thumbnail clause residual; discriminator traces partial; two operator questions unanswered and correctly deemed non-load-bearing) — no claim stretching found.
-4. 01-REVIEW.md (5366a93) was treated as claims: WR-05 re-derived in source (confirmed), WR-12 cross-checked against the harness (confirmed wired), the G-01-5-adjacent WR-03 examined against the Incomplete-badge mechanism (review itself does not claim it as the cause). Its "verified clean" list matches this verifier's independent findings on the probed surfaces.
-5. REQUIREMENTS.md marks CTRL-01..04/CTRL-06/PRI-02 Complete — accurate; IMG-02 stays Gaps Found, correctly tied to G-01-5.
+1. 01-10/01-11 SUMMARY claims reproduce on this verifier's own reads, greps, harness run, builds, and log checks: all seven commits exist with exactly the claimed file sets (c9770b1 main_balloon.cpp only; 3fc35a7 platformio.ini only; f265556 e32_lora.cpp only; 678d4f1 auto_capture.cpp only; 91bee03 the two base files; c67e1a5 camera_manager.cpp only; 734baab STATE.md only).
+2. Every load-bearing bench quote is verbatim-accurate against the raw logs, including line numbers (SET_RESOLUTION :582; eviction :656; IDs :106/:614/:104/:455; finalize verdicts :68/:186/:75/:237/:290/:524; gallery index :243/:370/:84/:302/:528) and counts (FB-OVF 4,379; FAILED 0/0/0; AUX-missed 31/0/90; END MARKER MISS 5; sends 157; IO-39 flood 0). The tallies reconciled in the SUMMARY's Issues section (46 vs "48 chunks", 5+1 vs "six re-requests") match the logs' measured counts.
+3. The two closures are honest: G-01-5 flipped only after mechanism-specific (phantom FAILED -> 0) AND truth-specific (spaced captures 4/4 COMPLETE) evidence; G-01-6 flipped after three-reboot persistence proof. The two new residuals were NOT absorbed into the closures — they are new open gaps with named levers.
+4. Deviations are all recorded, none silent: the volts-vs-percentage unit fix (c9770b1), the CDC log consolidation (3fc35a7, Rule 3), the two e-site deviations (trace-named-site clause), the operator-approved deferral of the settings series to 01-11, and the separation-series replacement (B5 falsified by close-range completions — no residual left for separation to explain).
+5. 01-REVIEW.md (de6c813) claims were spot-re-derived: WR-01-closure sighting matches this verifier's code read; WR-06's oversize-drop confirmed at command_protocol.cpp:165-179 (latent, clamped upstream); WR-07/WR-08 are the routed gaps — consistent.
+6. REQUIREMENTS.md marks CTRL-01..04/CTRL-06/PRI-02 Complete — accurate except CTRL-02 is over-optimistic while G-01-8 keeps its resolution clause defective (see Requirements Coverage); IMG-02/IMG-03 flips carry the honest G-01-7 residual in the ledger.
 
 ### Gaps Summary
 
-One gap: **G-01-5 — thumbnail push-burst loss** (structured in frontmatter for `/gsd-plan-phase --gaps`). It is an observed hardware failure (corrupt preview + honest Incomplete badge while the full completes CRC-verified), classified B2/B4-class transport loss with the discriminating serial traces not yet captured, so the precise mechanism (air loss vs saturation/margin vs servicing defect) is unnamed. Its closure round is already enumerated in 01-UAT.md: bench discriminator capture, second-capture re-test, conditional pacing levers (01-08's armed follow-up), and the ride-along SC-3 spot-checks (settings visible-effect + CIF 400x296) which also clear this report's one behavior-unverified truth. WINDOWS ledger entry 2 (open) blocks /gsd-ship until it closes — correctly.
+Two gaps, both real, both verified at code level AND log level, both already honestly routed by the project (01-UAT.md entries, WINDOWS 3/4 open, ROADMAP promises a remediation round before phase complete):
 
-Everything else is green: 4/5 SCs verified (three of them now on hardware evidence, not just code), all requirements satisfied, all artifacts substantive and wired, all key links connected, harness 49/49, both builds SUCCESS, no debt markers, prior closures regression-intact, and the prior round's flagged prohibition human-confirmed. The phase goal — bidirectional LoRa command/control with ACK, retry, manual + auto capture — is achieved and hardware-proven; what remains is a Phase-2-domain image-reliability residual that surfaced in this phase's UAT, honestly routed, plus its ride-along spot-checks.
+1. **G-01-7 — concurrent-transfer starvation.** A new capture's window traffic supersedes/evicts the previous image's pending heal (balloon2.log:656) and the heal starves behind its own full pull; unspaced captures produced 2 INCOMPLETE verdicts while spaced captures completed 4/4 — concurrency discriminated as the mechanism. Lever named: serialize transfers / never evict a pending heal; interim mitigation documented (space captures).
+2. **G-01-8 — SET_RESOLUTION buffer-realloc defect.** setFrameSize changes only the sensor framesize; values above the boot QVGA buffer (advertised 8-13, VGA proven) falsely SUCCEED, flood FB-OVF, and fail all captures until reboot. Blocks UAT Test 3's settings visible-effect + CIF clauses — the same clauses that keep SC-3 behavior-unverified.
 
-Recommended next step: `/gsd-plan-phase 1 --gaps` (G-01-5 discriminator + pacing round, operator bench session), then `/gsd-secure-phase 1` (WR-08/IN-10 scope). Consider folding WR-01 (inert battery safety) into the same round.
+Everything else is green: 4/5 SCs verified (round #4's gap G-01-5 and sibling G-01-6 closed on operator evidence this verifier re-checked against the raw logs; WR-01 closed with a green safety watch), all artifacts substantive and wired, all key links connected, harness exit 0, builds 2/2, no debt markers, all prior closures regression-intact, single-lever discipline held (pacing constants untouched — the discriminator-driven routing was respected exactly).
+
+The phase goal — bidirectional LoRa command/control with ACK, retry, manual + auto capture — is achieved and hardware-proven on current firmware. What remains is the same class as round #4's residual: image-reliability/settings residuals in the Phase-2 requirement domain that this phase's UAT surfaced, honestly routed with the ledger keeping /gsd-ship blocked, plus the SC-3 spot-checks they block.
+
+Recommended next step: `/gsd-plan-phase 1 --gaps` (G-01-7 serialization + G-01-8 buffer bound, with the SC-3 ride-along spot-checks), then `/gsd-secure-phase 1` (WR-06 + IN-10 scope; consider WR-02 GPIO4 and the ADC full-scale float note for flight config).
 
 ---
 
-_Verified: 2026-08-23T02:25:45Z_
+_Verified: 2026-08-23T22:45:00Z_
 _Verifier: Claude (gsd-verifier)_
