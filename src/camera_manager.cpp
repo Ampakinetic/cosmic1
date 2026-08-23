@@ -337,6 +337,29 @@ bool CameraManager::createThumbnail(const ImageData& source, ThumbnailData& thum
         return false;
     }
 
+    // 01-11 ride-along R2 (thumbnail-sizing quirk): verify the frame itself
+    // came back at the requested QQVGA size. WR-08 verified the SETTERS'
+    // return values, but the v3 bench trace shows the sensor can accept the
+    // downgrade and still deliver a full-settings frame — 'Camera: Thumbnail
+    // created, size: 7138 bytes' byte-equal to the QVGA full (balloon3.log
+    // :131-132), pushing a second full-size image as a "thumbnail" (36
+    // chunks instead of v2's correct 1465 B / 8 chunks). A wrong-size frame
+    // bails honestly through the same failure path the enqueue's
+    // no-thumbnail branch already handles — never a full-size "thumbnail".
+    if (fb->width != 160 || fb->height != 120) {
+        if (DEBUG_CAMERA) {
+            Serial.printf("Camera: thumbnail frame came back %ux%u (expected 160x120 QQVGA) - settings did not take; no thumbnail captured\n",
+                         static_cast<unsigned>(fb->width),
+                         static_cast<unsigned>(fb->height));
+        }
+        esp_camera_fb_return(fb);
+        thumbnail.buffer = nullptr;
+        thumbnail.valid = false;
+        setFrameSize(originalSize);
+        setQuality(originalQuality);
+        return false;
+    }
+
     // Allocate exactly the captured size — after the bytes exist
     thumbnail.buffer = (uint8_t*)malloc(fb->len);
     if (!thumbnail.buffer) {
