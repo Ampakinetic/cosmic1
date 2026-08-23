@@ -698,6 +698,16 @@ bool checkHardwareStatus() {
 // Main Loop Functions
 // ===========================
 
+// Battery reading validity gate (WR-01) — mirrors the telemetry beacon's
+// idiom (image_tx_manager.cpp): a reading is truth only when the voltage
+// is physically plausible ([1.8, 8.0] V) AND the sense line's raw ADC read
+// is nonzero. A floating or absent sense line must never drive a safety
+// branch (emergency / camera-disable) or fabricate a pack into state.
+static bool batteryReadingValid() {
+    float voltage = PowerMgr().getBatteryVoltage();
+    return (voltage >= 1.8f && voltage <= 8.0f && analogRead(BATTERY_SENSE_PIN) != 0);
+}
+
 void updateSystemState() {
     SysState().update();
     
@@ -723,9 +733,19 @@ void updateSystemState() {
                           currentMode == SystemMode::APEX_DETECTED || 
                           currentMode == SystemMode::DESCENT);
     
-    // Update low power mode - use dummy data for now
-    PowerData powerData = {3.7f, 0.1f, 85, millis(), true};
-    appState.lowPowerMode = (powerData.batteryPercentage < BATTERY_LOW_THRESHOLD);
+    // Update low power mode from the real PowerMgr reading (WR-01).
+    // BATTERY_LOW_THRESHOLD is a voltage (balloon_config.h: 3.3 V), so the
+    // comparison rides the measured voltage; an invalid reading (floating
+    // sense line) leaves lowPowerMode false — prior availability preserved.
+    PowerData powerData = {
+        PowerMgr().getBatteryVoltage(),
+        PowerMgr().getTotalCurrent(),
+        static_cast<uint8_t>(PowerMgr().getBatteryPercentage()),
+        millis(),
+        batteryReadingValid()
+    };
+    appState.lowPowerMode = (powerData.valid &&
+                             powerData.batteryVoltage < BATTERY_LOW_THRESHOLD);
     
     // Update GPS status
     GPSData gpsData = Sensors().getGPSData();
@@ -801,25 +821,50 @@ void processPowerManagement() {
         PowerMgr().update();
     }
 
-    // Check power status - use dummy data for now
-    PowerData powerData = {3.7f, 0.1f, 85, millis(), true};
-    
-    // Update subsystem states based on power
-    if (powerData.batteryPercentage < BATTERY_CRITICAL_THRESHOLD) {
-        SYS_ERROR("Critical battery level: %d%%", powerData.batteryPercentage);
-        
-        // Enter emergency mode if not already
-        if (!SysState().isEmergencyActive()) {
-            SysState().triggerEmergency("Critical battery level");
-        }
-    } else if (powerData.batteryPercentage < BATTERY_LOW_THRESHOLD) {
-        SYS_WARNING("Low battery level: %d%%", powerData.batteryPercentage);
-        
-        // Disable non-critical systems
-        if (appState.cameraActive) {
-            Camera().enableCamera(false); // Use correct method
-            appState.cameraActive = false;
-            SYS_INFO("Camera disabled due to low power");
+    // Check power status from the real PowerMgr reading (WR-01). The
+    // safety branches below act ONLY on a validity-gated reading — a
+    // floating or garbage sense line must NEVER triggerEmergency() or
+    // disable the camera mid-bench/mid-flight (T-01-10-02). Thresholds
+    // are voltages (balloon_config.h), so the comparisons ride voltage.
+    PowerData powerData = {
+        PowerMgr().getBatteryVoltage(),
+        PowerMgr().getTotalCurrent(),
+        static_cast<uint8_t>(PowerMgr().getBatteryPercentage()),
+        millis(),
+        batteryReadingValid()
+    };
+
+    // Announce validity TRANSITIONS once (never per-loop spam) so a
+    // floating sense line is visible in the log without flooding it.
+    static bool lastBatteryReadingValid = powerData.valid;
+    if (powerData.valid != lastBatteryReadingValid) {
+        lastBatteryReadingValid = powerData.valid;
+        SYS_WARNING("Battery reading validity %s (measured %.2f V) — safety branches %s",
+                    powerData.valid ? "restored" : "lost",
+                    powerData.batteryVoltage,
+                    powerData.valid ? "active" : "inhibited");
+    }
+
+    // Update subsystem states based on power (validity-gated)
+    if (powerData.valid) {
+        if (powerData.batteryVoltage < BATTERY_CRITICAL_THRESHOLD) {
+            SYS_ERROR("Critical battery level: %.2f V (%d%%)",
+                      powerData.batteryVoltage, powerData.batteryPercentage);
+
+            // Enter emergency mode if not already
+            if (!SysState().isEmergencyActive()) {
+                SysState().triggerEmergency("Critical battery level");
+            }
+        } else if (powerData.batteryVoltage < BATTERY_LOW_THRESHOLD) {
+            SYS_WARNING("Low battery level: %.2f V (%d%%)",
+                        powerData.batteryVoltage, powerData.batteryPercentage);
+
+            // Disable non-critical systems
+            if (appState.cameraActive) {
+                Camera().enableCamera(false); // Use correct method
+                appState.cameraActive = false;
+                SYS_INFO("Camera disabled due to low power");
+            }
         }
     }
     
@@ -912,10 +957,15 @@ void sendTelemetryData() {
     telemetryData.pressure = sensorData.pressure;
     telemetryData.humidity = 0.0f; // Not available from BMP280
     
-    // Power data - create dummy values for now
-    telemetryData.batteryVoltage = 3.7f;
-    telemetryData.batteryCurrent = 0.1f;
-    telemetryData.batteryPercentage = 85;
+    // Power data from PowerMgr (WR-01) — telemetry reports the real
+    // measured values. Deliberately NOT validity-gated here: validity is
+    // the telemetry beacon's contract (image_tx_manager.cpp); this legacy
+    // packet path mirrors the raw PowerMgr readings. rssi keeps its -85
+    // default below — the E32 provides no RSSI (documented limitation,
+    // separate from WR-01).
+    telemetryData.batteryVoltage = PowerMgr().getBatteryVoltage();
+    telemetryData.batteryCurrent = PowerMgr().getTotalCurrent();
+    telemetryData.batteryPercentage = static_cast<uint8_t>(PowerMgr().getBatteryPercentage());
     
     telemetryData.uptime = millis();
     telemetryData.rssi = -85; // Default RSSI
