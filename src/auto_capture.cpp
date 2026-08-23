@@ -3,6 +3,7 @@
 #include "system_state.h"     // SysState() — flight-phase machine
 #include "image_protocol.h"   // CaptureSource values for source stamping
 #include <TinyGPSPlus.h>      // distanceBetween static helper (research A2)
+#include <Preferences.h>      // NVS — durable image-ID sequence (01-11, G-01-6)
 
 // Debug configuration
 #ifndef DEBUG_AUTO_CAPTURE
@@ -17,6 +18,23 @@ static AutoCapture autoCaptureInstance;
 AutoCapture& AutoCap() {
     return autoCaptureInstance;
 }
+
+// ===========================
+// Image-ID Persistence (01-11 branch e / G-01-6)
+// ===========================
+//
+// The image-ID counter was RAM-only: every reboot re-allocated ID 1, so a
+// fresh-boot balloon's IMG_00001_* filenames OVERWROTE the card's existing
+// image-1 files on the base ('CommandHandler: Captured image ID 1' on every
+// fresh-boot session — balloon3.log:127; proven twice at the 01-10 bench
+// with 4/4 COMPLETE transfers while /gallery stayed frozen at 6). NVS keeps
+// the counter past reboot so captures append (IMG_00002_*) instead.
+// File-scope on purpose: no header surface, callers unchanged.
+
+static Preferences imageIdPrefs;          // NVS handle (namespace below)
+static bool imageIdPrefsOpen = false;     // fail-open guard (NVS hiccup)
+static const char kImageIdNamespace[] = "imgid";
+static const char kImageIdKey[] = "last";
 
 // ===========================
 // Constructor
@@ -48,6 +66,21 @@ bool AutoCapture::begin(CameraManager* camera) {
     }
 
     this->camera = camera;
+
+    // 01-11 (G-01-6): restore the durable image-ID sequence so a fresh-boot
+    // balloon APPENDS instead of re-issuing ID 1. Fail-open: first boot (no
+    // stored value) or an NVS failure degrades to the old RAM-only behavior
+    // — a capture is never blocked by the persistence layer.
+    imageIdPrefsOpen = imageIdPrefs.begin(kImageIdNamespace, false);
+    if (imageIdPrefsOpen) {
+        lastImageId = imageIdPrefs.getUShort(kImageIdKey, 0);
+        if (DEBUG_AUTO_CAPTURE && lastImageId > 0) {
+            Serial.printf("AutoCapture: image ID sequence restored from NVS - next capture is ID %u\n",
+                          static_cast<unsigned>(lastImageId) + 1);
+        }
+    } else if (DEBUG_AUTO_CAPTURE) {
+        Serial.println("AutoCapture: NVS unavailable - image IDs will NOT survive reboot (fail-open)");
+    }
 
     if (DEBUG_AUTO_CAPTURE) {
         Serial.println("AutoCapture: Initialized");
@@ -267,5 +300,15 @@ bool AutoCapture::fire(uint8_t captureSource) {
 uint16_t AutoCapture::allocateImageId() {
     // Single sequence shared by manual (CAPTURE_NOW) and automatic captures;
     // wraps at 65535 (Phase 2 image sequencing owns durable IDs)
-    return ++lastImageId;
+    ++lastImageId;
+
+    // 01-11 (G-01-6): persist BEFORE handing out the ID — a reboot after a
+    // capture must never re-issue the same ID (that re-issue is the
+    // overwrite bug). A failed write degrades to RAM-only behavior (logged
+    // once per boot in begin()); the capture itself always proceeds.
+    if (imageIdPrefsOpen) {
+        imageIdPrefs.putUShort(kImageIdKey, lastImageId);
+    }
+
+    return lastImageId;
 }
