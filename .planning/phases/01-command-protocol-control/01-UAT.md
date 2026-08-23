@@ -3,7 +3,7 @@ status: diagnosed
 phase: 01-command-protocol-control
 source: [01-VERIFICATION.md]
 started: 2026-08-18T11:14:05Z
-updated: 2026-08-23T01:50:00Z
+updated: 2026-08-23T05:30:00Z
 ---
 
 ## Current Test
@@ -124,7 +124,28 @@ blocked: 0
     - "Re-test whether a SECOND capture's thumbnail arrives intact (per-burst vs systematic loss)"
     - "If B4 push-burst saturation persists: pacing levers per 01-08's deferred follow-up condition (image_tx/rx margins, heal pass bound, window size)"
     - "Ride-along closure of Test 3's untested clauses: settings-visibility + CIF 400x296 spot-check (images only now flow end-to-end)"
+    - "ESCALATION (post-closure operator report, 2026-08-23): 'The picture transmission seems unreliable, the balloon module is a few meters away but a lot of the pictures end up incomplete.' Fulls are now ALSO failing frequently at close range — this weakens the earlier 'full always completes' premise that down-weighted B3, and adds a close-range-specific candidate mechanism B5: 30 dBm PA a few meters from the receiver can saturate the E32 front end (RX overload/desense) — cheap discriminator: repeat the capture series at greater separation or with reduced TX power and compare the incomplete rate. Record capture-count vs complete-count over the series as the reliability metric"
   debug_session: .planning/debug/storage-unavailable-image-tx-timeout.md
+
+- gap_id: G-01-6
+  truth: "The dashboard Image Gallery grows as new captures persist — grid, pager, and count reflect every finalized image (12 per page, newest first)"
+  status: open
+  reason: "Operator report (2026-08-23, continued bench after the 01-09 session): 'The gallery is not expanding to show new pictures, it's locked at 6 pictures.'"
+  severity: major
+  test: 3
+  root_cause: "Undiagnosed — captured for the gap-planning round. Code-read triage: the server path looks sound (handleGalleryList main_basestation.cpp:3461-3523 pages 12/req via SD_GALLERY_PAGE_SIZE; index cap is 1000 with newest-window eviction sd_storage.cpp:532-545; lazy rebuild keyed on indexVersion sd_storage.cpp:569-573). The UI refresh contract is the leading suspect surface: '/api/state's galleryCount is the ONLY refresh signal' for the grid (main_basestation.cpp:1603-1615, D-36) — if the served galleryCount stops advancing (or advances on fewer paths than persistence does), the grid never re-fetches and stays frozen at whatever it last rendered. Competing mechanism: later captures finalize INCOMPLETE and never persist files to SD (index legitimately never grows) — plausible given G-01-5's escalated loss rate, in which case G-01-6 is a symptom of G-01-5, not a separate defect."
+  artifacts:
+    - path: "src/main_basestation.cpp"
+      issue: "gallery refresh signal — galleryCount served in /api/state (D-36, :3317) vs the footer script's galleryCountSeen comparison (:1603-1615); verify count source and every path that bumps it"
+    - path: "src/sd_storage.cpp"
+      issue: "indexVersion bump sites — every persist path (full, thumb, sidecars, finalize) must mark the index stale or ensureIndexCurrent() never rebuilds (:569-573)"
+    - path: "src/image_rx_manager.cpp"
+      issue: "finalize path — do INCOMPLETE captures persist indexed files (partials streamed during reception) or none? Determines whether G-01-6 can be a G-01-5 symptom"
+  missing:
+    - "Zero-tooling discriminator: fetch http://192.168.4.1/gallery?page=1 directly (browser address bar) and compare the JSON 'total' against the dashboard grid count — total > grid means the refresh signal (galleryCount) is stale; total == 6 == grid means persistence/indexing stopped (G-01-5 symptom until proven otherwise)"
+    - "If persistence stopped: check /images on the card (eject or /gallery/{id} spot-checks) for files newer than the 6th image; base console 'ImageRx: ... finalized' lines around later captures name the finalize verdicts"
+    - "If refresh signal stale: trace which code paths bump the served galleryCount vs which persist (D-36 contract) and reconcile"
+  opened_at: 2026-08-23
 
 - gap_id: G-01-4
   truth: "Pressing Auto Capture Enable or Trigger Camera Capture submits in-page (AJAX) and the operator stays on the admin page with the result reflected in the queue/status UI"
