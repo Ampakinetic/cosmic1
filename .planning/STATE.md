@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 11
+current_plan: "11 (01-11: branch-conditional remediation — AUX handshake accounting fix + image-ID persistence + GPIO39 LED cleanup ride-along)"
 status: executing
-stopped_at: "Completed 01-10-PLAN.md: discriminator round recorded — G-01-5 mechanism named (E32 AUX phantom TX-failure, B5 downgraded), G-01-6 branch confirmed (image-ID reboot overwrite), WR-01 closed at code level + watch green. Gaps stay OPEN; remediation + bench re-verification in 01-11. Next: /gsd-progress to 01-11, then security gate"
-last_updated: "2026-08-23T09:23:58.531Z"
+stopped_at: "01-11 Task 2 COMPLETE (branch-c f265556 + branch-e 678d4f1 + ride-alongs R1 91bee03 / R2 c67e1a5; builds 2/2 + harness 49/49 green). Task 3 bench re-verification PENDING OPERATOR: reflash both boards together, before/after tallies vs 01-10 baseline (phantom-FAILED should collapse to ~0), gallery-growth check (capture -> /gallery total INCREMENTS now), PRI-01 cadence watch, deferred spot-checks (settings visible-effect, CIF 400x296, close-vs-separated quantification). Do not write SUMMARY until Task 3 lands"
+last_updated: "2026-08-23T21:24:41.411Z"
 progress:
   total_phases: 3
   completed_phases: 2
@@ -29,7 +29,7 @@ current_phase_name: command-protocol-control
 
 **Current Plan:** 11 (01-11: branch-conditional remediation — AUX handshake accounting fix + image-ID persistence + GPIO39 LED cleanup ride-along)
 **Total Plans in Phase:** 11
-**Status:** Ready to execute
+**Status:** Task 2 COMPLETE (branch-c f265556 + branch-e 678d4f1 + R1 91bee03 + R2 c67e1a5; builds 2/2 + harness 49/49 green) — Task 3 bench re-verification PENDING OPERATOR (reflash both boards, before/after tallies vs 01-10, gallery-growth check, PRI-01 watch, deferred spot-checks)
 **Progress:** [█████████░] 90% (Phases 2+3: all plans executed; Phase 1: 10 of 11 — G-01-5/G-01-6 mechanisms diagnosed, remediation next)
 
 ## Progress
@@ -124,9 +124,9 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-23T09:23:58.471Z
-**Stopped at:** Completed 01-10-PLAN.md: discriminator round recorded — G-01-5 mechanism named (E32 AUX phantom TX-failure, B5 downgraded), G-01-6 branch confirmed (image-ID reboot overwrite), WR-01 closed at code level + watch green. Gaps stay OPEN; remediation + bench re-verification in 01-11. Next: /gsd-progress to 01-11, then security gate
-**Resume file:** None
+**Last session:** 2026-08-23T21:24:41.354Z
+**Stopped at:** 01-11 Task 2 COMPLETE (branch-c f265556 + branch-e 678d4f1 + ride-alongs R1 91bee03 / R2 c67e1a5; builds 2/2 + harness 49/49 green). Task 3 bench re-verification PENDING OPERATOR: reflash both boards together, before/after tallies vs 01-10 baseline (phantom-FAILED should collapse to ~0), gallery-growth check (capture -> /gallery total INCREMENTS now), PRI-01 cadence watch, deferred spot-checks (settings visible-effect, CIF 400x296, close-vs-separated quantification). Do not write SUMMARY until Task 3 lands
+**Resume file:** .planning/phases/01-command-protocol-control/01-11-PLAN.md
 
 ## Performance Metrics
 
@@ -197,3 +197,4 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: [Phase 01]: 01-10: G-01-5 mechanism is a FOURTH class — E32 AUX handshake phantom transmit-failure (e32_lora.cpp:223 write-then-:227-wait books FAILED after bytes left; v3 balloon 37 sent/41 FAILED while base received 72/72, 4/4 kinds COMPLETE); B5 close-range RX-overload NOT reproduced (downgraded); 01-08 pacing levers stay unpulled — the AUX accounting fix is the remediation lever
 - [Phase ?]: [Phase 01]: 01-10: G-01-6 = image-ID reboot reset — fresh-boot balloon re-allocates ID 1 and overwrites IMG_00001_* (proven twice with perfect transfers); remediation is persisting the counter or deriving next ID from card state at boot, rides 01-11
 - [Phase ?]: 01-10: GPIO39 STATUS_LED hot-loop error flood (esp32-hal-gpio __digitalWrite warning, 9563/3513/6122 lines per session, ~7-10 ms blocking each; updateLED READY/NO_LINK branches write every pass) routed to 01-11 as ride-along cleanup — NOT the loss mechanism; thumbnail-sizing quirk (v3 thumb 7138 B == full) flagged for the same round
+- [Phase 01]: 01-11 Task 2 executed branch-c + branch-e + ride-alongs R1/R2 (operator-confirmed routing): AUX phantom-failure accounting fixed (f265556 - missed AUX-low after a complete write no longer books FAILED; short-write and pre-write readiness stay true failures), image-ID counter persisted to NVS (678d4f1 - fresh-boot captures append IMG_00002_* instead of overwriting; fail-open), STATUS_LED remapped 39->41 + edge-gated writes (91bee03 - kills the 3.5k-9.6k-line/session HAL error flood), thumbnail QQVGA frame-dimension guard (c67e1a5 - full-size frames bail honestly instead of pushing as thumbnails). Builds 2/2 + harness 49/49 green. e-site deviation: trace named balloon auto_capture.cpp, not the plan-anticipated sd_storage.cpp (trace-named-site clause) — 01-10 discriminator evidence: E32 AUX handshake phantom TX-failure named as the G-01-5 mechanism; image-ID reboot reset named as the G-01-6 mechanism; single-lever discipline held (no pacing constants touched)
