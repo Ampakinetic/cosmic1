@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 9/11 plans executed
+**Plans:** 11/11 plans executed (all waves + the UAT gap-closure rounds 01-07..01-11; tracer 01-01's summary at 01-01-SUMMARY.md. G-01-5/G-01-6 RESOLVED at the 01-11 bench round 2026-08-24; new gaps G-01-7/G-01-8 open — remediation round + `/gsd-secure-phase 1` before phase complete)
 
 Plans:
 **Wave 1**
@@ -81,7 +81,7 @@ Plans:
 
 **Wave 8** *(blocked on Wave 7)*
 
-- [ ] 01-11-PLAN.md — G-01-5/G-01-6 gap closure (remediation): routing decision from 01-10 evidence -> single-lever branch implementation (a: image_protocol.h pacing / b: E32_TARGET_TX_POWER enforcement / c: heal-servicing defect / d: galleryCountSeen latch reset / e: persistence-index fix / close) + bench re-verification with before/after tallies (IMG-02, IMG-03, IMG-06, PRI-03)
+- [x] 01-11-PLAN.md — G-01-5/G-01-6 gap closure (remediation): routing decision from 01-10 evidence -> single-lever branch implementation (a: image_protocol.h pacing / b: E32_TARGET_TX_POWER enforcement / c: heal-servicing defect / d: galleryCountSeen latch reset / e: persistence-index fix / close) + bench re-verification with before/after tallies (IMG-02, IMG-03, IMG-06, PRI-03)
 
 ### Phase 2: Image Transmission
 
