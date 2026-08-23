@@ -5,3 +5,5 @@
 No external API integration: first-party ESP32-S3 firmware only — E32 LoRa over UART, esp32-camera, embedded web server; no external service, SDK, or REST/gRPC/webhook surface.
 
 The detector's "api" signal traces to plan 01-03 prose about the first-party web server's own HTTP endpoints ("Direct API posts with empty values rely on the 400 path"), not to any external service.
+
+Re-checked at the 01-12 gap-closure round (2026-08-24): the round's scope — image-transfer scheduling (serialization hold, eviction guard, RX-settle gap) and camera framesize re-init, all first-party firmware — adds no external API surface. The detector's signal remains the 01-03 first-party-endpoint prose false positive recorded above.

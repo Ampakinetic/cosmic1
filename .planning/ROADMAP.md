@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 11/11 plans executed (all waves + the UAT gap-closure rounds 01-07..01-11; tracer 01-01's summary at 01-01-SUMMARY.md. G-01-5/G-01-6 RESOLVED at the 01-11 bench round 2026-08-24; new gaps G-01-7/G-01-8 open — remediation round + `/gsd-secure-phase 1` before phase complete)
+**Plans:** 12 planned — 11 executed + the 01-12 remediation round pending (tracer 01-01's summary at 01-01-SUMMARY.md. G-01-5/G-01-6 RESOLVED at the 01-11 bench round 2026-08-24; gaps G-01-7/G-01-8 open — 01-12 remediation + `/gsd-secure-phase 1` before phase complete)
 
 Plans:
 **Wave 1**
@@ -82,6 +82,10 @@ Plans:
 **Wave 8** *(blocked on Wave 7)*
 
 - [x] 01-11-PLAN.md — G-01-5/G-01-6 gap closure (remediation): routing decision from 01-10 evidence -> single-lever branch implementation (a: image_protocol.h pacing / b: E32_TARGET_TX_POWER enforcement / c: heal-servicing defect / d: galleryCountSeen latch reset / e: persistence-index fix / close) + bench re-verification with before/after tallies (IMG-02, IMG-03, IMG-06, PRI-03)
+
+**Wave 9** *(gap-closure remediation round, 2026-08-24; blocked on Wave 8)*
+
+- [ ] 01-12-PLAN.md — G-01-7/G-01-8 gap closure (remediation): serialize thumbnail heal ahead of full-pull activation + never-evict-mid-service guard + inter-window RX-settle gap (G-01-7); camera framesize re-init with recovery bounded to allocatedFrameSize (G-01-8); bench re-verification series A (unspaced captures) / B (settings incl. CIF 400x296 + visible-effect spot-checks closing SC-3) (IMG-02, IMG-03, PRI-03, CTRL-02)
 
 ### Phase 2: Image Transmission
 
