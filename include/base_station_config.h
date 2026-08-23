@@ -34,10 +34,11 @@
 // SPI assumption (SCK=12/MISO=13/MOSI=11/CS=10) drove pins where nothing
 // was connected. Driven 1-bit via SD_MMC on the GPIO matrix (arduino-esp32
 // 3.x SD_MMC.setPins — the S3 SDMMC host routes through any GPIOs). GPIO 39
-// is also named STATUS_LED_PIN in main_basestation.cpp: setup()'s pinMode
-// (line 2060) runs BEFORE SDStorage().begin() (line 2117), after which the
-// SDMMC host owns the pin; the loop's later digitalWrite on 39 only touches
-// the disconnected GPIO output register and cannot disturb the SD clock.
+// was also named STATUS_LED_PIN in main_basestation.cpp until 01-11 remapped
+// the LED to GPIO 41: the SDMMC host owns 39 after SDStorage().begin(), so
+// the loop's digitalWrite on it could not disturb the SD clock, but it did
+// raise the HAL '__digitalWrite(): IO 39 is not set as GPIO' error flood
+// (~7-10 ms blocking per line, thousands per bench session).
 #define SD_CLK_PIN          39
 #define SD_CMD_PIN          38
 #define SD_DATA_PIN         40

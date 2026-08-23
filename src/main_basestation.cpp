@@ -37,7 +37,14 @@
 #define LORA_BAUD_RATE   9600
 
 // Status LED
-#define STATUS_LED_PIN   39
+// 01-11 ride-along R1: remapped off GPIO 39 — the SD_MMC host has owned 39
+// (SD_CLK_PIN) since 794df00, so the loop's digitalWrite on it only produced
+// the HAL '__digitalWrite(): IO 39 is not set as GPIO' error flood (3,513 -
+// 9,563 lines per bench session, each ~7-10 ms of synchronous blocking;
+// it never disturbed the SD clock but crippled bench console work). GPIO 41
+// is free on the base pin map: LoRa 14/48/19/20/21, SD_MMC 39/38/40, OLED
+// I2C 1/2 — 41 is named nowhere else.
+#define STATUS_LED_PIN   41
 
 // ===========================
 // Web Server
@@ -3664,24 +3671,37 @@ void sendResponse(int code, const char* status, const char* message) {
 // Physical status LED mirrors the SAME computed link truth as /status
 // (WR-10 / IN-03 — the LED no longer blindly blinks every 5 s while the JSON
 // alone reports the truth): ON solid = Ready (green), 1 Hz blink =
-// Unknown/stale (yellow), OFF = No link (red). The blink is self-throttled;
-// safe to call every loop pass.
+// Unknown/stale (yellow), OFF = No link (red).
+//
+// 01-11 ride-along R1: every write is EDGE-GATED — the physical level is
+// driven only when it CHANGES, never on every loop pass. The old READY and
+// NO_LINK branches called digitalWrite unconditionally each pass (only the
+// blink branch was throttled), which on the pre-remap SDMMC-owned GPIO 39
+// triggered the HAL validation error + synchronous UART print ~every 22 ms.
+// Safe to call every loop pass by construction.
 void updateLED() {
     LinkTruth truth = computeLinkTruth();
+
+    static int lastWrittenLevel = -1;   // -1 forces the first write
+
+    int level;
     if (truth == LinkTruth::READY) {
-        digitalWrite(STATUS_LED_PIN, HIGH);
-        return;
-    }
-    if (truth == LinkTruth::NO_LINK) {
-        digitalWrite(STATUS_LED_PIN, LOW);
-        return;
+        level = HIGH;
+    } else if (truth == LinkTruth::NO_LINK) {
+        level = LOW;
+    } else {
+        // UNKNOWN/stale: 1 Hz blink tick (throttled), edge-gated write below
+        static uint32_t lastBlink = 0;
+        static bool ledState = false;
+        if (millis() - lastBlink >= 1000) {
+            lastBlink = millis();
+            ledState = !ledState;
+        }
+        level = ledState ? HIGH : LOW;
     }
 
-    static uint32_t lastBlink = 0;
-    static bool ledState = false;
-    if (millis() - lastBlink >= 1000) {
-        lastBlink = millis();
-        ledState = !ledState;
-        digitalWrite(STATUS_LED_PIN, ledState ? HIGH : LOW);
+    if (level != lastWrittenLevel) {
+        lastWrittenLevel = level;
+        digitalWrite(STATUS_LED_PIN, level);
     }
 }
