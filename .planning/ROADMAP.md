@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 8/9 plans executed
+**Plans:** 9/11 plans executed
 
 Plans:
 **Wave 1**
@@ -74,6 +74,14 @@ Plans:
 **Wave 6** *(blocked on Wave 5)*
 
 - [x] 01-09-PLAN.md — G-01-3 gap closure (hardware half): operator checkpoints — SD wiring audit vs base_station_config.h constants + second-card retry + boot-line confirm; flash both boards, bench discriminator run (B1-B4 trace matrix), end-to-end transfer + storage + in-page-submit verification (IMG-01, IMG-02, IMG-04, IMG-05, PRI-03)
+
+**Wave 7** *(gap-closure discriminator round, 2026-08-23; blocked on Wave 6)*
+
+- [ ] 01-10-PLAN.md — G-01-5/G-01-6 gap closure (discriminator round): WR-01 dummy-PowerData fix (validity-gated PowerMgr wiring), bench operator checkpoints — G-01-6 zero-tooling /gallery total-vs-grid discriminator, G-01-5 serial discriminator on both consoles (heal-phase lines), second-capture re-test, close-vs-separated reliability tallies (B5), SC-3 ride-alongs (settings visible-effect + CIF 400x296) (IMG-02, IMG-03, IMG-06, PRI-03, CTRL-02)
+
+**Wave 8** *(blocked on Wave 7)*
+
+- [ ] 01-11-PLAN.md — G-01-5/G-01-6 gap closure (remediation): routing decision from 01-10 evidence -> single-lever branch implementation (a: image_protocol.h pacing / b: E32_TARGET_TX_POWER enforcement / c: heal-servicing defect / d: galleryCountSeen latch reset / e: persistence-index fix / close) + bench re-verification with before/after tallies (IMG-02, IMG-03, IMG-06, PRI-03)
 
 ### Phase 2: Image Transmission
 
