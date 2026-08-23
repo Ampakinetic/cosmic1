@@ -77,7 +77,7 @@ Plans:
 
 **Wave 7** *(gap-closure discriminator round, 2026-08-23; blocked on Wave 6)*
 
-- [ ] 01-10-PLAN.md — G-01-5/G-01-6 gap closure (discriminator round): WR-01 dummy-PowerData fix (validity-gated PowerMgr wiring), bench operator checkpoints — G-01-6 zero-tooling /gallery total-vs-grid discriminator, G-01-5 serial discriminator on both consoles (heal-phase lines), second-capture re-test, close-vs-separated reliability tallies (B5), SC-3 ride-alongs (settings visible-effect + CIF 400x296) (IMG-02, IMG-03, IMG-06, PRI-03, CTRL-02)
+- [x] 01-10-PLAN.md — G-01-5/G-01-6 gap closure (discriminator round): WR-01 dummy-PowerData fix (validity-gated PowerMgr wiring), bench operator checkpoints — G-01-6 zero-tooling /gallery total-vs-grid discriminator, G-01-5 serial discriminator on both consoles (heal-phase lines), second-capture re-test, close-vs-separated reliability tallies (B5), SC-3 ride-alongs (settings visible-effect + CIF 400x296) (IMG-02, IMG-03, IMG-06, PRI-03, CTRL-02)
 
 **Wave 8** *(blocked on Wave 7)*
 

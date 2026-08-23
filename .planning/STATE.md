@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 9 (complete)
+current_plan: 11
 status: executing
-stopped_at: "Completed 01-09-PLAN.md: G-01-3 + G-01-4 resolved on hardware (Storage OK, CRC-verified full-image transfer, in-page submit confirmed). Residual G-01-5 (thumbnail push-burst loss) open in 01-UAT.md + WINDOWS ledger; full-res viewer todo routed to Phase 3. Next: G-01-5 discriminator round (/gsd-verify-work 1) + security gate (/gsd-secure-phase 1)"
-last_updated: "2026-08-23T03:36:07.704Z"
+stopped_at: "Completed 01-10-PLAN.md: discriminator round recorded — G-01-5 mechanism named (E32 AUX phantom TX-failure, B5 downgraded), G-01-6 branch confirmed (image-ID reboot overwrite), WR-01 closed at code level + watch green. Gaps stay OPEN; remediation + bench re-verification in 01-11. Next: /gsd-progress to 01-11, then security gate"
+last_updated: "2026-08-23T09:23:58.531Z"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 21
-  completed_plans: 18
+  completed_plans: 19
 current_phase: 2
 current_phase_name: command-protocol-control
 ---
@@ -22,15 +22,15 @@ current_phase_name: command-protocol-control
 ## Current Status
 
 **Project:** Cosmic1 Base Station Camera Control Extension
-**Phase:** Phase 1 (command-protocol-control) — all 9 plans executed (01-01..01-06 + UAT gap closures 01-07..01-09); UAT gaps G-01-1/G-01-3/G-01-4 resolved on hardware at the 01-09 bench session; G-01-5 (thumbnail push-burst residual) open; next: G-01-5 discriminator round (/gsd-verify-work 1), then security gate (/gsd-secure-phase 1)
+**Phase:** Phase 1 (command-protocol-control) — 10 of 11 plans executed (01-01..01-06 + UAT gap closures 01-07..01-10); discriminator round COMPLETE: G-01-5 mechanism named (E32 AUX phantom TX-failure — balloon-side TX accounting, not air loss; B5 downgraded), G-01-6 branch confirmed (image-ID reboot reset overwrites IMG_00001_*), WR-01 closed at code level with a green runtime watch. Both gaps stay OPEN pending 01-11 remediation + bench re-verification; then security gate (/gsd-secure-phase 1)
 **Milestone:** v1.0
 
 ## Current Position
 
-**Current Plan:** 9 (complete)
+**Current Plan:** 11 (01-11: branch-conditional remediation — AUX handshake accounting fix + image-ID persistence + GPIO39 LED cleanup ride-along)
 **Total Plans in Phase:** 11
-**Status:** Plan 01-09 executed — phase close-out pending (G-01-5 residual round + security gate)
-**Progress:** [██████████] 95% (Phases 2+3: all plans executed; Phase 1: all 9 plans executed — G-01-3/G-01-4 hardware-resolved, G-01-5 open)
+**Status:** Ready to execute
+**Progress:** [█████████░] 90% (Phases 2+3: all plans executed; Phase 1: 10 of 11 — G-01-5/G-01-6 mechanisms diagnosed, remediation next)
 
 ## Progress
 
@@ -51,6 +51,7 @@ current_phase_name: command-protocol-control
 - ✅ Phase 2 plan 02-04 executed — CTRL-05 event triggers: altitude/distance/flight-phase capture inside AutoCapture, UI-configurable thresholds
 - ✅ Phase 2 gap-closure plan 02-05 executed (2026-08-19) — all 4 02-VERIFICATION gaps closed: kind-addressable 6-byte window requests + balloon thumbnail servicing (Gap 2/D-22), bounded push/window interleaving (preemption 5000 ms) + completion-aware class-ranked eviction (Gap 1/D-19/D-24), passCount reset on progress + slot-pressure full reset (Gaps 1-RX/3/D-20), kind-suffixed sidecars IMG_{id}_T.JSON (Gap 4/D-30); both targets green, harness 47 checks green, PRI-01 order-gates green (see 02-05-SUMMARY.md)
 - ✅ Phase 1 UAT gap closures executed (2026-08-22/23): 01-07 in-page AJAX submit (G-01-4 code), 01-08 real E32 register config + boot-time 9.6k air-rate enforcement (G-01-3 code half), 01-09 hardware bench session — G-01-3 RESOLVED on hardware (SD_MMC transport switch 794df00 + both boards at 9.6k; Storage tile OK; CRC-verified full-image transfer end-to-end) and G-01-4 runtime truth confirmed; NEW residual G-01-5 (thumbnail push-burst loss, B2/B4-class) open with a named discriminator path (see 01-09-SUMMARY.md)
+- ✅ Phase 1 plan 01-10 executed (2026-08-23): WR-01 closed at code level (c9770b1, validity-gated PowerMgr reads) + bench discriminator round — G-01-5 mechanism NAMED (E32 AUX handshake phantom TX-failure: e32_lora.cpp:223 write-then-:227-wait; v3 37 sent/41 FAILED booked while base received 72/72 chunks; real air loss 1-2 chunks/16 self-healed, CRC FAIL 0; B5 NOT reproduced — downgraded), G-01-6 branch CONFIRMED (image-ID reboot reset overwrites IMG_00001_*, proven twice with 4/4 COMPLETE transfers); mid-round CDC log consolidation (3fc35a7); GPIO39 LED error-flood + thumbnail-sizing quirk routed to 01-11; gaps stay OPEN pending 01-11 remediation + bench re-verification (see 01-10-SUMMARY.md)
 
 ## Current Phase
 
@@ -98,10 +99,10 @@ See: `.planning/PROJECT.md`
 
 ## Next Steps
 
-1. **G-01-5 residual round (Phase 1 close-out):** one bench capture with both serial consoles logging — the heal-phase discriminator lines named in `01-UAT.md` G-01-5 (base: finalized-INCOMPLETE/E32TX cmd=30/CRC-FAIL counts; balloon: THUMBNAIL window armed + window chunk sent|FAILED) — then either the pacing round (01-08's deferred follow-up condition: image_tx/rx margins, heal pass bound) or a defect fix, plus the ride-along Test 3 spot-checks (settings visibility, CIF 400x296)
+1. **01-11 remediation round (Phase 1 close-out):** branch (a) G-01-5 = fix the E32 AUX handshake accounting (e32_lora.cpp:207-233 — stop booking FAILED after a successful write); branch (b) G-01-6 = persist the balloon image-ID counter across reboot (or derive next ID from card/index state at boot); ride-alongs: GPIO39 STATUS_LED remap + updateLED throttle (main_basestation.cpp:40/:3672), thumbnail-sizing quirk, then the Task 3 bench re-verification series (deferred reliability quantification + settings visible-effect + CIF 400x296 spot-checks)
 2. **Security gate (before phase complete):** `/gsd-secure-phase 1` (Phase 2/3 gates also still pending)
 3. **Phase 3 backlog:** full-resolution gallery image viewer todo captured (`.planning/todos/pending/2026-08-23-full-resolution-gallery-image-viewer.md`) — operator bench wish from the 01-09 session
-4. **Then:** `/gsd-progress` toward phase transitions and ship review (WINDOWS ledger: 1 open entry — G-01-5)
+4. **Then:** `/gsd-progress` toward phase transitions and ship review (WINDOWS ledger: 1 open entry — G-01-5, reason updated with the named mechanism; blocks /gsd-ship until 01-11 closes it)
 
 ## Configuration
 
@@ -123,8 +124,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-23T01:50:53.848Z
-**Stopped at:** Completed 01-09-PLAN.md: G-01-3 + G-01-4 resolved on hardware (Storage OK, CRC-verified full-image transfer, in-page submit confirmed). Residual G-01-5 (thumbnail push-burst loss) open in 01-UAT.md + WINDOWS ledger; full-res viewer todo routed to Phase 3. Next: G-01-5 discriminator round (/gsd-verify-work 1) + security gate (/gsd-secure-phase 1)
+**Last session:** 2026-08-23T09:23:58.471Z
+**Stopped at:** Completed 01-10-PLAN.md: discriminator round recorded — G-01-5 mechanism named (E32 AUX phantom TX-failure, B5 downgraded), G-01-6 branch confirmed (image-ID reboot overwrite), WR-01 closed at code level + watch green. Gaps stay OPEN; remediation + bench re-verification in 01-11. Next: /gsd-progress to 01-11, then security gate
 **Resume file:** None
 
 ## Performance Metrics
@@ -148,6 +149,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P07 | 7min | 2 tasks | 1 files |
 | Phase 01 P08 | 14 min | 2 tasks | 2 files |
 | Phase 01 P09 | 118min (5 bench-checkpoint iterations) | 2 tasks | 3 files |
+| Phase 01 P10 | ~5.5h across 3 executor sessions + operator bench (2 bench checkpoints) | 3 tasks | 4 files |
 
 ## Decisions
 
@@ -192,3 +194,6 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 01-09: G-01-3 root cause A was a TRANSPORT mismatch, not wiring - the base's built-in SD slot is SDMMC (CLK=39/CMD=38/DATA=40, no CS); the 02-03 SPI breakout assumption never matched this hardware, so the fix was the SD_MMC 1-bit switch (794df00), operator-authorized scope expansion
 - [Phase ?]: 01-09: the air-rate mismatch event (base-only flash severed the pair - no telemetry, window TIMEOUTs - until the balloon was reflashed to 9.6k) proved 01-08's boot-time enforcement is load-bearing; both-boards-same-rate is a hard invariant of the link
 - [Phase ?]: 01-09: G-01-3 closed on hardware (Storage OK + CRC-verified full-image transfer); residual narrowed to the thumbnail PUSH burst (G-01-5, B2/B4-class) - the full's windowed ARQ recovered everything while the thumbnail's post-hoc bounded heal did not, localizing the loss to the push exposure profile, not transfer logic
+- [Phase ?]: [Phase 01]: 01-10: G-01-5 mechanism is a FOURTH class — E32 AUX handshake phantom transmit-failure (e32_lora.cpp:223 write-then-:227-wait books FAILED after bytes left; v3 balloon 37 sent/41 FAILED while base received 72/72, 4/4 kinds COMPLETE); B5 close-range RX-overload NOT reproduced (downgraded); 01-08 pacing levers stay unpulled — the AUX accounting fix is the remediation lever
+- [Phase ?]: [Phase 01]: 01-10: G-01-6 = image-ID reboot reset — fresh-boot balloon re-allocates ID 1 and overwrites IMG_00001_* (proven twice with perfect transfers); remediation is persisting the counter or deriving next ID from card state at boot, rides 01-11
+- [Phase ?]: 01-10: GPIO39 STATUS_LED hot-loop error flood (esp32-hal-gpio __digitalWrite warning, 9563/3513/6122 lines per session, ~7-10 ms blocking each; updateLED READY/NO_LINK branches write every pass) routed to 01-11 as ride-along cleanup — NOT the loss mechanism; thumbnail-sizing quirk (v3 thumb 7138 B == full) flagged for the same round
