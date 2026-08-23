@@ -223,13 +223,32 @@ bool E32LoRa::transmit(const uint8_t* data, size_t length) {
     size_t sent = serial->write(data, length);
     serial->flush();
 
-    // Wait for transmission to complete
-    if (!waitForAuxLow(1000)) {
+    // Short write: a true failure — the module did not receive every byte,
+    // so nothing may be forgiven below (01-11 branch c: only a COMPLETE
+    // write may be treated as sent despite an AUX miss)
+    if (sent != length) {
         if (DEBUG_E32) {
-            Serial.println("E32: Transmit timeout - AUX didn't go low");
+            Serial.printf("E32: Transmit short write - %zu of %zu bytes\n",
+                          sent, length);
         }
         transmitErrors++;
         return false;
+    }
+
+    // AUX-low handshake after a COMPLETE write (01-11 branch c / G-01-5): a
+    // miss here is NOT booked as a transmit failure. The 01-10 dual-console
+    // discriminator proved the bytes have already left the radio — the
+    // balloon printed 'E32: Transmit timeout - AUX didn't go low' on ~half
+    // its sends (v3: 37 sent / 41 FAILED booked) while the base received
+    // 72/72 chunks and finalized 4/4 kinds COMPLETE. Booking FAILED here
+    // manufactured the phantom loss signal that drove spurious window
+    // re-requests. Real air loss stays covered where it belongs: the
+    // protocol's END-MARKER/CRC checks and the D-22 window heal on the base.
+    if (!waitForAuxLow(1000)) {
+        if (DEBUG_E32) {
+            Serial.println("E32: AUX-low missed after complete write - "
+                           "treated as sent (bytes left the radio)");
+        }
     }
 
     // Wait for AUX to go high again (transmission complete)
@@ -247,7 +266,7 @@ bool E32LoRa::transmit(const uint8_t* data, size_t length) {
         Serial.printf("E32: Transmitted %zu bytes\n", sent);
     }
 
-    return (sent == length);
+    return true;
 }
 
 bool E32LoRa::transmitToAddress(uint16_t addressHigh, uint16_t addressLow,
