@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 3
+current_plan: 9 (complete)
 status: executing
-stopped_at: Completed 01-08-PLAN.md
-last_updated: "2026-08-22T23:53:49.348Z"
+stopped_at: "Completed 01-09-PLAN.md: G-01-3 + G-01-4 resolved on hardware (Storage OK, CRC-verified full-image transfer, in-page submit confirmed). Residual G-01-5 (thumbnail push-burst loss) open in 01-UAT.md + WINDOWS ledger; full-res viewer todo routed to Phase 3. Next: G-01-5 discriminator round (/gsd-verify-work 1) + security gate (/gsd-secure-phase 1)"
+last_updated: "2026-08-23T01:53:03.739Z"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 19
-  completed_plans: 17
+  completed_plans: 18
 current_phase: 2
 current_phase_name: command-protocol-control
 ---
@@ -22,15 +22,15 @@ current_phase_name: command-protocol-control
 ## Current Status
 
 **Project:** Cosmic1 Base Station Camera Control Extension
-**Phase:** Phase 2 — all 5 plans executed (02-01 tracer + 02-02..02-04 + 02-05 gap closure); all 4 verifier gaps closed at code level; next: re-verification of the gap closures, hardware UAT, then security gate
+**Phase:** Phase 1 (command-protocol-control) — all 9 plans executed (01-01..01-06 + UAT gap closures 01-07..01-09); UAT gaps G-01-1/G-01-3/G-01-4 resolved on hardware at the 01-09 bench session; G-01-5 (thumbnail push-burst residual) open; next: G-01-5 discriminator round (/gsd-verify-work 1), then security gate (/gsd-secure-phase 1)
 **Milestone:** v1.0
 
 ## Current Position
 
-**Current Plan:** 3
+**Current Plan:** 9 (complete)
 **Total Plans in Phase:** 9
-**Status:** Ready to execute
-**Progress:** [█████████░] 89% (Phase 1: all 6 plans executed; Phase 2: all 5 plans executed — both wire-harness green, both firmware targets green)
+**Status:** Plan 01-09 executed — phase close-out pending (G-01-5 residual round + security gate)
+**Progress:** [██████████] 95% (Phases 2+3: all plans executed; Phase 1: all 9 plans executed — G-01-3/G-01-4 hardware-resolved, G-01-5 open)
 
 ## Progress
 
@@ -50,6 +50,7 @@ current_phase_name: command-protocol-control
 - ✅ Phase 2 plan 02-03 executed — base full pipeline: windowed ARQ (D-21/D-24), end-to-end CRC32 (D-23), SD storage + sidecars, transfer progress UI (D-20)
 - ✅ Phase 2 plan 02-04 executed — CTRL-05 event triggers: altitude/distance/flight-phase capture inside AutoCapture, UI-configurable thresholds
 - ✅ Phase 2 gap-closure plan 02-05 executed (2026-08-19) — all 4 02-VERIFICATION gaps closed: kind-addressable 6-byte window requests + balloon thumbnail servicing (Gap 2/D-22), bounded push/window interleaving (preemption 5000 ms) + completion-aware class-ranked eviction (Gap 1/D-19/D-24), passCount reset on progress + slot-pressure full reset (Gaps 1-RX/3/D-20), kind-suffixed sidecars IMG_{id}_T.JSON (Gap 4/D-30); both targets green, harness 47 checks green, PRI-01 order-gates green (see 02-05-SUMMARY.md)
+- ✅ Phase 1 UAT gap closures executed (2026-08-22/23): 01-07 in-page AJAX submit (G-01-4 code), 01-08 real E32 register config + boot-time 9.6k air-rate enforcement (G-01-3 code half), 01-09 hardware bench session — G-01-3 RESOLVED on hardware (SD_MMC transport switch 794df00 + both boards at 9.6k; Storage tile OK; CRC-verified full-image transfer end-to-end) and G-01-4 runtime truth confirmed; NEW residual G-01-5 (thumbnail push-burst loss, B2/B4-class) open with a named discriminator path (see 01-09-SUMMARY.md)
 
 ## Current Phase
 
@@ -97,10 +98,10 @@ See: `.planning/PROJECT.md`
 
 ## Next Steps
 
-1. **Phase 02 re-verification:** run the phase verifier (`/gsd-verify-work 2` or equivalent) — the 4 gap closures in 02-05 need independent confirmation (verifier's own reads/greps/harness/builds), mirroring the Phase 1 re-verification loop
-2. **Hardware UAT:** fulls complete under the 20 s capture cadence, a link-loss thumbnail hole heals RETRYING→COMPLETE, telemetry age stays within ~10 s during transfers, and an SD card shows IMG_{id}.JPG + IMG_{id}_T.JPG + IMG_{id}.JSON + IMG_{id}_T.JSON after both kinds finalize (Gap 1/2/PRI-01/Gap 4 runtime halves — see 02-05-SUMMARY Known Limitations)
-3. **Security gate (before phase complete):** `/gsd-secure-phase 2` (Phase 1's gate also still pending — `01-UAT.md` items + `/gsd-secure-phase 1`)
-4. **Then:** `/gsd-progress` toward the phase transition and Phase 3 (Enhanced Web Interface)
+1. **G-01-5 residual round (Phase 1 close-out):** one bench capture with both serial consoles logging — the heal-phase discriminator lines named in `01-UAT.md` G-01-5 (base: finalized-INCOMPLETE/E32TX cmd=30/CRC-FAIL counts; balloon: THUMBNAIL window armed + window chunk sent|FAILED) — then either the pacing round (01-08's deferred follow-up condition: image_tx/rx margins, heal pass bound) or a defect fix, plus the ride-along Test 3 spot-checks (settings visibility, CIF 400x296)
+2. **Security gate (before phase complete):** `/gsd-secure-phase 1` (Phase 2/3 gates also still pending)
+3. **Phase 3 backlog:** full-resolution gallery image viewer todo captured (`.planning/todos/pending/2026-08-23-full-resolution-gallery-image-viewer.md`) — operator bench wish from the 01-09 session
+4. **Then:** `/gsd-progress` toward phase transitions and ship review (WINDOWS ledger: 1 open entry — G-01-5)
 
 ## Configuration
 
@@ -122,8 +123,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-22T23:53:49.314Z
-**Stopped at:** Completed 01-08-PLAN.md
+**Last session:** 2026-08-23T01:50:53.848Z
+**Stopped at:** Completed 01-09-PLAN.md: G-01-3 + G-01-4 resolved on hardware (Storage OK, CRC-verified full-image transfer, in-page submit confirmed). Residual G-01-5 (thumbnail push-burst loss) open in 01-UAT.md + WINDOWS ledger; full-res viewer todo routed to Phase 3. Next: G-01-5 discriminator round (/gsd-verify-work 1) + security gate (/gsd-secure-phase 1)
 **Resume file:** None
 
 ## Performance Metrics
@@ -146,6 +147,7 @@ See: `.planning/PROJECT.md`
 | Phase 03 P05 | 12 min | 2 tasks | 4 files |
 | Phase 01 P07 | 7min | 2 tasks | 1 files |
 | Phase 01 P08 | 14 min | 2 tasks | 2 files |
+| Phase 01 P09 | 118min (5 bench-checkpoint iterations) | 2 tasks | 3 files |
 
 ## Decisions
 
@@ -186,3 +188,7 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 01-08: E32 register truth from the official manual beats hobby-doc layouts — SPED is [7:6] parity / [5:3] baud / [2:0] air rate (worked example 0x1A), config return frame is HEAD echo 0xC0/0xC2 (0xC1 accepted for older revisions) + five register bytes, factory default C0 00 00 1A 06 04, config-mode UART fixed 9600 8N1
 - [Phase ?]: 01-08: config writes are echo-verified (success only when the module's return frame matches every register byte) and boot-time air-rate enforcement is fail-open inside E32LoRa::begin — both boards converge to 9.6 kbps every boot via a masked read-modify-write touching only SPED bits [2:0]; a failed write logs the loud modules-may-mismatch ERROR (01-09 stop condition) but never aborts boot (1223f46 lesson)
 - [Phase ?]: 01-08: single-lever scope held — air rate is the only lever pulled; pacing/stall-window changes in image_tx/image_rx managers stay out unless the 01-09 discriminator run proves B4 saturation persists at 9.6 kbps
+- [Phase ?]: 01-09: SD transport is SDMMC, not SPI — operator datasheet ground truth (built-in slot CLK=39/CMD=38/DATA=40, no CS) replaced the 02-03 SPI wiring assumption; authorized scope expansion moved src/sd_storage.cpp + include/sd_storage.h to SD_MMC 1-bit (commit 794df00), base_station_config.h constants renamed SD_CLK/CMD/DATA_PIN; GPIO39 STATUS_LED coexistence safe (pinMode@2060 precedes SDStorage().begin()@2117)
+- [Phase ?]: 01-09: G-01-3 root cause A was a TRANSPORT mismatch, not wiring - the base's built-in SD slot is SDMMC (CLK=39/CMD=38/DATA=40, no CS); the 02-03 SPI breakout assumption never matched this hardware, so the fix was the SD_MMC 1-bit switch (794df00), operator-authorized scope expansion
+- [Phase ?]: 01-09: the air-rate mismatch event (base-only flash severed the pair - no telemetry, window TIMEOUTs - until the balloon was reflashed to 9.6k) proved 01-08's boot-time enforcement is load-bearing; both-boards-same-rate is a hard invariant of the link
+- [Phase ?]: 01-09: G-01-3 closed on hardware (Storage OK + CRC-verified full-image transfer); residual narrowed to the thumbnail PUSH burst (G-01-5, B2/B4-class) - the full's windowed ARQ recovered everything while the thumbnail's post-hoc bounded heal did not, localizing the loss to the push exposure profile, not transfer logic

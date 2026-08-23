@@ -22,7 +22,7 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 - [ ] **IMG-02**: Thumbnail preview (320x240 or smaller) displays immediately on base station
 - [ ] **IMG-03**: Full resolution images transfer in background after thumbnail
 - [x] **IMG-04**: Images are chunked into packets for reliable LoRa transmission
-- [ ] **IMG-05**: Base station stores received images on SD card
+- [x] **IMG-05**: Base station stores received images on SD card
 - [x] **IMG-06**: Image gallery displays all received images with pagination
 
 ### Web Interface
@@ -88,7 +88,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | IMG-02 | Phase 2 | Gaps Found |
 | IMG-03 | Phase 2 | Gaps Found |
 | IMG-04 | Phase 2 | Complete |
-| IMG-05 | Phase 2 | Gaps Found |
+| IMG-05 | Phase 2 | Complete |
 | IMG-06 | Phase 3 | Complete |
 | WEB-01 | Phase 3 | Complete |
 | WEB-02 | Phase 3 | Complete |

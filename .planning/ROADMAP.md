@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 7/9 plans executed
+**Plans:** 8/9 plans executed
 
 Plans:
 **Wave 1**
@@ -73,7 +73,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5)*
 
-- [ ] 01-09-PLAN.md — G-01-3 gap closure (hardware half): operator checkpoints — SD wiring audit vs base_station_config.h constants + second-card retry + boot-line confirm; flash both boards, bench discriminator run (B1-B4 trace matrix), end-to-end transfer + storage + in-page-submit verification (IMG-01, IMG-02, IMG-04, IMG-05, PRI-03)
+- [x] 01-09-PLAN.md — G-01-3 gap closure (hardware half): operator checkpoints — SD wiring audit vs base_station_config.h constants + second-card retry + boot-line confirm; flash both boards, bench discriminator run (B1-B4 trace matrix), end-to-end transfer + storage + in-page-submit verification (IMG-01, IMG-02, IMG-04, IMG-05, PRI-03)
 
 ### Phase 2: Image Transmission
 
