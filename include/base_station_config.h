@@ -26,15 +26,21 @@
 #define LORA_RECEIVE_MODE    true
 #define LORA_CONTINUOUS_LISTEN true
 
-// microSD card (SPI breakout, IMG-05 storage). EDITABLE CONSTANTS: if your
-// wiring differs, change these before flashing — no code change needed
-// (research Q2 resolution / 02-03 user_setup hardware note). Chosen on the
-// ESP32-S3 DevKitC-1's FSPI-adjacent free GPIOs; no conflict with the LoRa
-// UART pins (14/48/19/20/21) or the status LED (39, main_basestation.cpp).
-#define SD_SCK_PIN          12
-#define SD_MISO_PIN         13
-#define SD_MOSI_PIN         11
-#define SD_CS_PIN           10
+// microSD card — the board's BUILT-IN slot (IMG-05 storage). EDITABLE
+// CONSTANTS: if your board's slot differs, change these before flashing —
+// no code change needed. Operator-verified against the module datasheet at
+// the 01-09 Task 1 bench checkpoint: the slot is SDMMC-wired (CLK/CMD/DATA,
+// NO CS line — not an SPI breakout) on CLK=39, CMD=38, DATA=40. The 02-03
+// SPI assumption (SCK=12/MISO=13/MOSI=11/CS=10) drove pins where nothing
+// was connected. Driven 1-bit via SD_MMC on the GPIO matrix (arduino-esp32
+// 3.x SD_MMC.setPins — the S3 SDMMC host routes through any GPIOs). GPIO 39
+// is also named STATUS_LED_PIN in main_basestation.cpp: setup()'s pinMode
+// (line 2060) runs BEFORE SDStorage().begin() (line 2117), after which the
+// SDMMC host owns the pin; the loop's later digitalWrite on 39 only touches
+// the disconnected GPIO output register and cannot disturb the SD clock.
+#define SD_CLK_PIN          39
+#define SD_CMD_PIN          38
+#define SD_DATA_PIN         40
 
 // WiFi Configuration
 #define WIFI_MODE_AP         true    // Create Access Point for laptops

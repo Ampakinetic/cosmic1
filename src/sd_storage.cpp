@@ -1,5 +1,5 @@
 #include "sd_storage.h"
-#include "base_station_config.h"   // SD_SCK_PIN / SD_MISO_PIN / SD_MOSI_PIN / SD_CS_PIN
+#include "base_station_config.h"   // SD_CLK_PIN / SD_CMD_PIN / SD_DATA_PIN
 
 // Debug configuration
 #ifndef DEBUG_SD_STORAGE
@@ -15,11 +15,14 @@ SdStorage& SDStorage() {
     return sdStorageInstance;
 }
 
-// Dedicated SPI bus for the card — a SEPARATE SPIClass(HSPI) instance, NOT
-// the default bus. The instance-overload SD.begin(CS, sdSPI) below is
-// mandatory for custom pins on arduino-esp32: the pin-less SD.begin(CS)
-// overload ignores them entirely (research Code Example / issue #8457).
-static SPIClass sdSPI(HSPI);
+// SD transport: the board's BUILT-IN slot is SDMMC-wired (operator-verified
+// against the module datasheet at the 01-09 Task 1 bench checkpoint —
+// CLK/CMD/DATA, no CS line), so the card rides the native SDMMC host in
+// 1-bit mode via the SD_MMC global. Custom pins REQUIRE setPins() before
+// begin() on GPIO-matrix targets (arduino-esp32 3.x): the SDMMCFS
+// constructor only loads pin defaults when the variant defines
+// BOARD_HAS_SDMMC, which esp32-s3-devkitc-1 does not — without setPins,
+// begin() fails with "some SD pins are not set".
 
 // ===========================
 // Constructor
@@ -45,16 +48,23 @@ SdStorage::SdStorage()
 // ===========================
 
 bool SdStorage::begin() {
-    // Custom pins via the dedicated instance — all four pins are passed to
-    // sdSPI.begin, and the instance is handed to SD.begin below
-    sdSPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+    // Built-in SDMMC slot: pins come from the datasheet-verified constants.
+    // setPins must precede begin() (see the transport note above); it fails
+    // only on an invalid pin or a post-begin call — both are config errors
+    // that begin() would surface anyway, so they share the failure verdict.
+    bool pinsOk = SD_MMC.setPins(SD_CLK_PIN, SD_CMD_PIN, SD_DATA_PIN);
 
-    if (!SD.begin(SD_CS_PIN, sdSPI)) {
+    // 1-bit mode (the slot wires only D0). Frequency deliberately
+    // SDMMC_FREQ_DEFAULT (20 MHz), not the 40 MHz HIGHSPEED default:
+    // transfers arrive at a 9.6 kbps air rate, so throughput is irrelevant
+    // and the lower clock is the SD_MMC.h-documented stability lever for
+    // marginal slots/traces.
+    if (!pinsOk || !SD_MMC.begin("/sdcard", true, false, SDMMC_FREQ_DEFAULT)) {
         // Degrade, never halt: the station runs without storage, serving the
         // RAM-retained thumbnail; the UI/storage chip reports UNAVAILABLE
-        Serial.printf("SdStorage: SD.begin failed (pins SCK=%d MISO=%d MOSI=%d CS=%d); "
+        Serial.printf("SdStorage: SD_MMC.begin failed (1-bit SDMMC pins CLK=%d CMD=%d D0=%d); "
                       "running WITHOUT storage (images will not persist)\n",
-                      SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
+                      SD_CLK_PIN, SD_CMD_PIN, SD_DATA_PIN);
         available = false;
         status.available = false;
         status.initFailed = true;
@@ -64,7 +74,7 @@ bool SdStorage::begin() {
 
     // Flat image directory (D-32 — single /images dir, no clock-dependent
     // folder logic). mkdir is idempotent on FAT.
-    if (!SD.mkdir("/images")) {
+    if (!SD_MMC.mkdir("/images")) {
         Serial.println("SdStorage: /images mkdir failed (existing dir?); continuing");
     }
 
@@ -161,7 +171,7 @@ bool SdStorage::openTransfer(uint16_t imageId, uint8_t kind, uint32_t totalSize)
     // FILE_WRITE on arduino-esp32 is "w" — truncate-create. The untrusted
     // totalSize is NOT used to pre-allocate anything (Pitfall 11): the file
     // grows chunk-by-chunk as bytes actually land.
-    File f = SD.open(path, FILE_WRITE);
+    File f = SD_MMC.open(path, FILE_WRITE);
     if (!f) {
         // Q5 stop-storing-and-warn: an open failure is the disk-full/IO
         // signal on this FS API (no free-space query exists) — degrade, warn,
@@ -214,7 +224,7 @@ bool SdStorage::writeChunk(uint16_t imageId, uint8_t kind, uint16_t chunkIndex,
         }
         char path[32];
         imagePath(path, sizeof(path), imageId, kind);
-        File f = SD.exists(path) ? SD.open(path, "r+") : SD.open(path, FILE_WRITE);
+        File f = SD_MMC.exists(path) ? SD_MMC.open(path, "r+") : SD_MMC.open(path, FILE_WRITE);
         if (!f) {
             degrade("reopen failed (disk full?)");
             return false;
@@ -320,7 +330,7 @@ bool SdStorage::writeSidecar(const SdImageMetadata& meta) {
     char sidePath[32];
     sidecarPath(sidePath, sizeof(sidePath), meta.imageId, meta.kind);
 
-    File f = SD.open(sidePath, FILE_WRITE);
+    File f = SD_MMC.open(sidePath, FILE_WRITE);
     if (!f) {
         Serial.printf("SdStorage: sidecar open failed for %s\n", sidePath);
         return false;
@@ -398,10 +408,10 @@ File SdStorage::serveFile(uint16_t imageId, uint8_t kind) {
     }
     char path[32];
     imagePath(path, sizeof(path), imageId, kind);
-    if (!SD.exists(path)) {
+    if (!SD_MMC.exists(path)) {
         return File();
     }
-    return SD.open(path, FILE_READ);
+    return SD_MMC.open(path, FILE_READ);
 }
 
 // ===========================
@@ -471,7 +481,7 @@ void SdStorage::buildIndex() {
         return;
     }
 
-    File dir = SD.open("/images");
+    File dir = SD_MMC.open("/images");
     if (!dir || !dir.isDirectory()) {
         Serial.println("SdStorage: /images open failed during index build — index left empty");
         return;
@@ -754,11 +764,11 @@ bool SdStorage::readSidecarMeta(uint16_t imageId, bool thumb, SdImageMetadata* o
     sidecarPath(path, sizeof(path), imageId,
                 thumb ? static_cast<uint8_t>(ImageKind::THUMBNAIL)
                       : static_cast<uint8_t>(ImageKind::FULL_IMAGE));
-    if (!SD.exists(path)) {
+    if (!SD_MMC.exists(path)) {
         return false;
     }
 
-    File f = SD.open(path, FILE_READ);
+    File f = SD_MMC.open(path, FILE_READ);
     if (!f) {
         return false;
     }

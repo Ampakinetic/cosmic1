@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <FS.h>
-#include <SD.h>
+#include <SD_MMC.h>
 #include "image_protocol.h"   // ImageKind (THUMBNAIL / FULL_IMAGE)
 
 // ===========================
@@ -122,9 +122,11 @@ class SdStorage {
 public:
     SdStorage();
 
-    // Mount the card on the dedicated SPI instance. Returns true even on
-    // failure — the station runs degraded without storage (never halts);
-    // query isAvailable()/getStatus() for the honest outcome.
+    // Mount the card on the board's built-in SDMMC slot (1-bit mode, pins
+    // from base_station_config.h via SD_MMC.setPins — see sd_storage.cpp).
+    // Returns true even on failure — the station runs degraded without
+    // storage (never halts); query isAvailable()/getStatus() for the honest
+    // outcome.
     bool begin();
 
     // Honest availability: false until a successful begin(), false after a
