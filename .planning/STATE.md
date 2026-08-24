@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: "11 (01-11: branch-conditional remediation) — COMPLETE"
+current_plan: "12 (01-12: G-01-7+G-01-8 remediation) — Task 3 bench checkpoint"
 status: executing
-stopped_at: "Completed 01-11-PLAN.md (phase 01: all 11 plans executed; G-01-5/G-01-6 resolved on bench evidence; G-01-7/G-01-8 open; security gate + gap round next)"
-last_updated: "2026-08-24T00:01:58.159Z"
+stopped_at: "01-12 Tasks 1-2 complete (1064480 G-01-7 levers, f51bad6 G-01-8 framesize re-init; 2/2 builds green, wire harness 49/49) — Task 3 blocking bench checkpoint pending operator (series A unspaced + series B settings/CIF)"
+last_updated: "2026-08-24T00:22:30.000Z"
 progress:
   total_phases: 3
   completed_phases: 2
@@ -27,9 +27,9 @@ current_phase_name: command-protocol-control
 
 ## Current Position
 
-**Current Plan:** 11 (01-11: branch-conditional remediation) — COMPLETE
+**Current Plan:** 1
 **Total Plans in Phase:** 12
-**Status:** 01-11 COMPLETE (branch-c f265556 + branch-e 678d4f1 + R1 91bee03 + R2 c67e1a5 + bench re-verification 2026-08-24) — G-01-5/G-01-6 resolved on operator evidence; WINDOWS entries 3 (G-01-7 starvation) / 4 (G-01-8 VGA FB-OVF) open — /gsd-ship blocked until their round lands
+**Status:** Executing Phase 01
 **Progress:** [██████████░] 95% (Phases 2+3: all plans executed; Phase 1: 11 of 11 — G-01-5/G-01-6 resolved; G-01-7/G-01-8 + security gate remain before phase close)
 
 ## Progress
