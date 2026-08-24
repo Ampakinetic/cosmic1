@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 3
+open_count: 4
 waived_count: 0
 fixed_count: 3
-total_count: 6
-last_updated: 2026-08-24T13:16:00.000Z
+total_count: 7
+last_updated: 2026-08-24T04:31:30.154Z
 ---
 
 # Broken Windows Ledger
@@ -21,6 +21,7 @@ last_updated: 2026-08-24T13:16:00.000Z
 | 4 | 01 | unmet-truth | src/camera_manager.cpp | 398 | G-01-8: SET_RESOLUTION buffer-realloc defect - value 9 (VGA) floods cam_hal FB-OVF (4379 lines) and fails all captures until reboot; setFrameSize changes sensor framesize only, never reallocates the boot-allocated PSRAM buffers. Fix class: NACK above allocated buffer or re-init camera (01-UAT.md G-01-8) | fixed | FIXED by 01-12 (f51bad6 allocatedFrameSize bound + re-init-with-recovery), operator-verified bench session 4 (2026-08-24): CIF/VGA/SVGA each executed via 'Camera: framesize growth requires re-init' (balloon4.log:1791/:2784/:3588) with ZERO FB-OVF at every settings step (baseline 4,379; the session's only 4 FB-OVF lines are series-A thumbnail events), every capture SUCCESS (IDs 6-11), camera never died; VGA full COMPLETE 97/97 + correctly-sized thumb (base4.log:1581/:1938). Unexercised clauses (QVGA restore, reboot boot-resolution, SC-3 pairs) ride the next bench round under Test 3 | 2026-08-23T22:09:25.640Z | 2026-08-24T13:16:00.000Z |
 | 5 | 01 | unmet-truth | src/camera_manager.cpp | 361 | G-01-9 defect A/B/C complex (01-12 bench session 4): full-sized thumbnails passing the QQVGA dimension guard (payload-vs-metadata mismatch, 4 of 6 captures, 'Thumbnail created, size: 7157 bytes' balloon4.log:355); all-chunks-received fulls failing stored-bytes CRC (base4.log:854/:3267 — balloon-source-side corruption, not air); lost FULL manifest silently drops a full (image 8, balloon4.log:722 sent / never received). Named levers: payload-check in the thumb guard, kind-tagged window-chunk logging to discriminate, bounded full-manifest re-announce (01-UAT.md G-01-9) | open |  | 2026-08-24T13:16:00.000Z |  |
 | 6 | 01 | deviation | src/command_sender.cpp |  | CommandSender retry-bound overrun - 13x 'Retrying command seq=N (attempt 4/3)' in base4.log (e.g. :115, :290, :372, :2330): one retry fires beyond the documented D-05/D-07 3-attempt bound before the terminal guard stops it; late retries re-armed finalized kind-0 windows post-terminal (16x 'chunk for finalized image 11 kind 0 ignored', base4.log:3286-3310) | open |  | 2026-08-24T13:16:00.000Z |  |
+| 7 | 01 | deviation | .planning/phases/01-command-protocol-control/01-15-SUMMARY.md |  | 01-15 deviation (positive): heal-site defer log 'heal deferred - window request seq ...' added beyond the named artifacts for 01-16 bench discrimination at session-4's failure site; shares the deferSkipLoggedSeq latch, pinned 'stall deferred' grep still == 1 | open |  | 2026-08-24T04:31:30.154Z |  |
 
 ````json
 [
@@ -94,6 +95,18 @@ last_updated: 2026-08-24T13:16:00.000Z
     "status": "open",
     "reason": "",
     "recorded_at": "2026-08-24T13:16:00.000Z",
+    "resolved_at": null
+  },
+  {
+    "id": 7,
+    "kind": "deviation",
+    "phase": "01",
+    "file": ".planning/phases/01-command-protocol-control/01-15-SUMMARY.md",
+    "line": null,
+    "description": "01-15 deviation (positive): heal-site defer log 'heal deferred - window request seq ...' added beyond the named artifacts for 01-16 bench discrimination at session-4's failure site; shares the deferSkipLoggedSeq latch, pinned 'stall deferred' grep still == 1",
+    "status": "open",
+    "reason": "",
+    "recorded_at": "2026-08-24T04:31:30.154Z",
     "resolved_at": null
   }
 ]

@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 01-14-PLAN.md (CR-02/WR-01 success-gated bounded-retry manifest transitions + WR-02 two-pass mid-service-aware overflow scan; builds 2/2, harness 52/52; G-01-9 defect C code-level only, bench proof rides 01-16)
-last_updated: "2026-08-24T04:17:19.879Z"
+stopped_at: Completed 01-15-PLAN.md (defer-aware D-24 pass accounting + NACK_BUSY window-request deferral + retry-ordinal label; builds 2/2, harness 52/52; G-01-7 residual code-level only, bench proof rides 01-16)
+last_updated: "2026-08-24T04:31:14.447Z"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 26
-  completed_plans: 23
+  completed_plans: 24
 current_phase: 2
 current_phase_name: Command Protocol & Control
 ---
@@ -27,10 +27,10 @@ current_phase_name: Command Protocol & Control
 
 ## Current Position
 
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 16
 **Status:** Ready to execute
-**Progress:** [█████████░] 88% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
+**Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
 
 ## Progress
 
@@ -126,8 +126,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-24T04:17:19.839Z
-**Stopped at:** Completed 01-14-PLAN.md (CR-02/WR-01 success-gated bounded-retry manifest transitions + WR-02 two-pass mid-service-aware overflow scan; builds 2/2, harness 52/52; G-01-9 defect C code-level only, bench proof rides 01-16)
+**Last session:** 2026-08-24T04:31:14.369Z
+**Stopped at:** Completed 01-15-PLAN.md (defer-aware D-24 pass accounting + NACK_BUSY window-request deferral + retry-ordinal label; builds 2/2, harness 52/52; G-01-7 residual code-level only, bench proof rides 01-16)
 **Resume file:** None
 
 ## Performance Metrics
@@ -156,6 +156,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P12 | ~4h across executor + operator bench sessions (Tasks 1-2 2026-08-23/24, bench session #4 2026-08-24 ~13:16) | 3 tasks | 7 files |
 | Phase 01 P13 | 17min | 3 tasks | 8 files |
 | Phase 01 P14 | 8min | 2 tasks | 3 files |
+| Phase 01 P15 | 11min | 2 tasks | 3 files |
 
 ## Decisions
 
@@ -212,3 +213,6 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 01-14: manifest one-shot states are consumed only on transmit success — ANNOUNCED (CR-02) and PUSH_THUMB_CHUNKS (WR-01) advance inside the success branch; failures retry one-per-pass bounded by shared IMG_MANIFEST_MAX_ATTEMPTS 3, and at the bound the kind drops honestly (buffer freed + zeroed, named log, park at THUMB_PUSHED keeping thumbBuffer for heals / proceed via completedThumbState)
 - [Phase ?]: 01-14: WR-02 overflow victim scan is two-pass — pass 1 skips armed+incomplete windows (BUSY predicate copied verbatim), pass 2 (all-mid-service only) drops the skip with a named log so the depth-3 queue never wedges; the skip lives ONLY in that scan, evictionClassOf ranking and sweepExpiredEntries TTL byte-identical (carried 01-12 prohibition)
 - [Phase ?]: 01-14: manifestAttempts is ONE shared counter for the two mutually exclusive manifest phases, reset on each success and in freeEntry; G-01-9 defect C code-level mechanism removed but NOT closed — closure requires the 01-16 bench (no gap status flips this plan)
+- [Phase ?]: 01-15: D-24 passes count transfer OPPORTUNITIES, not re-requests — windowRequestSeq tracks each transfer's outstanding IMAGE_WINDOW_REQUEST and both stall sites extend the stall clock (no pass, no duplicate) while the tracked command is PENDING/SENT; a pass is charged only after the request terminalizes (ACKED/FAILED/TIMEOUT, with a recycled IDLE slot reading terminal in the conservative direction). The advance and both finalize paths cancel the serviced/outstanding request (WR-04 churn + post-terminal re-arm)
+- [Phase ?]: 01-15: NACK_BUSY on IMAGE_WINDOW_REQUEST defers instead of terminalizing — the command returns to PENDING and retries inside its own D-05/D-07 budget (existing backoff block paces it), staying non-terminal so the ImageRx in-flight guard is correct; the deferral is scoped to this one class (every other command keeps FAILED-on-BUSY) and bounded by maxRetries, so the link LED stops flagging routine deferrals and budget exhaustion still books a real failure
+- [Phase ?]: 01-15: retryCommand prints the retry ordinal (post-increment retryCount, 1..maxRetries) against maxRetries — the 'attempt 4/3' label (WINDOWS entry 6) is gone with zero counter/bound/timing change; one mechanism split across two files (BUSY deferral keeps the request non-terminal BECAUSE the base stall guard keys on it)
