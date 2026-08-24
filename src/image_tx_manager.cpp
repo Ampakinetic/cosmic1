@@ -535,8 +535,12 @@ bool ImageTxManager::pushThumbChunk(ImageTxEntry& entry) {
     bool ok = CommandProtocol::serializeChunk(pkt, buffer, length) && lora->transmit(buffer, length);
 
     if (DEBUG_IMAGE_TX) {
-        Serial.printf("ImageTx: chunk(image %u, %u/%u, %u B) %s\n",
+        // Kind discriminator (CR-01, 01-13): the push is always THUMBNAIL —
+        // printing it keeps push and window lines symmetric so bench logs can
+        // tell which kind's bytes left the balloon at every index
+        Serial.printf("ImageTx: chunk(image %u kind %u, %u/%u, %u B) %s\n",
                      entry.imageId,
+                     static_cast<unsigned>(ImageKind::THUMBNAIL),
                      static_cast<unsigned>(entry.nextThumbChunk + 1),
                      static_cast<unsigned>(entry.thumbTotalChunks),
                      chunkLen,
@@ -785,8 +789,12 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
     bool ok = CommandProtocol::serializeChunk(pkt, buffer, length) && lora->transmit(buffer, length);
 
     if (DEBUG_IMAGE_TX) {
-        Serial.printf("ImageTx: window chunk(image %u, %u/%u, %u B) %s\n",
+        // Kind discriminator (CR-01 / G-01-9 defect B, 01-13): the log names
+        // the kind the window serves — bench logs can discriminate which
+        // kind's bytes left the balloon at every index
+        Serial.printf("ImageTx: window chunk(image %u kind %u, %u/%u, %u B) %s\n",
                      entry.imageId,
+                     static_cast<unsigned>(entry.windowKind),
                      static_cast<unsigned>(idx - entry.windowStart + 1),
                      static_cast<unsigned>(entry.windowCount),
                      chunkLen,

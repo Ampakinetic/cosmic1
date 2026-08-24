@@ -261,31 +261,20 @@ void ImageRxManager::onChunkFrame(const uint8_t* frame, size_t length) {
 
     const ImageChunkBody& c = pkt.body;
 
-    // Routing by (imageId, kind). Heal-window precedence (02-05 / Gap 2):
-    // while a THUMBNAIL slot for this id is non-terminal with windowActive
-    // set (a heal window is in flight), its chunks route to the THUMBNAIL
-    // slot FIRST — the heal is never issued while a full pull is active
-    // (gate 1 above) and routing is per-image-id, so the armed heal window
-    // unambiguously owns this id's incoming chunks. The chunk body carries
-    // no kind byte — the requester's own window state is the discriminator.
-    // Without this, heal bytes would land in a QUEUED full's SD file and
-    // corrupt it.
-    ImageRxTransfer* t = findTransfer(c.imageId, static_cast<uint8_t>(ImageKind::THUMBNAIL));
-    if (!(t != nullptr && !t->terminal && t->windowActive)) {
-        // Wire-order precedence (unchanged): thumbnail chunks are only ever
-        // sent BEFORE the full manifest of the same id (the push completes
-        // before the announcement), and after it every chunk on the wire for
-        // that id is a window-pull answer. So a non-terminal FULL slot takes
-        // precedence; otherwise the chunk belongs to the thumbnail push.
-        t = findTransfer(c.imageId, static_cast<uint8_t>(ImageKind::FULL_IMAGE));
-        if (t == nullptr || t->terminal) {
-            t = findTransfer(c.imageId, static_cast<uint8_t>(ImageKind::THUMBNAIL));
-        }
-    }
+    // Kind-exact routing (CR-01, 01-13): the frame's kind byte is
+    // authoritative — a chunk routes to the live slot matching its exact
+    // (imageId, imageKind) pair and nowhere else. A mismatched-kind frame
+    // (e.g. a late thumbnail-heal straggler arriving while the same id's FULL
+    // slot is active) is dropped and counted, never written to a bitmap or
+    // SD. This removes the 01-12 misroute at root cause: the old two-branch
+    // heuristic (armed-heal-first, then non-terminal-FULL fallback) let heal
+    // bytes occupy full-image indices and corrupt a 36/36-received full
+    // (base4.log:854 stored-bytes CRC mismatch, G-01-9 defect B).
+    ImageRxTransfer* t = findTransfer(c.imageId, c.imageKind);
     if (t == nullptr) {
         if (DEBUG_IMAGE_RX) {
-            Serial.printf("ImageRx: chunk for image %u with no matching manifest ignored\n",
-                          c.imageId);
+            Serial.printf("ImageRx: chunk for image %u kind %u with no matching manifest ignored\n",
+                          c.imageId, static_cast<unsigned>(c.imageKind));
         }
         return;
     }
