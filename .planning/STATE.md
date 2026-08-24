@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 01-13-PLAN.md (CR-01 kind-tagged chunk wire format + kind-exact routing; CR-03 thumbnail payload guard; builds 2/2, harness 53/53; G-01-9 code-level mechanisms removed, bench proof rides 01-16)
-last_updated: "2026-08-24T04:03:00.083Z"
+stopped_at: Completed 01-14-PLAN.md (CR-02/WR-01 success-gated bounded-retry manifest transitions + WR-02 two-pass mid-service-aware overflow scan; builds 2/2, harness 52/52; G-01-9 defect C code-level only, bench proof rides 01-16)
+last_updated: "2026-08-24T04:17:19.879Z"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 26
-  completed_plans: 22
+  completed_plans: 23
 current_phase: 2
 current_phase_name: Command Protocol & Control
 ---
@@ -27,10 +27,10 @@ current_phase_name: Command Protocol & Control
 
 ## Current Position
 
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 16
 **Status:** Ready to execute
-**Progress:** [█████████░] 85% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
+**Progress:** [█████████░] 88% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
 
 ## Progress
 
@@ -126,8 +126,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-24T04:03:00.042Z
-**Stopped at:** Completed 01-13-PLAN.md (CR-01 kind-tagged chunk wire format + kind-exact routing; CR-03 thumbnail payload guard; builds 2/2, harness 53/53; G-01-9 code-level mechanisms removed, bench proof rides 01-16)
+**Last session:** 2026-08-24T04:17:19.839Z
+**Stopped at:** Completed 01-14-PLAN.md (CR-02/WR-01 success-gated bounded-retry manifest transitions + WR-02 two-pass mid-service-aware overflow scan; builds 2/2, harness 52/52; G-01-9 defect C code-level only, bench proof rides 01-16)
 **Resume file:** None
 
 ## Performance Metrics
@@ -155,6 +155,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P11 | ~1 day across executor + operator bench sessions (Tasks 1-2 2026-08-23, bench 2026-08-24) | 3 tasks | 7 files |
 | Phase 01 P12 | ~4h across executor + operator bench sessions (Tasks 1-2 2026-08-23/24, bench session #4 2026-08-24 ~13:16) | 3 tasks | 7 files |
 | Phase 01 P13 | 17min | 3 tasks | 8 files |
+| Phase 01 P14 | 8min | 2 tasks | 3 files |
 
 ## Decisions
 
@@ -208,3 +209,6 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 01-13: CR-01 fixed at root cause on the wire — every 0x13 chunk frame carries an imageKind byte (u8 after imageId, 6-byte body overhead) validated at deserialize (kinds outside THUMBNAIL/FULL_IMAGE rejected, T-01-13-01); the base's routing heuristic is deleted — every chunk routes by exact (imageId, imageKind), so a late thumbnail-heal straggler can never occupy full-image indices (the 36/36-received stored-bytes CRC mismatch mechanism, G-01-9 defect B)
 - [Phase ?]: 01-13: CR-03 thumbnail payload honesty — createThumbnail drains ONE stale frame after the QQVGA/quality-20 downshift (fb_count 2 / GRAB_LATEST can hand back the pre-downshift capture with restamped metadata, logged with width/height/len as the payload-vs-metadata discriminator) and bounds fb->len at THUMB_MAX_BYTES 8192 through the existing honest bail path (~5x the 1341-1703 B correct-thumb ceiling, far below the 7157-28808 B impostors; G-01-9 defect A)
 - [Phase ?]: 01-13: wire-change discipline — both boards MUST be reflashed together before the next bench run (mixed old/new firmware breaks chunk framing entirely, 01-09 severance lesson); no gap status flips in this plan, G-01-9 closure requires the 01-16 bench series
+- [Phase ?]: 01-14: manifest one-shot states are consumed only on transmit success — ANNOUNCED (CR-02) and PUSH_THUMB_CHUNKS (WR-01) advance inside the success branch; failures retry one-per-pass bounded by shared IMG_MANIFEST_MAX_ATTEMPTS 3, and at the bound the kind drops honestly (buffer freed + zeroed, named log, park at THUMB_PUSHED keeping thumbBuffer for heals / proceed via completedThumbState)
+- [Phase ?]: 01-14: WR-02 overflow victim scan is two-pass — pass 1 skips armed+incomplete windows (BUSY predicate copied verbatim), pass 2 (all-mid-service only) drops the skip with a named log so the depth-3 queue never wedges; the skip lives ONLY in that scan, evictionClassOf ranking and sweepExpiredEntries TTL byte-identical (carried 01-12 prohibition)
+- [Phase ?]: 01-14: manifestAttempts is ONE shared counter for the two mutually exclusive manifest phases, reset on each success and in freeEntry; G-01-9 defect C code-level mechanism removed but NOT closed — closure requires the 01-16 bench (no gap status flips this plan)

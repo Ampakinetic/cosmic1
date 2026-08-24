@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 12/16 plans executed (gap-closure round 01-13..01-16 pending)
+**Plans:** 13/16 plans executed (gap-closure round 01-13..01-16 pending)
 
 Plans:
 **Wave 1**
@@ -93,7 +93,7 @@ Plans:
 
 **Wave 11** *(blocked on Wave 10; 01-14 and 01-15 are file-disjoint and run in parallel)*
 
-- [ ] 01-14-PLAN.md — G-01-9 defect C gap closure (balloon TX hardening): CR-02/WR-01 success-gated manifest transitions with a shared bounded attempt counter (IMG_MANIFEST_MAX_ATTEMPTS 3, park-and-free at the bound); WR-02 mid-service-aware overflow victim scan with a never-wedge fallback (IMG-02, IMG-03, PRI-03)
+- [x] 01-14-PLAN.md — G-01-9 defect C gap closure (balloon TX hardening): CR-02/WR-01 success-gated manifest transitions with a shared bounded attempt counter (IMG_MANIFEST_MAX_ATTEMPTS 3, park-and-free at the bound); WR-02 mid-service-aware overflow victim scan with a never-wedge fallback (IMG-02, IMG-03, PRI-03)
 - [ ] 01-15-PLAN.md — G-01-7 residual gap closure (base defer-aware reliability): defer-aware D-24 pass accounting via windowRequestSeq in-flight tracking + request cancellation at advance/finalize (WR-04); NACK_BUSY deferral retry for IMAGE_WINDOW_REQUEST (WR-05 window class); retry-ordinal label fix (WINDOWS entry 6 / IN-01) (CTRL-06, PRI-02, IMG-03)
 
 **Wave 12** *(blocked on Wave 11)*
