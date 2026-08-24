@@ -49,6 +49,12 @@ private:
     
     // Camera settings
     framesize_t currentFrameSize;
+    // G-01-8 (01-12): the framesize the fb buffers were actually sized for at
+    // the last esp_camera_init — a DERIVED capacity bound, written ONLY inside
+    // initCamera, never a second source of identity (currentFrameSize stays
+    // the single framesize identity GET_STATUS reports). setFrameSize above
+    // this bound must re-init the camera (buffer realloc) or fail honestly.
+    framesize_t allocatedFrameSize;
     int currentQuality;
     int currentBrightness;
     int currentContrast;

@@ -14,6 +14,10 @@ CameraManager::CameraManager() {
     
     // Initialize camera settings
     currentFrameSize = BALLOON_CAMERA_FRAMESIZE;
+    // G-01-8 (01-12): boot assumption — the fb buffers will be sized for the
+    // boot framesize at the first initCamera call (refreshed there at every
+    // (re-)init from cameraConfig.frame_size)
+    allocatedFrameSize = currentFrameSize;
     currentQuality = BALLOON_CAMERA_QUALITY;
     currentBrightness = BALLOON_CAMERA_BRIGHTNESS;
     currentContrast = BALLOON_CAMERA_CONTRAST;
@@ -106,18 +110,26 @@ bool CameraManager::initCamera() {
         }
         return false;
     }
-    
+
+    // G-01-8 (01-12): the fb buffers were just (re-)sized by esp_camera_init
+    // for exactly cameraConfig.frame_size — refresh the capacity bound so
+    // setFrameSize always knows what the allocation can truly serve
+    allocatedFrameSize = cameraConfig.frame_size;
+
     // Apply initial settings
     s->set_framesize(s, currentFrameSize);
     s->set_quality(s, currentQuality);
     s->set_brightness(s, currentBrightness);
     s->set_contrast(s, currentContrast);
-    
-    // Additional optimizations for balloon use
-    s->set_saturation(s, 0);  // Neutral saturation
+
+    // Additional optimizations for balloon use. G-01-8 (01-12): the three
+    // operator-settable values apply the CACHED settings so a re-init never
+    // silently resets them (boot is bit-identical — the constructor defaults
+    // these to 0); the static optimizations below stay hardcoded.
+    s->set_saturation(s, currentSaturation);  // cached operator saturation
     s->set_special_effect(s, 0);  // No special effects
-    s->set_wb_mode(s, 0);  // Auto white balance
-    s->set_ae_level(s, 0);  // Auto exposure level
+    s->set_wb_mode(s, currentWBMode);  // cached operator white-balance mode
+    s->set_ae_level(s, currentExposure);  // cached operator exposure level
     s->set_aec2(s, 1);  // Auto exposure control
     s->set_agc_gain(s, 0);  // Auto gain control
     s->set_gainceiling(s, GAINCEILING_2X);  // Gain ceiling
@@ -399,20 +411,73 @@ bool CameraManager::setFrameSize(framesize_t size) {
     if (!initialized) {
         return false;
     }
-    
-    sensor_t* s = esp_camera_sensor_get();
-    if (!s) {
-        return false;
+
+    // G-01-8 (01-12) bound check. framesize_t is monotonically ordered by
+    // pixel count in esp32-camera (QQVGA < QVGA < CIF < VGA < SVGA < XGA <
+    // SXGA < UXGA), so a value comparison against the allocation is a
+    // capacity comparison. Two paths follow:
+    //   - size <= allocatedFrameSize: the fb buffers already hold a frame
+    //     this large — today's sensor-only change, no realloc, no block.
+    //   - size >  allocatedFrameSize: the buffers cannot serve the frame —
+    //     the OLD sensor-only behavior here was the G-01-8 defect (false
+    //     SUCCESS, FB-OVF flood, all captures dead until reboot). Now the
+    //     camera re-initializes so the buffers are truly resized.
+    // The thumbnail path is safe by construction: QQVGA is the smallest
+    // framesize, always <= allocatedFrameSize, so createThumbnail's
+    // downshift/restore pair stays on the sensor-only path (no re-init per
+    // capture).
+    if (size <= allocatedFrameSize) {
+        // Sensor-only path (unchanged behavior)
+        sensor_t* s = esp_camera_sensor_get();
+        if (!s) {
+            return false;
+        }
+
+        if (s->set_framesize(s, size) != 0) {
+            return false;
+        }
+
+        currentFrameSize = size;
+        cameraConfig.frame_size = size;
+
+        return true;
     }
-    
-    if (s->set_framesize(s, size) != 0) {
-        return false;
-    }
-    
+
+    // Re-init path: growth beyond the allocation requires real fb buffers.
+    // The bounded block (end + delay(100) + begin, ~100 ms+) is a documented
+    // cost of an explicit operator SET_RESOLUTION command — the same class as
+    // the AUX handshake waits. Note reinitialize() releases the current
+    // image/thumbnail buffers (end() -> releaseImageBuffers()); that is
+    // acceptable on this path because it is reachable only from an explicit
+    // operator resolution command, never from the capture/thumbnail path.
+    framesize_t prevFrameSize = currentFrameSize;
+    framesize_t prevConfigSize = cameraConfig.frame_size;
     currentFrameSize = size;
     cameraConfig.frame_size = size;
-    
-    return true;
+    if (reinitialize()) {
+        // allocatedFrameSize was refreshed inside initCamera to the new size
+        Serial.printf("Camera: framesize growth requires re-init (%d -> %d)\n",
+                     static_cast<int>(prevFrameSize), static_cast<int>(size));
+        return true;
+    }
+
+    // Recovery (mandatory — the camera must NEVER be left deinitialized, the
+    // exact G-01-8 failure mode): restore the saved framesize values and
+    // re-init again. handleSetResolution maps the returned false to NACK_BUSY,
+    // so the operator sees an honest failure instead of a dead camera.
+    currentFrameSize = prevFrameSize;
+    cameraConfig.frame_size = prevConfigSize;
+    if (reinitialize()) {
+        Serial.println("Camera: re-init to larger framesize FAILED - recovered at previous framesize");
+    } else {
+        // Last-ditch terminal answer: BOTH re-inits failed. Log loudly and
+        // leave the camera in the KNOWN deinitialized state (initialized ==
+        // false): every capture/setter fails honestly through their
+        // !initialized guards until reboot — never a silent half-alive
+        // camera pretending to work.
+        Serial.println("Camera: CRITICAL - recovery re-init FAILED; camera left deinitialized, captures fail honestly until reboot");
+    }
+    return false;
 }
 
 bool CameraManager::setQuality(int quality) {
