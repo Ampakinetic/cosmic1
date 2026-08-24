@@ -411,6 +411,33 @@ void CommandSender::handleResponse(const ResponsePacket& response) {
         return;
     }
 
+    // WR-05 window-request class (01-15): NACK_BUSY on an
+    // IMAGE_WINDOW_REQUEST is by-construction transient — the balloon's
+    // one-at-a-time window guard defers the arm while another window is
+    // mid-service. Terminalizing here burned the ImageRxManager's D-24 heal
+    // budget on requests that never had a transfer opportunity and poisoned
+    // the link-truth LED (session 4: balloon4.log:1154/:1157 — the
+    // session's only 2 failed commands were BUSY deferrals). Defer instead:
+    // stay non-terminal (PENDING) so the base's in-flight stall guard keeps
+    // extending, consume one retry inside the existing D-05/D-07 budget
+    // (the backoff block paces on lastRetryTime, the PENDING branch
+    // performs the retransmit), and store nothing. Budget exhaustion
+    // (retryCount == maxRetries) or any other command class falls through
+    // to today's terminal NACK handling unchanged.
+    if (response.responseType == ResponseType::NACK_BUSY &&
+        cmd->packet.cmd == CameraCommand::IMAGE_WINDOW_REQUEST &&
+        cmd->retryCount < maxRetries) {
+        cmd->retryCount++;
+        cmd->lastRetryTime = millis();
+        cmd->sendTime = cmd->lastRetryTime;   // restart the window on both outcomes (retryCommand discipline)
+        cmd->state = CommandState::PENDING;
+        if (DEBUG_COMMAND_SENDER) {
+            Serial.printf("CommandSender: Command seq=%d deferred (balloon window BUSY) - retry pending\n",
+                         response.refSequence);
+        }
+        return;   // no response storage, no pendingCommandCount change, no failure booked
+    }
+
     // Store response
     cmd->response = response;
     cmd->hasResponse = true;
@@ -531,8 +558,12 @@ void CommandSender::retryCommand(TrackedCommand* cmd) {
 
     if (transmitCommand(cmd)) {
         if (DEBUG_COMMAND_SENDER) {
-            Serial.printf("CommandSender: Retrying command seq=%d (attempt %d/%d)\n",
-                         cmd->sequenceNumber, cmd->retryCount + 1, maxRetries);
+            // WINDOWS entry 6 (01-15): print the RETRY ordinal against the
+            // bound it enforces — retryCount is post-increment 1..maxRetries
+            // here, so the label can never express an ordinal beyond it (the
+            // old attempt-ordinal printed retryCount+1, producing "4/3")
+            Serial.printf("CommandSender: Retrying command seq=%d (retry %d/%d)\n",
+                         cmd->sequenceNumber, cmd->retryCount, maxRetries);
         }
     }
 }
