@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: "12 (01-12: G-01-7+G-01-8 remediation) — Task 3 bench checkpoint"
+current_plan: 12 (final plan of Phase 1) — complete
 status: executing
-stopped_at: "01-12 Tasks 1-2 complete (1064480 G-01-7 levers, f51bad6 G-01-8 framesize re-init; 2/2 builds green, wire harness 49/49) — Task 3 blocking bench checkpoint pending operator (series A unspaced + series B settings/CIF)"
-last_updated: "2026-08-24T00:22:30.000Z"
+stopped_at: "Completed 01-12-PLAN.md (phase 01: all 12 plans executed; G-01-8 resolved on bench evidence; G-01-7 rescoped open; G-01-9 + retry overrun routed; security gate + G-01-9 round next)"
+last_updated: "2026-08-24T02:01:07.037Z"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 22
-  completed_plans: 20
+  completed_plans: 21
 current_phase: 2
 current_phase_name: command-protocol-control
 ---
@@ -22,15 +22,15 @@ current_phase_name: command-protocol-control
 ## Current Status
 
 **Project:** Cosmic1 Base Station Camera Control Extension
-**Phase:** Phase 1 (command-protocol-control) — ALL 11 plans executed (01-01..01-06 + UAT gap closures 01-07..01-11). 01-11 remediation round COMPLETE (2026-08-24): G-01-5 RESOLVED (AUX phantom-failure accounting fixed, f265556 — 0 FAILED across 3 post-fix bench sessions vs ~41/capture baseline) and G-01-6 RESOLVED (image-ID NVS persistence, 678d4f1 — gallery grows 2->3->4->5 across reboots); ride-alongs verified (GPIO39 flood zero, thumbnails correctly sized). Bench round surfaced two NEW open gaps: G-01-7 concurrent-transfer starvation (interim mitigation: space captures) and G-01-8 SET_RESOLUTION VGA+ FB-OVF defect. Remaining before phase complete: G-01-7/G-01-8 remediation round + security gate (/gsd-secure-phase 1)
+**Phase:** Phase 1 (command-protocol-control) — ALL 12 plans executed (01-01..01-06 + UAT gap closures 01-07..01-12). 01-12 remediation round COMPLETE (2026-08-24): G-01-8 RESOLVED (framesize re-init with recovery, f51bad6 — CIF/VGA/SVGA all executed via honest re-init with ZERO FB-OVF at every settings step vs the 4,379-line baseline; all 6 captures SUCCESS, camera never died) and G-01-7 levers IN and functioning (1064480 — hold fired 3x, zero mid-service evictions) but series-A acceptance FAILED, gap honestly rescoped open (defer-aware D-24 pass accounting + full-manifest re-announce + thumb fix). NEW open gap G-01-9 (thumb/corruption complex: full-sized thumbs passing the metadata-only guard 4/6 captures; all-chunks-received fulls failing stored-bytes CRC balloon-source-side; lost FULL manifest silently drops a full) + CommandSender retry-bound overrun (WINDOWS entry 6). Remaining before phase complete: G-01-9/G-01-7-residual remediation round + security gate (/gsd-secure-phase 1)
 **Milestone:** v1.0
 
 ## Current Position
 
-**Current Plan:** 1
+**Current Plan:** 12 (final plan of Phase 1) — complete
 **Total Plans in Phase:** 12
-**Status:** Executing Phase 01
-**Progress:** [██████████░] 95% (Phases 2+3: all plans executed; Phase 1: 11 of 11 — G-01-5/G-01-6 resolved; G-01-7/G-01-8 + security gate remain before phase close)
+**Status:** Executing Phase 01 (all 22 project plans executed; Phase 1 close-out remains)
+**Progress:** [██████████] 95% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
 
 ## Progress
 
@@ -53,12 +53,13 @@ current_phase_name: command-protocol-control
 - ✅ Phase 1 UAT gap closures executed (2026-08-22/23): 01-07 in-page AJAX submit (G-01-4 code), 01-08 real E32 register config + boot-time 9.6k air-rate enforcement (G-01-3 code half), 01-09 hardware bench session — G-01-3 RESOLVED on hardware (SD_MMC transport switch 794df00 + both boards at 9.6k; Storage tile OK; CRC-verified full-image transfer end-to-end) and G-01-4 runtime truth confirmed; NEW residual G-01-5 (thumbnail push-burst loss, B2/B4-class) open with a named discriminator path (see 01-09-SUMMARY.md)
 - ✅ Phase 1 plan 01-10 executed (2026-08-23): WR-01 closed at code level (c9770b1, validity-gated PowerMgr reads) + bench discriminator round — G-01-5 mechanism NAMED (E32 AUX handshake phantom TX-failure: e32_lora.cpp:223 write-then-:227-wait; v3 37 sent/41 FAILED booked while base received 72/72 chunks; real air loss 1-2 chunks/16 self-healed, CRC FAIL 0; B5 NOT reproduced — downgraded), G-01-6 branch CONFIRMED (image-ID reboot reset overwrites IMG_00001_*, proven twice with 4/4 COMPLETE transfers); mid-round CDC log consolidation (3fc35a7); GPIO39 LED error-flood + thumbnail-sizing quirk routed to 01-11; gaps stay OPEN pending 01-11 remediation + bench re-verification (see 01-10-SUMMARY.md)
 - ✅ Phase 1 plan 01-11 executed (2026-08-23/24): remediation round — branch-c AUX phantom-failure accounting (f265556) + branch-e image-ID NVS persistence (678d4f1, e-site auto_capture.cpp) + R1 STATUS_LED 39->41 edge-gated (91bee03) + R2 thumbnail QQVGA guard (c67e1a5); bench re-verification across 3 operator sessions RESOLVED G-01-5 (0 phantom FAILED vs ~41/capture baseline; spaced captures 4/4 kinds COMPLETE) and G-01-6 (IDs 1..5 sequential across reboots; gallery 2->3->4->5, no overwrite); NEW gaps G-01-7 (concurrent-transfer starvation; interim mitigation: space captures) + G-01-8 (SET_RESOLUTION VGA FB-OVF, latent since 01-04) routed open with named levers (see 01-11-SUMMARY.md)
+- ✅ Phase 1 plan 01-12 executed (2026-08-24): G-01-7 levers (1064480 — pendingHealThumbnail hold at both activation sites, evictEntriesOlderThan mid-service guard, IMG_WINDOW_RX_SETTLE_MS 500 two-sided) + G-01-8 framesize re-init with recovery bounded to allocatedFrameSize (f51bad6 — cached-settings re-init, mandatory recovery-to-previous-size); builds 2/2 + harness 49/49; bench session #4 (balloon4/base4) RESOLVED G-01-8 (CIF/VGA/SVGA honest re-init, ZERO FB-OVF at settings steps, 6/6 captures SUCCESS, camera never died; series-B steps d/e/f unexercised, ride Test 3) and honestly left G-01-7 OPEN rescoped (levers engaged: hold 3x, zero mid-service evictions — but image 7 thumb INCOMPLETE 35/36 under BUSY-deferral pass burn, image 7 full CRC mismatch at 36/36 received, image 8 full silently lost with its manifest); NEW gap G-01-9 (full-sized thumbs 4/6 passing the metadata-only guard; balloon-source-side stored-bytes CRC corruption; no FULL-manifest re-announce) + CommandSender retry overrun (13x 'attempt 4/3', WINDOWS 6, deferred-items.md) routed open (see 01-12-SUMMARY.md)
 
 ## Current Phase
 
 **Phase 1: Command Protocol & Control**
 
-- Status: gap-closure rounds complete through 01-11; all 11 plans executed. Remaining before phase complete: G-01-7/G-01-8 remediation round (WINDOWS entries 3/4 open) + security gate (`/gsd-secure-phase 1`; Phase 2/3 gates also pending)
+- Status: gap-closure rounds complete through 01-12; all 12 plans executed. Remaining before phase complete: G-01-9 + G-01-7-residual remediation round (WINDOWS entries 3/5/6 open) + security gate (`/gsd-secure-phase 1`; Phase 2/3 gates also pending)
 - Requirements: 6 (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02)
 - Goal: Establish bidirectional LoRa communication for camera control
 
@@ -100,10 +101,10 @@ See: `.planning/PROJECT.md`
 
 ## Next Steps
 
-1. **G-01-7/G-01-8 remediation round (Phase 1 close-out):** G-01-7 = serialize transfers (thumbnail push+heal completes before its full pull; never evict a pending heal entry for a new capture) + optional inter-window RX-settle gap for tail-chunk friction — interim mitigation documented: space captures (wait for both finalize lines between triggers); G-01-8 = bound SET_RESOLUTION to the allocated frame buffer (NACK above it, or re-init the camera on size change; camera_manager.cpp:398-412), then re-run the settings visible-effect + CIF 400x296 spot-checks (Test 3 clauses)
+1. **G-01-9 + G-01-7-residual remediation round (Phase 1 close-out, next plan):** G-01-9 defect A = payload check in the thumbnail guard (JPEG SOF/size, not fb->width/height) or drain-and-recapture (full-sized thumbs 4/6 captures, 'Thumbnail created, size: 7157 bytes' balloon4.log:355); defect B = kind-tag the balloon window-chunk log to discriminate balloon-source-side stored-bytes CRC corruption (base4.log:854/:3267, both at 100% chunks received); defect C = bounded FULL-manifest re-announce (image 8 full silently lost, balloon4.log:722). G-01-7 residual = defer-aware D-24 pass accounting (a BUSY-NACK-deferred heal window must not consume a pass — balloon4.log:1154/:1157) + the G-01-9 thumb fix (full-sized thumbs inflate heal budgets). Ride-alongs: CommandSender retry off-by-one (WINDOWS 6, deferred-items.md) + unexercised series-B clauses (QVGA restore, reboot boot-resolution, SC-3 visible-effect pairs) under Test 3. Interim mitigation unchanged: space captures
 2. **Security gate (before phase complete):** `/gsd-secure-phase 1` (Phase 2/3 gates also still pending)
-3. **Phase 3 backlog:** full-resolution gallery image viewer todo captured (`.planning/todos/pending/2026-08-23-full-resolution-gallery-image-viewer.md`) — operator bench wish from the 01-09 session
-4. **Then:** `/gsd-progress` toward phase transitions and ship review (WINDOWS ledger: 2 open entries — G-01-7 (entry 3) + G-01-8 (entry 4); blocks /gsd-ship until their round closes them)
+3. **Phase 3 backlog:** gallery UX todos captured — full-resolution image viewer (2026-08-23), tile number overlay + Incomplete-badge explanatory copy (2026-08-24, operator bench feedback from session #4)
+4. **Then:** `/gsd-progress` toward phase transitions and ship review (WINDOWS ledger: 3 open entries — G-01-7 (entry 3), G-01-9 (entry 5), retry overrun (entry 6); blocks /gsd-ship until their round closes them)
 
 ## Configuration
 
@@ -125,8 +126,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-23T22:12:16.499Z
-**Stopped at:** Completed 01-11-PLAN.md (phase 01: all 11 plans executed; G-01-5/G-01-6 resolved on bench evidence; G-01-7/G-01-8 open; security gate + gap round next)
+**Last session:** 2026-08-24T01:59:18.568Z
+**Stopped at:** Completed 01-12-PLAN.md (phase 01: all 12 plans executed; G-01-8 resolved on bench evidence; G-01-7 rescoped open; G-01-9 + retry overrun routed; security gate + G-01-9 round next)
 **Resume file:** None
 
 ## Performance Metrics
@@ -152,6 +153,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P09 | 118min (5 bench-checkpoint iterations) | 2 tasks | 3 files |
 | Phase 01 P10 | ~5.5h across 3 executor sessions + operator bench (2 bench checkpoints) | 3 tasks | 4 files |
 | Phase 01 P11 | ~1 day across executor + operator bench sessions (Tasks 1-2 2026-08-23, bench 2026-08-24) | 3 tasks | 7 files |
+| Phase 01 P12 | ~4h across executor + operator bench sessions (Tasks 1-2 2026-08-23/24, bench session #4 2026-08-24 ~13:16) | 3 tasks | 7 files |
 
 ## Decisions
 
@@ -201,3 +203,4 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 01-10: GPIO39 STATUS_LED hot-loop error flood (esp32-hal-gpio __digitalWrite warning, 9563/3513/6122 lines per session, ~7-10 ms blocking each; updateLED READY/NO_LINK branches write every pass) routed to 01-11 as ride-along cleanup — NOT the loss mechanism; thumbnail-sizing quirk (v3 thumb 7138 B == full) flagged for the same round
 - [Phase 01]: 01-11 Task 2 executed branch-c + branch-e + ride-alongs R1/R2 (operator-confirmed routing): AUX phantom-failure accounting fixed (f265556 - missed AUX-low after a complete write no longer books FAILED; short-write and pre-write readiness stay true failures), image-ID counter persisted to NVS (678d4f1 - fresh-boot captures append IMG_00002_* instead of overwriting; fail-open), STATUS_LED remapped 39->41 + edge-gated writes (91bee03 - kills the 3.5k-9.6k-line/session HAL error flood), thumbnail QQVGA frame-dimension guard (c67e1a5 - full-size frames bail honestly instead of pushing as thumbnails). Builds 2/2 + harness 49/49 green. e-site deviation: trace named balloon auto_capture.cpp, not the plan-anticipated sd_storage.cpp (trace-named-site clause) — 01-10 discriminator evidence: E32 AUX handshake phantom TX-failure named as the G-01-5 mechanism; image-ID reboot reset named as the G-01-6 mechanism; single-lever discipline held (no pacing constants touched)
 - [Phase ?]: [Phase 01]: 01-11 Task 3 bench re-verification CLOSED both gaps on operator evidence and honestly routed two new ones: G-01-5 resolved (f265556 — phantom FAILED 0/0/0 across three post-fix sessions vs ~41/capture baseline; spaced series 4/4 kinds COMPLETE discriminates the fix from the concurrency residual), G-01-6 resolved (678d4f1 — IDs 1..5 sequential across reboots, gallery index 2->3->4->5 with appends, no overwrite); G-01-7 concurrent-transfer starvation + G-01-8 SET_RESOLUTION VGA FB-OVF recorded open with named levers (serialize transfers / NACK-above-buffer); IMG-02/IMG-03 flipped complete — the 01-10 blocking condition (bench-verified remediation) is discharged, narrower residual truths live in the WINDOWS ledger (entries 3/4)
+- [Phase ?]: [Phase 01]: 01-12 Task 3 bench re-verification resolved G-01-8 on operator evidence (f51bad6 — CIF/VGA/SVGA each via 'Camera: framesize growth requires re-init' balloon4.log:1791/:2784/:3588 with ZERO FB-OVF at every settings step vs the 4,379 baseline, 6/6 captures SUCCESS, camera never died) and honestly kept G-01-7 OPEN despite its levers provably engaging (hold 3x, zero mid-service evictions) — the series-A truth failed on three DISTINCT mechanisms: BUSY-deferral pass burn (image 7 thumb 35/36, balloon4.log:1154/:1157), balloon-source-side stored-bytes CRC corruption (image 7 full 36/36-received CRC mismatch base4.log:854), and a silently lost FULL manifest (image 8, balloon4.log:722) — rescoped as defer-aware pass accounting + re-announce + thumb fix; NEW gap G-01-9 opened (full-sized thumbs 4/6 passing the metadata-only QQVGA guard — payload must be validated, not fb->width/height; kind-tagged balloon chunk logging named as the defect-B discriminator) and the CommandSender retry overrun (13x 'attempt 4/3') routed to WINDOWS entry 6

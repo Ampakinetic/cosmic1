@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 12 planned — 11 executed + the 01-12 remediation round pending (tracer 01-01's summary at 01-01-SUMMARY.md. G-01-5/G-01-6 RESOLVED at the 01-11 bench round 2026-08-24; gaps G-01-7/G-01-8 open — 01-12 remediation + `/gsd-secure-phase 1` before phase complete)
+**Plans:** 11/12 plans executed
 
 Plans:
 **Wave 1**
@@ -85,7 +85,7 @@ Plans:
 
 **Wave 9** *(gap-closure remediation round, 2026-08-24; blocked on Wave 8)*
 
-- [ ] 01-12-PLAN.md — G-01-7/G-01-8 gap closure (remediation): serialize thumbnail heal ahead of full-pull activation + never-evict-mid-service guard + inter-window RX-settle gap (G-01-7); camera framesize re-init with recovery bounded to allocatedFrameSize (G-01-8); bench re-verification series A (unspaced captures) / B (settings incl. CIF 400x296 + visible-effect spot-checks closing SC-3) (IMG-02, IMG-03, PRI-03, CTRL-02)
+- [x] 01-12-PLAN.md — G-01-7/G-01-8 gap closure (remediation): serialize thumbnail heal ahead of full-pull activation + never-evict-mid-service guard + inter-window RX-settle gap (G-01-7); camera framesize re-init with recovery bounded to allocatedFrameSize (G-01-8); bench re-verification series A (unspaced captures) / B (settings incl. CIF 400x296 + visible-effect spot-checks closing SC-3) (IMG-02, IMG-03, PRI-03, CTRL-02)
 
 ### Phase 2: Image Transmission
 
