@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 11/12 plans executed
+**Plans:** 12/16 plans executed (gap-closure round 01-13..01-16 pending)
 
 Plans:
 **Wave 1**
@@ -86,6 +86,19 @@ Plans:
 **Wave 9** *(gap-closure remediation round, 2026-08-24; blocked on Wave 8)*
 
 - [x] 01-12-PLAN.md — G-01-7/G-01-8 gap closure (remediation): serialize thumbnail heal ahead of full-pull activation + never-evict-mid-service guard + inter-window RX-settle gap (G-01-7); camera framesize re-init with recovery bounded to allocatedFrameSize (G-01-8); bench re-verification series A (unspaced captures) / B (settings incl. CIF 400x296 + visible-effect spot-checks closing SC-3) (IMG-02, IMG-03, PRI-03, CTRL-02)
+
+**Wave 10** *(gap-closure round #7, 2026-08-24; blocked on Wave 9)*
+
+- [ ] 01-13-PLAN.md — G-01-9 defect B/A gap closure (wire honesty): CR-01 imageKind byte in the 0x13 chunk frame (protocol + serializer + factory + base dispatch + harness, one atomic commit) with kind-exact onChunkFrame routing + kind-stamped TX logs; CR-03 thumbnail payload guard (stale-frame drain after QQVGA downshift + THUMB_MAX_BYTES 8192 bound) (IMG-01, IMG-02, IMG-03, IMG-04)
+
+**Wave 11** *(blocked on Wave 10; 01-14 and 01-15 are file-disjoint and run in parallel)*
+
+- [ ] 01-14-PLAN.md — G-01-9 defect C gap closure (balloon TX hardening): CR-02/WR-01 success-gated manifest transitions with a shared bounded attempt counter (IMG_MANIFEST_MAX_ATTEMPTS 3, park-and-free at the bound); WR-02 mid-service-aware overflow victim scan with a never-wedge fallback (IMG-02, IMG-03, PRI-03)
+- [ ] 01-15-PLAN.md — G-01-7 residual gap closure (base defer-aware reliability): defer-aware D-24 pass accounting via windowRequestSeq in-flight tracking + request cancellation at advance/finalize (WR-04); NACK_BUSY deferral retry for IMAGE_WINDOW_REQUEST (WR-05 window class); retry-ordinal label fix (WINDOWS entry 6 / IN-01) (CTRL-06, PRI-02, IMG-03)
+
+**Wave 12** *(blocked on Wave 11)*
+
+- [ ] 01-16-PLAN.md — Bench re-verification: flash both boards (wire change), series A (3 unspaced captures, every kind COMPLETE), settings series (CIF/SVGA both-kinds COMPLETE with sized thumbs, QVGA restore, reboot boot-resolution, SC-3 visible-effect pairs), dashboard regression glance; G-01-7/G-01-9 + WINDOWS 3/5/6 flipped on evidence (CTRL-01, CTRL-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 
