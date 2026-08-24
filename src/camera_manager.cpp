@@ -1,6 +1,16 @@
 #include "camera_manager.h"
 #include <esp_heap_caps.h>   // heap_caps_malloc — PSRAM-first image buffer (WR-07)
 
+// CR-03 (01-13) thumbnail payload plausibility bound. Bench distribution:
+// correct QQVGA quality-20 thumbnails were 1341-1703 B; full-sized impostors
+// (stale frames whose dimension metadata was restamped to QQVGA) were
+// 7157-28808 B (balloon4.log:356/:399/:1820/:3620). 8192 is ~5x the observed
+// correct ceiling and far below every impostor — a frame larger than this is
+// not a thumbnail whatever its dimensions claim. Camera-side plausibility
+// check only; the base still validates everything at manifest time
+// (MAX_IMAGE_SIZE, Pitfall 11).
+static constexpr size_t THUMB_MAX_BYTES = 8192;
+
 // ===========================
 // Constructor/Destructor
 // ===========================
@@ -336,6 +346,25 @@ bool CameraManager::createThumbnail(const ImageData& source, ThumbnailData& thum
         return false;
     }
 
+    // CR-03 (01-13) stale-frame drain: with fb_count 2 /
+    // CAMERA_GRAB_LATEST, the FIRST frame fetched after the QQVGA/quality-20
+    // downshift can be the stale pre-downshift capture whose dimension
+    // metadata was already restamped — the payload-vs-metadata mismatch the
+    // 01-12 bench saw in 4 of 6 captures. Fetch and discard ONE frame so the
+    // real capture below waits for a fresh QQVGA frame; the drained frame's
+    // width/height/len is the payload-vs-metadata discriminator the bench
+    // log needs.
+    camera_fb_t* stale = esp_camera_fb_get();
+    if (stale) {
+        if (DEBUG_CAMERA) {
+            Serial.printf("Camera: drained stale frame after QQVGA downshift (%ux%u, %u B)\n",
+                         static_cast<unsigned>(stale->width),
+                         static_cast<unsigned>(stale->height),
+                         static_cast<unsigned>(stale->len));
+        }
+        esp_camera_fb_return(stale);
+    }
+
     // Capture the thumbnail frame — BEFORE any allocation
     camera_fb_t* fb = esp_camera_fb_get();
     if (!fb) {
@@ -349,20 +378,25 @@ bool CameraManager::createThumbnail(const ImageData& source, ThumbnailData& thum
         return false;
     }
 
-    // 01-11 ride-along R2 (thumbnail-sizing quirk): verify the frame itself
-    // came back at the requested QQVGA size. WR-08 verified the SETTERS'
-    // return values, but the v3 bench trace shows the sensor can accept the
-    // downgrade and still deliver a full-settings frame — 'Camera: Thumbnail
-    // created, size: 7138 bytes' byte-equal to the QVGA full (balloon3.log
-    // :131-132), pushing a second full-size image as a "thumbnail" (36
-    // chunks instead of v2's correct 1465 B / 8 chunks). A wrong-size frame
-    // bails honestly through the same failure path the enqueue's
-    // no-thumbnail branch already handles — never a full-size "thumbnail".
-    if (fb->width != 160 || fb->height != 120) {
+    // 01-11 ride-along R2 (thumbnail-sizing quirk) + CR-03 (01-13) payload
+    // bound: verify the frame itself came back at the requested QQVGA size
+    // AND under the thumbnail byte ceiling. WR-08 verified the SETTERS'
+    // return values, but the v3/v4 bench traces show the sensor can accept
+    // the downgrade and still deliver a full-settings frame — 'Camera:
+    // Thumbnail created, size: 7138 bytes' byte-equal to the QVGA full
+    // (balloon3.log:131-132), and 7157-28808 B impostors in 4 of 6 captures
+    // (balloon4.log) whose dimensions claimed QQVGA while the payload was a
+    // stale full-size capture. Dimensions alone cannot discriminate that
+    // class; fb->len can. A wrong-size or oversize frame bails honestly
+    // through the same failure path the enqueue's no-thumbnail branch
+    // already handles — never a full-size "thumbnail".
+    if (fb->width != 160 || fb->height != 120 || fb->len > THUMB_MAX_BYTES) {
         if (DEBUG_CAMERA) {
-            Serial.printf("Camera: thumbnail frame came back %ux%u (expected 160x120 QQVGA) - settings did not take; no thumbnail captured\n",
+            Serial.printf("Camera: thumbnail frame rejected %ux%u, %u B (expected 160x120 QQVGA, <= %u B) - settings did not take or stale impostor payload; no thumbnail captured\n",
                          static_cast<unsigned>(fb->width),
-                         static_cast<unsigned>(fb->height));
+                         static_cast<unsigned>(fb->height),
+                         static_cast<unsigned>(fb->len),
+                         static_cast<unsigned>(THUMB_MAX_BYTES));
         }
         esp_camera_fb_return(fb);
         thumbnail.buffer = nullptr;
