@@ -4,8 +4,8 @@ milestone: v1.0
 milestone_name: milestone
 current_plan: 4
 status: executing
-stopped_at: Completed 01-15-PLAN.md (defer-aware D-24 pass accounting + NACK_BUSY window-request deferral + retry-ordinal label; builds 2/2, harness 52/52; G-01-7 residual code-level only, bench proof rides 01-16)
-last_updated: "2026-08-24T04:31:14.447Z"
+stopped_at: "01-16 Task 1 bench checkpoint pending operator (pre-flight green on 07eaea0: builds 2/2, harness 52 PASS / 0 FAIL; both boards must flash together, consoles to balloon5.log/base5.log)"
+last_updated: "2026-08-24T04:35:57.096Z"
 progress:
   total_phases: 3
   completed_phases: 2
@@ -126,9 +126,9 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-24T04:31:14.369Z
-**Stopped at:** Completed 01-15-PLAN.md (defer-aware D-24 pass accounting + NACK_BUSY window-request deferral + retry-ordinal label; builds 2/2, harness 52/52; G-01-7 residual code-level only, bench proof rides 01-16)
-**Resume file:** None
+**Last session:** 2026-08-24T04:35:57.062Z
+**Stopped at:** 01-16 Task 1 bench checkpoint pending operator (pre-flight green on 07eaea0: builds 2/2, harness 52 PASS / 0 FAIL; both boards must flash together, consoles to balloon5.log/base5.log)
+**Resume file:** .planning/phases/01-command-protocol-control/01-16-PLAN.md
 
 ## Performance Metrics
 
