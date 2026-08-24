@@ -332,18 +332,38 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
         // with its class — never silently. (ANNOUNCE_FULL rides class 4:
         // like PUSH_THUMB_* it still has push work in flight — the one-time
         // full manifest — and no pull can reference it yet.)
+        //
+        // WR-02 (01-14): the victim scan is TWO-PASS. Pass 1 adds the same
+        // mid-service skip the supersede path got in 01-12 — an entry whose
+        // window is armed and incomplete (the BUSY predicate, copied
+        // verbatim — an in-flight heal/pull's chunks are on the link) is not
+        // an eligible victim while any alternative exists. Pass 2 runs only
+        // when pass 1 found nothing (every entry mid-service) and drops the
+        // skip: the queue evicts the class-ranked victim and admits the new
+        // capture rather than wedging at depth 3. The skip lives ONLY in
+        // this scan — evictionClassOf's ranking and sweepExpiredEntries' TTL
+        // path keep their full eviction rights (carried 01-12 prohibition).
         static constexpr uint8_t EVICT_CLASS_COUNT = 5;
         ImageTxEntry* victim = nullptr;
         uint8_t victimClass = 0;
-        for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
-            if (!entries[i].used) {
-                continue;
-            }
-            uint8_t cls = evictionClassOf(entries[i]);
-            if (victim == nullptr || cls < victimClass ||
-                (cls == victimClass && entries[i].enqueueSeq < victim->enqueueSeq)) {
-                victim = &entries[i];
-                victimClass = cls;
+        bool midServiceFallback = false;
+        for (uint8_t scanPass = 0; scanPass < 2 && victim == nullptr; scanPass++) {
+            const bool skipMidService = (scanPass == 0);
+            midServiceFallback = (scanPass == 1);
+            for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+                if (!entries[i].used) {
+                    continue;
+                }
+                if (skipMidService && entries[i].windowArmed &&
+                    entries[i].windowNextIndex < entries[i].windowStart + entries[i].windowCount) {
+                    continue;   // pass 1: an in-flight heal/pull is never the preferred victim
+                }
+                uint8_t cls = evictionClassOf(entries[i]);
+                if (victim == nullptr || cls < victimClass ||
+                    (cls == victimClass && entries[i].enqueueSeq < victim->enqueueSeq)) {
+                    victim = &entries[i];
+                    victimClass = cls;
+                }
             }
         }
         // slot == nullptr implies every entry is used, so victim is guaranteed
@@ -353,9 +373,15 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
             victimClass == 3 ? "queued, no airtime invested" :
             victimClass == 4 ? "push in flight" :
                                "ACTIVE-PULL context (last resort)";
-        Serial.printf("ImageTx: queue overflow (depth %u); evicting class %u (%s) entry image %u for image %u\n",
-                     static_cast<unsigned>(IMG_TX_QUEUE_DEPTH), victimClass, className,
-                     victim->imageId, imageId);
+        if (midServiceFallback) {
+            Serial.printf("ImageTx: queue overflow - all entries mid-service; evicting class %u (%s) entry image %u for image %u\n",
+                         victimClass, className,
+                         victim->imageId, imageId);
+        } else {
+            Serial.printf("ImageTx: queue overflow (depth %u); evicting class %u (%s) entry image %u for image %u\n",
+                         static_cast<unsigned>(IMG_TX_QUEUE_DEPTH), victimClass, className,
+                         victim->imageId, imageId);
+        }
         freeEntry(*victim);
         slot = victim;
     }
@@ -888,8 +914,7 @@ void ImageTxManager::evictEntriesOlderThan(const ImageTxEntry& reference) {
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
         if (entries[i].used && entries[i].enqueueSeq < reference.enqueueSeq) {
             if (entries[i].windowArmed &&
-                entries[i].windowNextIndex <
-                    entries[i].windowStart + entries[i].windowCount) {
+                entries[i].windowNextIndex < entries[i].windowStart + entries[i].windowCount) {
                 Serial.printf("ImageTx: supersede of image %u deferred - window mid-service\n",
                              entries[i].imageId);
                 continue;   // never free an in-flight heal/pull window
