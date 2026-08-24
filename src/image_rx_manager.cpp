@@ -54,6 +54,7 @@ ImageRxManager::ImageRxManager()
     : initialized(false)
     , nextArrivalSeq(0)
     , healHoldLoggedId(0)
+    , deferSkipLoggedSeq(0)
     , latestThumbId(0)
     , latestThumbBuffer(nullptr)
     , latestThumbLength(0)
@@ -128,6 +129,13 @@ void ImageRxManager::process() {
             if (fm >= pull->totalChunks) {
                 finalizeTransfer(*pull);
             } else {
+                // WR-04 (01-15): the serviced request's remaining retries
+                // (ACK lost after service) would only re-arm an
+                // already-satisfied span and churn duplicate requests on the
+                // half-duplex link — cancel it before issuing the next.
+                if (pull->windowRequestSeq != 0) {
+                    CmdSender().cancelCommand(pull->windowRequestSeq);
+                }
                 uint16_t count = pull->totalChunks - fm;
                 if (count > IMG_WINDOW_MAX_CHUNKS) {
                     count = IMG_WINDOW_MAX_CHUNKS;
@@ -139,12 +147,33 @@ void ImageRxManager::process() {
             // never queued (command table full) — this is the FIRST real
             // attempt for the span, so no pass is charged; otherwise the
             // balloon failed to deliver and a retransmit pass begins.
-            if (pull->windowActive && pull->passCount >= IMG_RETRANSMIT_MAX_PASSES) {
+            // Defer-aware D-24 (G-01-7 residual, 01-15) — the FIRST check:
+            // while the tracked window request is still non-terminal
+            // (PENDING/SENT — NACK-BUSY-deferred by the balloon's
+            // one-at-a-time guard, ACK lost, or backoff-paced inside its own
+            // D-05/D-07 budget) the request had no transfer opportunity, so
+            // this stall charges NO pass and queues NO duplicate request
+            // (session 4: image 7 thumb exhausted 3 passes on deferred+
+            // retried requests, balloon4.log:1154/:1157). The stall clock
+            // extends instead; the pass is charged only once the request
+            // reaches a terminal state.
+            if (windowRequestInFlight(*pull)) {
+                pull->lastProgressMs = millis();
+                if (pull->windowRequestSeq != deferSkipLoggedSeq) {
+                    Serial.printf("ImageRx: stall deferred - window request seq %u still in flight for image %u kind %u\n",
+                                  pull->windowRequestSeq, pull->imageId, pull->imageKind);
+                    deferSkipLoggedSeq = pull->windowRequestSeq;
+                }
+            } else if (pull->windowActive && pull->passCount >= IMG_RETRANSMIT_MAX_PASSES) {
                 // D-24: bounded passes exhausted — finalize incomplete, keep
                 // what is on SD, free the slot for the next queued pull
                 finalizeIncomplete(*pull, "retransmit passes exhausted");
             } else {
                 if (pull->windowActive) {
+                    // Defer-aware D-24 charge (01-15): reached only with a
+                    // TERMINAL prior request — see windowRequestInFlight
+                    // above; while a request is PENDING/SENT the stall clock
+                    // extends instead of charging here
                     pull->passCount++;
                 }
                 // Re-request ONLY the missing region of the current scope.
@@ -196,6 +225,23 @@ void ImageRxManager::process() {
             continue;
         }
 
+        // Defer-aware D-24 (G-01-7 residual, 01-15) — the FIRST check of the
+        // stall handling, same rule as the pull branch: while this
+        // transfer's window request is still non-terminal the stall clock
+        // extends — no pass, no duplicate request (WR-04). This is the exact
+        // session-4 failure site: image 7's thumb heal had its requests
+        // NACK-BUSY-deferred while image 8's window was mid-service, and the
+        // then-unconditional charge burned all 3 passes on deferrals.
+        if (windowRequestInFlight(t)) {
+            t.lastProgressMs = millis();
+            if (t.windowRequestSeq != deferSkipLoggedSeq) {
+                Serial.printf("ImageRx: heal deferred - window request seq %u still in flight for image %u kind %u\n",
+                              t.windowRequestSeq, t.imageId, t.imageKind);
+                deferSkipLoggedSeq = t.windowRequestSeq;
+            }
+            continue;
+        }
+
         // Gated heal (02-05 / CR-01 base half): the base speaks only on the
         // D-21 triggers, so a thumbnail heal NEVER fires while a full pull
         // owns the link, and only once the balloon's thumbnail push for this
@@ -218,6 +264,10 @@ void ImageRxManager::process() {
             continue;
         }
         if (t.windowActive) {
+            // Defer-aware D-24 charge (01-15): reached only with a TERMINAL
+            // prior request (the in-flight guard above extended the clock
+            // otherwise) — a pass is charged only when the prior request had
+            // its transfer opportunity
             t.passCount++;
         }
         // Scope: the whole thumbnail from its first hole (capped at one
@@ -345,6 +395,22 @@ ImageRxTransfer* ImageRxManager::findActivePull() {
         }
     }
     return nullptr;
+}
+
+bool ImageRxManager::windowRequestInFlight(const ImageRxTransfer& t) const {
+    // Defer-aware D-24 (G-01-7 residual, 01-15): the request is "in flight"
+    // while its tracked command is still working the problem — PENDING
+    // (queued, backoff-paced, or NACK-BUSY-deferred, see CommandSender's
+    // window-request class) or SENT (awaiting the arm ACK or its retries).
+    // Every other result — ACKED, FAILED, TIMEOUT — means the request had
+    // its transfer opportunity, and IDLE means the slot was recycled
+    // (findFreeSlot memsets only terminal commands), which is equally
+    // terminal. Only the in-flight states may extend the stall clock.
+    if (t.windowRequestSeq == 0) {
+        return false;
+    }
+    CommandState st = CmdSender().getCommandState(t.windowRequestSeq);
+    return st == CommandState::PENDING || st == CommandState::SENT;
 }
 
 ImageRxTransfer* ImageRxManager::pendingHealThumbnail() {
@@ -733,6 +799,15 @@ void ImageRxManager::finalizeTransfer(ImageRxTransfer& t) {
         t.buffer = nullptr;
     }
 
+    // Post-terminal re-arm churn (01-15 / WR-04): a finalized transfer's
+    // outstanding window request must stop retrying — its late retries would
+    // re-arm an already-finalized span and generate the ignored-chunk traffic
+    // class (session 4: 14-16 post-terminal ignores on image 11,
+    // base4.log:3286-3310). cancelCommand is safe whatever the state: the
+    // WR-03 decrement guard keeps the count honest on terminal slots.
+    if (t.windowRequestSeq != 0) {
+        CmdSender().cancelCommand(t.windowRequestSeq);
+    }
     releaseSlotWork(t);
 
     if (t.pullActive) {
@@ -757,6 +832,13 @@ void ImageRxManager::finalizeIncomplete(ImageRxTransfer& t, const char* reason) 
                   t.passCount);
 
     writeSidecarFor(t, false, false, false);
+
+    // Post-terminal re-arm churn (01-15 / WR-04): same cancel as
+    // finalizeTransfer — a finalized transfer's outstanding window request
+    // must stop retrying (WR-03 guard keeps the pending count honest)
+    if (t.windowRequestSeq != 0) {
+        CmdSender().cancelCommand(t.windowRequestSeq);
+    }
     releaseSlotWork(t);
 
     if (t.pullActive) {
@@ -888,6 +970,8 @@ void ImageRxManager::issueWindowRequest(ImageRxTransfer& t, uint16_t startChunk,
     t.windowActive = true;
     t.windowBase = startChunk;
     t.windowCount = count;
+    t.windowRequestSeq = seq;      // defer-aware D-24 (01-15): the tracked
+                                   // seq this transfer's stall guard watches
     t.lastProgressMs = millis();   // the stall clock starts at the request
 
     if (DEBUG_IMAGE_RX) {

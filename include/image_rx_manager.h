@@ -90,6 +90,12 @@ struct ImageRxTransfer {
     bool     windowActive;
     uint16_t windowBase;
     uint16_t windowCount;
+    // Defer-aware D-24 (G-01-7 residual, 01-15): the tracked-command
+    // sequence of the last successfully QUEUED IMAGE_WINDOW_REQUEST for
+    // this transfer; 0 means none. A recycled terminal command slot reads
+    // as IDLE, which the in-flight check treats as terminal — correct,
+    // because only terminal commands are recycled (findFreeSlot).
+    uint16_t windowRequestSeq;
 
     bool     pullActive;      // FULL only: this slot is THE active pull
     bool     terminal;        // finalized (COMPLETE or INCOMPLETE)
@@ -164,6 +170,11 @@ private:
     // — the hold logs once per held image id, not once per process() pass
     uint16_t healHoldLoggedId;
 
+    // Defer-aware D-24 (01-15): log-once latch for the stall-deferred
+    // message — the defer logs once per window-request sequence, not once
+    // per process() pass
+    uint16_t deferSkipLoggedSeq;
+
     // Retained newest verified thumbnail (plain heap — served by the web
     // server from the single-threaded loop, so no locking is needed)
     uint16_t latestThumbId;
@@ -175,6 +186,11 @@ private:
     // Slot handling
     ImageRxTransfer* findTransfer(uint16_t imageId, uint8_t kind);
     ImageRxTransfer* findActivePull();
+    // Defer-aware D-24 (G-01-7 residual, 01-15): true while the tracked
+    // command behind t.windowRequestSeq is still non-terminal (PENDING or
+    // SENT) — the request has had no transfer opportunity yet, so a stall
+    // must extend the clock, never charge a D-24 pass
+    bool windowRequestInFlight(const ImageRxTransfer& t) const;
     // G-01-7 lever 1 (01-12): the earliest non-terminal THUMBNAIL slot with
     // holes whose same-id FULL manifest already arrived (the gate-2 proof the
     // thumbnail push finished) — while one exists, full-pull activation is
