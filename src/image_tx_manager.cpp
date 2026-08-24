@@ -526,7 +526,8 @@ bool ImageTxManager::pushThumbChunk(ImageTxEntry& entry) {
     uint8_t chunkLen = static_cast<uint8_t>(
         (remaining > IMG_CHUNK_PAYLOAD_SIZE) ? IMG_CHUNK_PAYLOAD_SIZE : remaining);
 
-    ImageChunkPacket pkt = createChunkPacket(entry.imageId, entry.nextThumbChunk,
+    ImageChunkPacket pkt = createChunkPacket(entry.imageId, static_cast<uint8_t>(ImageKind::THUMBNAIL),
+                                             entry.nextThumbChunk,
                                              entry.thumbBuffer + offset, chunkLen);
 
     uint8_t buffer[CMD_MAX_PACKET_SIZE];
@@ -775,7 +776,8 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
     uint8_t chunkLen = static_cast<uint8_t>(
         (remaining > IMG_CHUNK_PAYLOAD_SIZE) ? IMG_CHUNK_PAYLOAD_SIZE : remaining);
 
-    ImageChunkPacket pkt = createChunkPacket(entry.imageId, idx,
+    ImageChunkPacket pkt = createChunkPacket(entry.imageId, entry.windowKind,
+                                             idx,
                                              source + offset, chunkLen);
 
     uint8_t buffer[CMD_MAX_PACKET_SIZE];

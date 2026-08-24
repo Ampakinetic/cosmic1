@@ -34,9 +34,11 @@
 //       sweep over many bodies; the defective no-type-assignment variant
 //       emits 0x00 and is discarded by the type-dispatch receiver — teeth
 //   (img-c) a chunk whose payload contains the consecutive bytes 0x0D 0x0A
-//       round-trips intact through serialization AND length-driven framing
+//       round-trips intact through serialization AND length-driven framing,
+//       preserving imageId/imageKind/chunkIndex/dataLen (CR-01 kind byte)
 //   (img-d) serializeChunk rejects dataLen > IMG_CHUNK_PAYLOAD_SIZE (201)
-//       while accepting the 200 boundary
+//       while accepting the 200 boundary (217-byte packet at the 6-byte
+//       chunk-body overhead)
 //   (img-e) telemetry beacon round-trip preserves every field including
 //       negative int32/int16 values
 //   (img-f) window-request payload is 6 bytes (imageId BE16, imageKind u8,
@@ -48,6 +50,9 @@
 //       other type are discarded before body arithmetic
 //   (img-h) ResponseStatusData layout arithmetic totals 28 bytes after the
 //       reserved shrink (17 -> 10) that made room for the event fields
+//   (img-i) chunk kind validation (CR-01, 01-13): a CRC-valid chunk frame
+//       carrying kind 2 fails deserialization — the kind byte is
+//       bounds-validated against the ImageKind enum before any routing
 // ============================================================================
 
 'use strict';
@@ -518,16 +523,18 @@ function deserializeManifest(buffer) {
     return { type: buffer[2], body };
 }
 
-// Transcribes createChunkPacket (fixed) — same zero-init/defective pattern
-function createChunkPacketMirror(imageId, chunkIndex, data, dataLen, { defective = false } = {}) {
+// Transcribes createChunkPacket (fixed) — same zero-init/defective pattern.
+// CR-01 (01-13): the factory stamps the kind byte right after imageId.
+function createChunkPacketMirror(imageId, imageKind, chunkIndex, data, dataLen, { defective = false } = {}) {
     const packet = {
         type: 0x00, // ImageChunkPacket packet{} zero-initializes every field
-        body: { imageId: 0, chunkIndex: 0, dataLen: 0, data: Buffer.alloc(IMG_CHUNK_PAYLOAD_SIZE) },
+        body: { imageId: 0, imageKind: 0, chunkIndex: 0, dataLen: 0, data: Buffer.alloc(IMG_CHUNK_PAYLOAD_SIZE) },
     };
     if (!defective) {
         packet.type = PACKET_TYPE_IMAGE_CHUNK; // the factory owns the type byte
     }
     packet.body.imageId = imageId;
+    packet.body.imageKind = imageKind;
     packet.body.chunkIndex = chunkIndex;
     packet.body.dataLen = dataLen > IMG_CHUNK_PAYLOAD_SIZE ? IMG_CHUNK_PAYLOAD_SIZE : dataLen;
     if (data && packet.body.dataLen > 0) {
@@ -537,12 +544,13 @@ function createChunkPacketMirror(imageId, chunkIndex, data, dataLen, { defective
 }
 
 // Transcribes CommandProtocol::serializeChunk — header bodyLen carries
-// dataLen, so chunk framing is 7 + 5 + bodyLen + 4 (the command arithmetic)
+// dataLen, so chunk framing is 7 + 6 + bodyLen + 4 (the command arithmetic;
+// the 6-byte overhead includes the CR-01 imageKind byte after imageId)
 function serializeChunk(pkt) {
     if (pkt.body.dataLen > IMG_CHUNK_PAYLOAD_SIZE) {
         return null; // rejected — the transport cannot frame more
     }
-    const packetLength = CMD_HEADER_SIZE + 5 + pkt.body.dataLen + 4;
+    const packetLength = CMD_HEADER_SIZE + 6 + pkt.body.dataLen + 4;
     if (packetLength > CMD_MAX_PACKET_SIZE) {
         return null;
     }
@@ -557,6 +565,7 @@ function serializeChunk(pkt) {
     buffer[offset++] = 0x00; // CRC8 pad byte
 
     buffer.writeUInt16BE(pkt.body.imageId, offset); offset += 2;
+    buffer[offset++] = pkt.body.imageKind;
     buffer.writeUInt16BE(pkt.body.chunkIndex, offset); offset += 2;
     buffer[offset++] = pkt.body.dataLen;
     if (pkt.body.dataLen > 0) {
@@ -572,10 +581,10 @@ function serializeChunk(pkt) {
     return buffer.subarray(0, offset);
 }
 
-// Transcribes CommandProtocol::deserializeChunk (markers, CRC, dataLen bound,
-// frame-arithmetic agreement)
+// Transcribes CommandProtocol::deserializeChunk (markers, CRC, kind
+// validation, dataLen bound, frame-arithmetic agreement)
 function deserializeChunk(buffer) {
-    if (buffer.length < CMD_HEADER_SIZE + 5 + 4) {
+    if (buffer.length < CMD_HEADER_SIZE + 6 + 4) {
         return null;
     }
     if (buffer[0] !== CMD_START_BYTE1 || buffer[1] !== CMD_START_BYTE2) {
@@ -588,14 +597,20 @@ function deserializeChunk(buffer) {
         return null;
     }
     let off = CMD_HEADER_SIZE;
-    const body = { imageId: buffer.readUInt16BE(off), chunkIndex: 0, dataLen: 0, data: null };
+    const body = { imageId: buffer.readUInt16BE(off), imageKind: 0, chunkIndex: 0, dataLen: 0, data: null };
     off += 2;
+    body.imageKind = buffer[off++];
+    // CR-01 (01-13): the kind byte must name a real ImageKind — a frame
+    // carrying any other value is dropped before any body arithmetic
+    if (body.imageKind !== 0 && body.imageKind !== 1) {
+        return null;
+    }
     body.chunkIndex = buffer.readUInt16BE(off); off += 2;
     body.dataLen = buffer[off++];
     if (body.dataLen > IMG_CHUNK_PAYLOAD_SIZE) {
         return null;
     }
-    if (CMD_HEADER_SIZE + 5 + body.dataLen + 4 !== buffer.length) {
+    if (CMD_HEADER_SIZE + 6 + body.dataLen + 4 !== buffer.length) {
         return null;
     }
     body.data = Buffer.from(buffer.subarray(off, off + body.dataLen));
@@ -757,7 +772,7 @@ function makeTypeDispatchReceiver(acceptedTypes) {
                 break;
             case PACKET_TYPE_IMAGE_CHUNK:
                 if (bodyLen > IMG_CHUNK_PAYLOAD_SIZE) { resetReceiveState(); return; }
-                expectedTotal = CMD_HEADER_SIZE + 5 + bodyLen + 4; // bodyLen == dataLen
+                expectedTotal = CMD_HEADER_SIZE + 6 + bodyLen + 4; // bodyLen == dataLen; 6-byte body overhead incl. imageKind
                 break;
             case PACKET_TYPE_TELEMETRY_BEACON:
                 expectedTotal = CMD_HEADER_SIZE + IMG_TELEMETRY_BEACON_BODY_SIZE + 4; // forced 17
@@ -876,7 +891,7 @@ function makeTypeDispatchReceiver(acceptedTypes) {
 // (img-c) Chunk round-trip with an embedded 0x0D 0x0A pair in the payload
 {
     const payload = Buffer.from([0xFF, 0xD8, 0x0D, 0x0A, 0x00, 0x11, 0x0D, 0x0A, 0xFF, 0xD9]);
-    const packet = serializeChunk(createChunkPacketMirror(0x1234, 77, payload, payload.length));
+    const packet = serializeChunk(createChunkPacketMirror(0x1234, 1, 77, payload, payload.length));
     assert(packet !== null && packet[2] === PACKET_TYPE_IMAGE_CHUNK,
         '(img-c) chunk packet carries the 0x13 type byte at byte 2');
     assert(((packet[4] << 8) | packet[5]) === payload.length,
@@ -886,10 +901,11 @@ function makeTypeDispatchReceiver(acceptedTypes) {
     const round = deserializeChunk(packet);
     assert(round !== null &&
            round.body.imageId === 0x1234 &&
+           round.body.imageKind === 1 &&
            round.body.chunkIndex === 77 &&
            round.body.dataLen === payload.length &&
            round.body.data.equals(payload),
-        '(img-c) chunk round-trip preserves imageId/chunkIndex/dataLen and the payload bytes verbatim');
+        '(img-c) chunk round-trip preserves imageId/imageKind/chunkIndex/dataLen and the payload bytes verbatim');
 
     // Length-driven framing round-trip (the embedded 0x0D 0x0A pairs must not
     // corrupt reassembly — end markers tested only at the framed position)
@@ -906,12 +922,31 @@ function makeTypeDispatchReceiver(acceptedTypes) {
     // Bypass the factory (which clamps) — the serializer must enforce the
     // transport bound independently, exactly as the firmware does
     const oversizePkt = { type: PACKET_TYPE_IMAGE_CHUNK,
-                          body: { imageId: 1, chunkIndex: 0, dataLen: 201, data: Buffer.alloc(201) } };
+                          body: { imageId: 1, imageKind: 0, chunkIndex: 0, dataLen: 201, data: Buffer.alloc(201) } };
     const oversize = serializeChunk(oversizePkt);
-    const boundary = serializeChunk(createChunkPacketMirror(1, 0, Buffer.alloc(200), 200));
+    const boundary = serializeChunk(createChunkPacketMirror(1, 0, 0, Buffer.alloc(200), 200));
     assert(oversize === null, '(img-d) serializeChunk rejects dataLen 201 (> IMG_CHUNK_PAYLOAD_SIZE)');
-    assert(boundary !== null && boundary.length === CMD_HEADER_SIZE + 5 + 200 + 4,
-        '(img-d) serializeChunk accepts the 200-byte boundary (216-byte packet)');
+    assert(boundary !== null && boundary.length === CMD_HEADER_SIZE + 6 + 200 + 4,
+        '(img-d) serializeChunk accepts the 200-byte boundary (217-byte packet)');
+}
+
+// (img-i) Chunk kind validation: a serialized chunk body carrying kind 2
+// must fail deserialization — the kind byte is bounds-validated against the
+// ImageKind enum (CR-01 / T-01-13-01 untrusted-RF defense in depth), so a
+// CRC-valid frame with a foreign kind value never reaches routing
+{
+    const good = serializeChunk(createChunkPacketMirror(7, 0, 3, Buffer.from([9, 8, 7]), 3));
+    assert(good !== null && deserializeChunk(good) !== null,
+        '(img-i) a kind-0 (THUMBNAIL) chunk deserializes normally');
+    const bad = Buffer.from(good);
+    bad[CMD_HEADER_SIZE + 2] = 2; // the kind byte sits right after the BE16 imageId
+    // Recompute the CRC so the forged frame is CRC-valid — the kind rule,
+    // not the CRC, must reject it
+    bad.writeUInt16BE(calculateCRC16(bad, bad.length - 4), bad.length - 4);
+    assert(validateCRC(bad, bad.length),
+        '(img-i) the forged kind-2 chunk is a well-formed CRC-valid frame');
+    assert(deserializeChunk(bad) === null,
+        '(img-i) chunk kind validation: a CRC-valid chunk carrying kind 2 fails deserialization');
 }
 
 // (img-e) Telemetry beacon round-trip
@@ -1011,7 +1046,7 @@ function makeTypeDispatchReceiver(acceptedTypes) {
         { imageId: 9, imageKind: 0, captureSource: 1, totalSize: 400, chunkSize: 200, totalChunks: 2,
           crc32: 77, captureTimeMs: 1000, resolution: 5, quality: 20, brightness: 0, contrast: 0,
           saturation: 0, exposure: 0, wbMode: 0 }));
-    const chunk = serializeChunk(createChunkPacketMirror(9, 1, Buffer.from([1, 2, 3]), 3));
+    const chunk = serializeChunk(createChunkPacketMirror(9, 0, 1, Buffer.from([1, 2, 3]), 3));
     const beacon = serializeTelemetryBeacon({ type: PACKET_TYPE_TELEMETRY_BEACON,
         body: { seq: 1, altitudeCm: 1000, tempCentiC: 200, latE6: 0, lonE6: 0, flags: 0 } });
     const response = serializeResponse(createResponsePacketMirror(0x00, 5, Buffer.alloc(8)));

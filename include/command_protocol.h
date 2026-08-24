@@ -301,8 +301,9 @@ ResponsePacket createResponsePacket(ResponseType type, uint16_t refSequence, con
 ImageManifestPacket createManifestPacket(const ImageManifestBody& body);
 
 // Create an image chunk packet — assigns PACKET_TYPE_IMAGE_CHUNK (0x13) as
-// the FIRST field and copies dataLen payload bytes
-ImageChunkPacket createChunkPacket(uint16_t imageId, uint16_t chunkIndex, const uint8_t* data, uint8_t dataLen);
+// the FIRST field, stamps the kind byte (CR-01: the frame says which kind's
+// bytes it carries) and copies dataLen payload bytes
+ImageChunkPacket createChunkPacket(uint16_t imageId, uint8_t imageKind, uint16_t chunkIndex, const uint8_t* data, uint8_t dataLen);
 
 // Create a telemetry beacon packet — assigns PACKET_TYPE_TELEMETRY_BEACON
 // (0x14) as the FIRST field (CR-01 lesson: the factory owns the wire type

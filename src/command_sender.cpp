@@ -322,7 +322,7 @@ void CommandSender::processIncomingByte(uint8_t byte) {
         case static_cast<uint8_t>(PACKET_TYPE_IMAGE_CHUNK):
             // The chunk header's bodyLen field carries dataLen
             bodyLen = (static_cast<size_t>(receiveBuffer[4]) << 8) | receiveBuffer[5];
-            bodyOverhead = 5; // imageId/chunkIndex/dataLen block
+            bodyOverhead = 6; // imageId/chunkIndex/dataLen block
             break;
 
         case static_cast<uint8_t>(PACKET_TYPE_TELEMETRY_BEACON):

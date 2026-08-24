@@ -395,7 +395,7 @@ bool CommandProtocol::serializeChunk(const ImageChunkPacket& pkt, uint8_t* buffe
         return false;
     }
 
-    size_t packetLength = CMD_HEADER_SIZE + 5 + pkt.body.dataLen + 4;
+    size_t packetLength = CMD_HEADER_SIZE + 6 + pkt.body.dataLen + 4;
     if (packetLength > CMD_MAX_PACKET_SIZE) {
         return false;
     }
@@ -403,7 +403,7 @@ bool CommandProtocol::serializeChunk(const ImageChunkPacket& pkt, uint8_t* buffe
     size_t offset = 0;
 
     // Header — bodyLen carries dataLen so chunk framing uses the command
-    // arithmetic (7 + 5 + bodyLen + 4)
+    // arithmetic (7 + 6 + bodyLen + 4)
     buffer[offset++] = CMD_START_BYTE1;
     buffer[offset++] = CMD_START_BYTE2;
     buffer[offset++] = static_cast<uint8_t>(pkt.type);
@@ -412,8 +412,10 @@ bool CommandProtocol::serializeChunk(const ImageChunkPacket& pkt, uint8_t* buffe
     offset += 2;
     buffer[offset++] = 0x00; // CRC8 pad byte
 
-    // Body — 5-byte overhead + data
+    // Body — 6-byte overhead + data (CR-01, 01-13: imageKind rides right
+    // after imageId so the frame says which kind's bytes it carries)
     writeUint16(buffer + offset, pkt.body.imageId); offset += 2;
+    buffer[offset++] = pkt.body.imageKind;
     writeUint16(buffer + offset, pkt.body.chunkIndex); offset += 2;
     buffer[offset++] = pkt.body.dataLen;
     if (pkt.body.dataLen > 0) {
@@ -433,7 +435,7 @@ bool CommandProtocol::serializeChunk(const ImageChunkPacket& pkt, uint8_t* buffe
 }
 
 bool CommandProtocol::deserializeChunk(const uint8_t* buffer, size_t length, ImageChunkPacket& pkt) {
-    if (!buffer || length < CMD_HEADER_SIZE + 5 + 4) {
+    if (!buffer || length < CMD_HEADER_SIZE + 6 + 4) {
         return false;
     }
 
@@ -453,6 +455,17 @@ bool CommandProtocol::deserializeChunk(const uint8_t* buffer, size_t length, Ima
 
     size_t off = CMD_HEADER_SIZE;
     pkt.body.imageId = readUint16(buffer + off); off += 2;
+    pkt.body.imageKind = buffer[off++];
+
+    // CR-01 (01-13) / T-01-13-01: the kind byte must name a real ImageKind —
+    // untrusted-RF defense in depth mirroring the T-02-11 kind validation on
+    // the request path. A frame carrying any other value is dropped here,
+    // before any routing or body arithmetic consumes it.
+    if (pkt.body.imageKind != static_cast<uint8_t>(ImageKind::THUMBNAIL) &&
+        pkt.body.imageKind != static_cast<uint8_t>(ImageKind::FULL_IMAGE)) {
+        return false;
+    }
+
     pkt.body.chunkIndex = readUint16(buffer + off); off += 2;
     pkt.body.dataLen = buffer[off++];
 
@@ -461,7 +474,7 @@ bool CommandProtocol::deserializeChunk(const uint8_t* buffer, size_t length, Ima
     }
 
     // Frame arithmetic must agree: the header bodyLen field carries dataLen
-    if (CMD_HEADER_SIZE + 5 + pkt.body.dataLen + 4 != length) {
+    if (CMD_HEADER_SIZE + 6 + pkt.body.dataLen + 4 != length) {
         return false;
     }
 
@@ -657,10 +670,11 @@ ImageManifestPacket createManifestPacket(const ImageManifestBody& body) {
     return packet;
 }
 
-ImageChunkPacket createChunkPacket(uint16_t imageId, uint16_t chunkIndex, const uint8_t* data, uint8_t dataLen) {
+ImageChunkPacket createChunkPacket(uint16_t imageId, uint8_t imageKind, uint16_t chunkIndex, const uint8_t* data, uint8_t dataLen) {
     ImageChunkPacket packet{};
     packet.type = PACKET_TYPE_IMAGE_CHUNK; // CR-01 lesson: the factory owns the wire type byte — FIRST field assigned
     packet.body.imageId = imageId;
+    packet.body.imageKind = imageKind; // CR-01 (01-13): the frame says which kind's bytes it carries
     packet.body.chunkIndex = chunkIndex;
     packet.body.dataLen = (dataLen > IMG_CHUNK_PAYLOAD_SIZE) ? IMG_CHUNK_PAYLOAD_SIZE : dataLen;
 

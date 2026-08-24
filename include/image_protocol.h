@@ -49,8 +49,8 @@ enum class CaptureSource : uint8_t {
 // Transfer Constants
 // ===========================
 
-// Chunk framing budget: 7 header + 5 chunk overhead + 200 payload + 4 trailer
-// = 216 <= CMD_MAX_PACKET_SIZE (240)
+// Chunk framing budget: 7 header + 6 chunk overhead + 200 payload + 4 trailer
+// = 217 <= CMD_MAX_PACKET_SIZE (240)
 static constexpr uint8_t  IMG_CHUNK_PAYLOAD_SIZE     = 200;
 
 // D-21 suggested window (chunks requested per pull round)
@@ -148,11 +148,17 @@ struct ImageManifestBody {
     uint8_t  wbMode;
 };
 
-// 0x13 body — 5-byte overhead + dataLen data bytes. The framed header's
+// 0x13 body — 6-byte overhead + dataLen data bytes. The framed header's
 // bodyLen field carries dataLen, so chunk framing uses the same arithmetic
-// shape as commands: expectedTotal = 7 + 5 + bodyLen + 4.
+// shape as commands: expectedTotal = 7 + 6 + bodyLen + 4.
 struct ImageChunkBody {
     uint16_t imageId;     // BE16 — must match the in-flight manifest
+    uint8_t  imageKind;   // ImageKind: THUMBNAIL or FULL_IMAGE (CR-01, 01-13) —
+                          // late thumbnail-heal stragglers were misrouted into
+                          // the active FULL slot when the kind was only
+                          // inferred; the base now routes by exact
+                          // (imageId, imageKind), and this byte is stamped from
+                          // windowKind/push kind at both TX call sites
     uint16_t chunkIndex;  // BE16, 0-based
     uint8_t  dataLen;     // <= IMG_CHUNK_PAYLOAD_SIZE
     uint8_t  data[IMG_CHUNK_PAYLOAD_SIZE]; // first dataLen bytes valid
@@ -210,7 +216,7 @@ struct ImageManifestPacket {
 
 struct ImageChunkPacket {
     PacketType type;        // PACKET_TYPE_IMAGE_CHUNK (0x13) — factory-assigned
-    ImageChunkBody body;    // 5-byte overhead + dataLen data bytes
+    ImageChunkBody body;    // 6-byte overhead + dataLen data bytes
 };
 
 struct TelemetryBeaconPacket {
