@@ -5,11 +5,11 @@ milestone_name: milestone
 current_plan: "11 (01-11: branch-conditional remediation) — COMPLETE"
 status: executing
 stopped_at: "Completed 01-11-PLAN.md (phase 01: all 11 plans executed; G-01-5/G-01-6 resolved on bench evidence; G-01-7/G-01-8 open; security gate + gap round next)"
-last_updated: "2026-08-23T22:14:14.096Z"
+last_updated: "2026-08-24T00:01:58.159Z"
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 21
+  total_plans: 22
   completed_plans: 20
 current_phase: 2
 current_phase_name: command-protocol-control
@@ -28,7 +28,7 @@ current_phase_name: command-protocol-control
 ## Current Position
 
 **Current Plan:** 11 (01-11: branch-conditional remediation) — COMPLETE
-**Total Plans in Phase:** 11 (all executed)
+**Total Plans in Phase:** 12
 **Status:** 01-11 COMPLETE (branch-c f265556 + branch-e 678d4f1 + R1 91bee03 + R2 c67e1a5 + bench re-verification 2026-08-24) — G-01-5/G-01-6 resolved on operator evidence; WINDOWS entries 3 (G-01-7 starvation) / 4 (G-01-8 VGA FB-OVF) open — /gsd-ship blocked until their round lands
 **Progress:** [██████████░] 95% (Phases 2+3: all plans executed; Phase 1: 11 of 11 — G-01-5/G-01-6 resolved; G-01-7/G-01-8 + security gate remain before phase close)
 
