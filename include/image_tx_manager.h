@@ -34,16 +34,18 @@
 
 // Per-entry transfer state (02-02 extends the 02-01 vocabulary; the push
 // states are unchanged). After the thumbnail push completes, an entry with an
-// armable full transfer emits the FULL_IMAGE manifest exactly ONCE
-// (ANNOUNCE_FULL -> ANNOUNCED) and from then on serves chunks ONLY through a
-// window context armed by handleWindowRequest — never free-runs (Pitfall 5:
-// the half-duplex link is serialized by the base asking).
+// armable full transfer emits the FULL_IMAGE manifest, consumed only on a
+// SUCCESSFUL transmit (ANNOUNCE_FULL -> ANNOUNCED; a failed transmit retries
+// on later process() passes, bounded by IMG_MANIFEST_MAX_ATTEMPTS —
+// CR-02/WR-01, 01-14) and from then on serves chunks ONLY through a window
+// context armed by handleWindowRequest — never free-runs (Pitfall 5: the
+// half-duplex link is serialized by the base asking).
 enum class ImageTxEntryState : uint8_t {
     IDLE = 0,                 // slot free
-    PUSH_THUMB_MANIFEST,      // next transmit: the 0x12 thumbnail manifest
+    PUSH_THUMB_MANIFEST,      // next transmit: the 0x12 thumbnail manifest (retries while transmits fail, bounded by IMG_MANIFEST_MAX_ATTEMPTS)
     PUSH_THUMB_CHUNKS,        // one 0x13 chunk per process() pass
-    ANNOUNCE_FULL,            // thumbnail done; next transmit: the 0x12 FULL_IMAGE manifest (once)
-    ANNOUNCED,                // full manifest emitted; serves chunks via window context only
+    ANNOUNCE_FULL,            // thumbnail done; next transmit: the 0x12 FULL_IMAGE manifest (retries while transmits fail, bounded by IMG_MANIFEST_MAX_ATTEMPTS)
+    ANNOUNCED,                // full manifest transmit SUCCEEDED; serves chunks via window context only
     THUMB_PUSHED,             // parked: thumbnail done but full not armable (oversize / no buffer); eviction only
     // SERVED (02-05 / CR-03 fix c): the FULL window whose clamped span reached
     // fullTotalChunks — the base has been offered every full chunk at least
@@ -123,6 +125,14 @@ struct ImageTxEntry {
     uint32_t windowArmedAtMs;
 
     uint32_t lastActivityMs;
+
+    // CR-02/WR-01 (01-14): bounded manifest-transmit attempts, shared by the
+    // two mutually exclusive manifest phases (PUSH_THUMB_MANIFEST and
+    // ANNOUNCE_FULL are sequential per entry — never simultaneous); reset to
+    // 0 on each success and in freeEntry so a phase never inherits the
+    // other's count. At IMG_MANIFEST_MAX_ATTEMPTS the kind is dropped
+    // honestly (buffer freed, named log).
+    uint8_t manifestAttempts;
 };
 
 class ImageTxManager {

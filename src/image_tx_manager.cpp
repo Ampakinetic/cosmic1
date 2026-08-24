@@ -509,8 +509,33 @@ bool ImageTxManager::pushThumbManifest(ImageTxEntry& entry) {
                      ok ? "sent" : "FAILED");
     }
 
-    entry.nextThumbChunk = 0;
-    entry.state = ImageTxEntryState::PUSH_THUMB_CHUNKS;
+    // WR-01 (01-14): the one-shot push state advances ONLY on a successful
+    // transmit — a failed thumbnail manifest retries on the next process()
+    // pass (one transmit per pass is the existing pacing), bounded by
+    // IMG_MANIFEST_MAX_ATTEMPTS. At the bound the thumbnail is dropped
+    // honestly (buffer freed, named log) and the entry proceeds exactly as a
+    // completed push would, minus thumbnail bytes (full announce or
+    // THUMB_PUSHED park via completedThumbState).
+    if (ok) {
+        entry.manifestAttempts = 0;
+        entry.nextThumbChunk = 0;
+        entry.state = ImageTxEntryState::PUSH_THUMB_CHUNKS;
+    } else {
+        entry.manifestAttempts++;
+        if (entry.manifestAttempts < IMG_MANIFEST_MAX_ATTEMPTS) {
+            // stay in PUSH_THUMB_MANIFEST — the next pass retries the manifest
+        } else {
+            Serial.printf("ImageTx: thumbnail manifest for image %u failed after %u attempts; thumbnail dropped\n",
+                         entry.imageId,
+                         static_cast<unsigned>(IMG_MANIFEST_MAX_ATTEMPTS));
+            free(entry.thumbBuffer);
+            entry.thumbBuffer = nullptr;
+            entry.thumbLength = 0;
+            entry.thumbCrc32 = 0;
+            entry.thumbTotalChunks = 0;
+            entry.state = completedThumbState(entry);
+        }
+    }
     entry.lastActivityMs = millis();
     return ok;
 }
@@ -601,9 +626,35 @@ bool ImageTxManager::announceFullManifest(ImageTxEntry& entry) {
                      ok ? "sent" : "FAILED");
     }
 
-    // Emitted exactly ONCE per entry: from ANNOUNCED on, chunks flow only
-    // through a window context armed by handleWindowRequest
-    entry.state = ImageTxEntryState::ANNOUNCED;
+    // CR-02 (01-14, G-01-9 defect C): the announcement is consumed ONLY on a
+    // successful transmit (comment updated from "emitted exactly ONCE" —
+    // failures retry bounded by IMG_MANIFEST_MAX_ATTEMPTS). From ANNOUNCED on,
+    // chunks flow only through a window context armed by handleWindowRequest.
+    if (ok) {
+        entry.manifestAttempts = 0;
+        entry.state = ImageTxEntryState::ANNOUNCED;
+    } else {
+        entry.manifestAttempts++;
+        if (entry.manifestAttempts < IMG_MANIFEST_MAX_ATTEMPTS) {
+            // stay in ANNOUNCE_FULL — the next pass retries the announcement
+        } else {
+            Serial.printf("ImageTx: FULL manifest for image %u failed after %u attempts; full dropped\n",
+                         entry.imageId,
+                         static_cast<unsigned>(IMG_MANIFEST_MAX_ATTEMPTS));
+            // Park-and-free at the bound (PRI-03 honest degradation): the
+            // thumbnail has already pushed (push precedes announce by
+            // construction), so the base degrades to thumbnail-only for this
+            // capture — bounded, logged, never silent. thumbBuffer stays
+            // owned so THUMBNAIL window heals keep working on the parked
+            // entry.
+            free(entry.fullBuffer);
+            entry.fullBuffer = nullptr;
+            entry.fullLength = 0;
+            entry.fullCrc32 = 0;
+            entry.fullTotalChunks = 0;
+            entry.state = ImageTxEntryState::THUMB_PUSHED;
+        }
+    }
     entry.lastActivityMs = millis();
     return ok;
 }
@@ -927,6 +978,7 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     entry.thumbCrc32 = 0;
     entry.thumbTotalChunks = 0;
     entry.nextThumbChunk = 0;
+    entry.manifestAttempts = 0;   // CR-02/WR-01: a recycled slot starts with a clean manifest budget
     entry.windowArmed = false;
     entry.windowKind = 0;
     entry.windowEverArmed = false;

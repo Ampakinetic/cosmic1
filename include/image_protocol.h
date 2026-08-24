@@ -64,6 +64,16 @@ static constexpr uint8_t  IMG_TX_QUEUE_DEPTH         = 3;
 // an image incomplete
 static constexpr uint8_t  IMG_RETRANSMIT_MAX_PASSES  = 3;
 
+// CR-02 / WR-01 (01-14): a manifest transmit failure must not consume its
+// one-shot state — the ANNOUNCED / PUSH_THUMB_CHUNKS advance happens only on
+// a successful transmit, and failures retry on later process() passes (one
+// transmit per pass is the existing pacing; a manifest frame is 34 B — the
+// cheapest frame class) bounded by this count so a dead link can never spin
+// the announce. At the bound the payload buffer is freed and the kind
+// degrades honestly (full dropped to thumbnail-only / thumbnail dropped to
+// full-only) with a named log — never silent (PRI-03).
+static constexpr uint8_t  IMG_MANIFEST_MAX_ATTEMPTS = 3;
+
 // Full-image transfer cap (research Q4 resolution): fulls larger than this
 // never arm a pull — the balloon logs a warning naming the image ID and size
 // while the thumbnail still pushes, and the base never sees a FULL_IMAGE
