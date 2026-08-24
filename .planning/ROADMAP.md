@@ -89,7 +89,7 @@ Plans:
 
 **Wave 10** *(gap-closure round #7, 2026-08-24; blocked on Wave 9)*
 
-- [ ] 01-13-PLAN.md — G-01-9 defect B/A gap closure (wire honesty): CR-01 imageKind byte in the 0x13 chunk frame (protocol + serializer + factory + base dispatch + harness, one atomic commit) with kind-exact onChunkFrame routing + kind-stamped TX logs; CR-03 thumbnail payload guard (stale-frame drain after QQVGA downshift + THUMB_MAX_BYTES 8192 bound) (IMG-01, IMG-02, IMG-03, IMG-04)
+- [x] 01-13-PLAN.md — G-01-9 defect B/A gap closure (wire honesty): CR-01 imageKind byte in the 0x13 chunk frame (protocol + serializer + factory + base dispatch + harness, one atomic commit) with kind-exact onChunkFrame routing + kind-stamped TX logs; CR-03 thumbnail payload guard (stale-frame drain after QQVGA downshift + THUMB_MAX_BYTES 8192 bound) (IMG-01, IMG-02, IMG-03, IMG-04)
 
 **Wave 11** *(blocked on Wave 10; 01-14 and 01-15 are file-disjoint and run in parallel)*
 

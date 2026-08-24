@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-current_plan: 12 (final plan of Phase 1) — complete
+current_plan: 2
 status: executing
-stopped_at: "Completed 01-12-PLAN.md (phase 01: all 12 plans executed; G-01-8 resolved on bench evidence; G-01-7 rescoped open; G-01-9 + retry overrun routed; security gate + G-01-9 round next)"
-last_updated: "2026-08-24T03:37:51.981Z"
+stopped_at: Completed 01-13-PLAN.md (CR-01 kind-tagged chunk wire format + kind-exact routing; CR-03 thumbnail payload guard; builds 2/2, harness 53/53; G-01-9 code-level mechanisms removed, bench proof rides 01-16)
+last_updated: "2026-08-24T04:03:00.083Z"
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 26
-  completed_plans: 21
+  completed_plans: 22
 current_phase: 2
-current_phase_name: command-protocol-control
+current_phase_name: Command Protocol & Control
 ---
 
 # Project State
@@ -27,10 +27,10 @@ current_phase_name: command-protocol-control
 
 ## Current Position
 
-**Current Plan:** 12 (final plan of Phase 1) — complete
+**Current Plan:** 2
 **Total Plans in Phase:** 16
 **Status:** Ready to execute
-**Progress:** [██████████] 95% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
+**Progress:** [█████████░] 85% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
 
 ## Progress
 
@@ -97,7 +97,7 @@ See: `.planning/PROJECT.md`
 
 **Core value:** Users can remotely control the balloon camera and view captured images through the base station web interface, with real-time telemetry and map tracking always available.
 
-**Current focus:** Phase 01 — command-protocol-control
+**Current focus:** Phase 01 — Command Protocol & Control
 
 ## Next Steps
 
@@ -126,8 +126,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-24T01:59:18.568Z
-**Stopped at:** Completed 01-12-PLAN.md (phase 01: all 12 plans executed; G-01-8 resolved on bench evidence; G-01-7 rescoped open; G-01-9 + retry overrun routed; security gate + G-01-9 round next)
+**Last session:** 2026-08-24T04:03:00.042Z
+**Stopped at:** Completed 01-13-PLAN.md (CR-01 kind-tagged chunk wire format + kind-exact routing; CR-03 thumbnail payload guard; builds 2/2, harness 53/53; G-01-9 code-level mechanisms removed, bench proof rides 01-16)
 **Resume file:** None
 
 ## Performance Metrics
@@ -154,6 +154,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P10 | ~5.5h across 3 executor sessions + operator bench (2 bench checkpoints) | 3 tasks | 4 files |
 | Phase 01 P11 | ~1 day across executor + operator bench sessions (Tasks 1-2 2026-08-23, bench 2026-08-24) | 3 tasks | 7 files |
 | Phase 01 P12 | ~4h across executor + operator bench sessions (Tasks 1-2 2026-08-23/24, bench session #4 2026-08-24 ~13:16) | 3 tasks | 7 files |
+| Phase 01 P13 | 17min | 3 tasks | 8 files |
 
 ## Decisions
 
@@ -204,3 +205,6 @@ See: `.planning/PROJECT.md`
 - [Phase 01]: 01-11 Task 2 executed branch-c + branch-e + ride-alongs R1/R2 (operator-confirmed routing): AUX phantom-failure accounting fixed (f265556 - missed AUX-low after a complete write no longer books FAILED; short-write and pre-write readiness stay true failures), image-ID counter persisted to NVS (678d4f1 - fresh-boot captures append IMG_00002_* instead of overwriting; fail-open), STATUS_LED remapped 39->41 + edge-gated writes (91bee03 - kills the 3.5k-9.6k-line/session HAL error flood), thumbnail QQVGA frame-dimension guard (c67e1a5 - full-size frames bail honestly instead of pushing as thumbnails). Builds 2/2 + harness 49/49 green. e-site deviation: trace named balloon auto_capture.cpp, not the plan-anticipated sd_storage.cpp (trace-named-site clause) — 01-10 discriminator evidence: E32 AUX handshake phantom TX-failure named as the G-01-5 mechanism; image-ID reboot reset named as the G-01-6 mechanism; single-lever discipline held (no pacing constants touched)
 - [Phase ?]: [Phase 01]: 01-11 Task 3 bench re-verification CLOSED both gaps on operator evidence and honestly routed two new ones: G-01-5 resolved (f265556 — phantom FAILED 0/0/0 across three post-fix sessions vs ~41/capture baseline; spaced series 4/4 kinds COMPLETE discriminates the fix from the concurrency residual), G-01-6 resolved (678d4f1 — IDs 1..5 sequential across reboots, gallery index 2->3->4->5 with appends, no overwrite); G-01-7 concurrent-transfer starvation + G-01-8 SET_RESOLUTION VGA FB-OVF recorded open with named levers (serialize transfers / NACK-above-buffer); IMG-02/IMG-03 flipped complete — the 01-10 blocking condition (bench-verified remediation) is discharged, narrower residual truths live in the WINDOWS ledger (entries 3/4)
 - [Phase ?]: [Phase 01]: 01-12 Task 3 bench re-verification resolved G-01-8 on operator evidence (f51bad6 — CIF/VGA/SVGA each via 'Camera: framesize growth requires re-init' balloon4.log:1791/:2784/:3588 with ZERO FB-OVF at every settings step vs the 4,379 baseline, 6/6 captures SUCCESS, camera never died) and honestly kept G-01-7 OPEN despite its levers provably engaging (hold 3x, zero mid-service evictions) — the series-A truth failed on three DISTINCT mechanisms: BUSY-deferral pass burn (image 7 thumb 35/36, balloon4.log:1154/:1157), balloon-source-side stored-bytes CRC corruption (image 7 full 36/36-received CRC mismatch base4.log:854), and a silently lost FULL manifest (image 8, balloon4.log:722) — rescoped as defer-aware pass accounting + re-announce + thumb fix; NEW gap G-01-9 opened (full-sized thumbs 4/6 passing the metadata-only QQVGA guard — payload must be validated, not fb->width/height; kind-tagged balloon chunk logging named as the defect-B discriminator) and the CommandSender retry overrun (13x 'attempt 4/3') routed to WINDOWS entry 6
+- [Phase ?]: 01-13: CR-01 fixed at root cause on the wire — every 0x13 chunk frame carries an imageKind byte (u8 after imageId, 6-byte body overhead) validated at deserialize (kinds outside THUMBNAIL/FULL_IMAGE rejected, T-01-13-01); the base's routing heuristic is deleted — every chunk routes by exact (imageId, imageKind), so a late thumbnail-heal straggler can never occupy full-image indices (the 36/36-received stored-bytes CRC mismatch mechanism, G-01-9 defect B)
+- [Phase ?]: 01-13: CR-03 thumbnail payload honesty — createThumbnail drains ONE stale frame after the QQVGA/quality-20 downshift (fb_count 2 / GRAB_LATEST can hand back the pre-downshift capture with restamped metadata, logged with width/height/len as the payload-vs-metadata discriminator) and bounds fb->len at THUMB_MAX_BYTES 8192 through the existing honest bail path (~5x the 1341-1703 B correct-thumb ceiling, far below the 7157-28808 B impostors; G-01-9 defect A)
+- [Phase ?]: 01-13: wire-change discipline — both boards MUST be reflashed together before the next bench run (mixed old/new firmware breaks chunk framing entirely, 01-09 severance lesson); no gap status flips in this plan, G-01-9 closure requires the 01-16 bench series
