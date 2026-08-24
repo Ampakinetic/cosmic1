@@ -689,7 +689,11 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
         // moved past older entries — implicitly complete them and free their
         // buffers. FULL requests ONLY (02-05 Gap 2 eviction safety): a
         // THUMBNAIL heal request must NEVER evict — any parked or queued
-        // entry may still be the active pull's target mid-stream
+        // entry may still be the active pull's target mid-stream.
+        // G-01-7 lever 2 EXCEPTION (01-12): a supersede DEFERS (never evicts)
+        // an entry whose window is mid-service — an in-flight heal/pull is
+        // not "moved past" until its armed window completes (the deferred
+        // entry then hits the BUSY check below and the base retries).
         evictEntriesOlderThan(*target);
     }
 
@@ -722,6 +726,7 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     target->windowStart = startChunk;
     target->windowCount = count;
     target->windowNextIndex = startChunk;
+    target->windowArmedAtMs = millis();   // G-01-7 lever 3: settle clock starts at arming
     target->lastActivityMs = millis();
 
     if (DEBUG_IMAGE_TX) {
@@ -737,6 +742,20 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
         entry.windowNextIndex >= entry.windowStart + entry.windowCount) {
         entry.windowArmed = false;
         return true;
+    }
+
+    // G-01-7 lever 3 (01-12): RX-settle gate — only the FIRST chunk of a
+    // freshly (re-)armed window waits out IMG_WINDOW_RX_SETTLE_MS after its
+    // arming. The 01-11 session-2 discriminator (five immediate tail
+    // re-requests, seq 53/55-59, base2.log:415-498, 6 END MARKER MISS) named
+    // the half-duplex immediate-retransmit turnaround-collision class:
+    // answering a re-request instantly collides with the link still turning
+    // around. A re-armed span re-settles (windowArmedAtMs refreshes at every
+    // arming); mid-window continuation is unaffected, and the settle (500 ms)
+    // sits far below both the preempt (5000 ms) and stall (8000 ms) clocks.
+    if (entry.windowNextIndex == entry.windowStart &&
+        (millis() - entry.windowArmedAtMs) < IMG_WINDOW_RX_SETTLE_MS) {
+        return true;   // no transmit this pass — the settle window holds
     }
 
     // KIND-SELECTED source (D-22 / CR-01): the armed window names which owned
@@ -796,8 +815,24 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
 // ===========================
 
 void ImageTxManager::evictEntriesOlderThan(const ImageTxEntry& reference) {
+    // G-01-7 lever 2 (01-12): the supersede path never evicts an entry whose
+    // window is armed and mid-service — that entry's heal/pull chunks are in
+    // flight on the link, and evicting it mid-stream is exactly the 01-11
+    // session-2 failure (balloon2.log:656: image 2's pending thumbnail heal
+    // evicted when image 3's window request arrived). Deferred entries age
+    // into normal eviction once their window completes; the guard lives ONLY
+    // here — evictionClassOf's overflow ranking and sweepExpiredEntries' TTL
+    // path keep their full eviction rights (three pinned slots must never
+    // wedge the IMG_TX_QUEUE_DEPTH 3 queue).
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
         if (entries[i].used && entries[i].enqueueSeq < reference.enqueueSeq) {
+            if (entries[i].windowArmed &&
+                entries[i].windowNextIndex <
+                    entries[i].windowStart + entries[i].windowCount) {
+                Serial.printf("ImageTx: supersede of image %u deferred - window mid-service\n",
+                             entries[i].imageId);
+                continue;   // never free an in-flight heal/pull window
+            }
             Serial.printf("ImageTx: window request for image %u supersedes older entry image %u; evicted\n",
                          reference.imageId, entries[i].imageId);
             freeEntry(entries[i]);
@@ -888,6 +923,7 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     entry.windowStart = 0;
     entry.windowCount = 0;
     entry.windowNextIndex = 0;
+    entry.windowArmedAtMs = 0;
     entry.used = false;
     entry.state = ImageTxEntryState::IDLE;
 }

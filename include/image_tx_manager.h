@@ -115,6 +115,12 @@ struct ImageTxEntry {
     uint16_t windowStart;     // first chunk index of the armed window
     uint16_t windowCount;     // chunks in the armed window
     uint16_t windowNextIndex; // next chunk index to transmit
+    // G-01-7 lever 3 (01-12): when this window context was (re-)armed — the
+    // balloon-side RX-settle clock. Only the FIRST chunk of a freshly (re-)
+    // armed window waits out IMG_WINDOW_RX_SETTLE_MS (a re-armed span
+    // re-settles — exactly the retransmit-collision case); mid-window
+    // continuation and the preempt clock are unaffected.
+    uint32_t windowArmedAtMs;
 
     uint32_t lastActivityMs;
 };

@@ -160,6 +160,10 @@ private:
     ImageRxTransfer transfers[RX_TRANSFER_SLOTS];
     uint32_t nextArrivalSeq;
 
+    // G-01-7 lever 1 (01-12): log-once latch for the activation-hold message
+    // — the hold logs once per held image id, not once per process() pass
+    uint16_t healHoldLoggedId;
+
     // Retained newest verified thumbnail (plain heap — served by the web
     // server from the single-threaded loop, so no locking is needed)
     uint16_t latestThumbId;
@@ -171,6 +175,12 @@ private:
     // Slot handling
     ImageRxTransfer* findTransfer(uint16_t imageId, uint8_t kind);
     ImageRxTransfer* findActivePull();
+    // G-01-7 lever 1 (01-12): the earliest non-terminal THUMBNAIL slot with
+    // holes whose same-id FULL manifest already arrived (the gate-2 proof the
+    // thumbnail push finished) — while one exists, full-pull activation is
+    // HELD so the thumbnail's heal completes first (serialization). Returns
+    // nullptr when no such slot exists.
+    ImageRxTransfer* pendingHealThumbnail();
     ImageRxTransfer* allocateSlot(uint8_t kind);
     void releaseSlotWork(ImageRxTransfer& t);   // free bitmap + working buffer
 

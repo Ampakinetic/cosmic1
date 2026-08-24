@@ -53,6 +53,7 @@ const char* transferStateToString(TransferDisplayState state) {
 ImageRxManager::ImageRxManager()
     : initialized(false)
     , nextArrivalSeq(0)
+    , healHoldLoggedId(0)
     , latestThumbId(0)
     , latestThumbBuffer(nullptr)
     , latestThumbLength(0)
@@ -108,9 +109,21 @@ void ImageRxManager::process() {
         if (pull->receivedCount == pull->totalChunks) {
             finalizeTransfer(*pull);
         } else if (pull->windowActive && windowSliceComplete(*pull)) {
-            // Window completed: advance to the next missing span. All chunks
-            // before the span are present by construction (windows complete
-            // before advancing), so the span starts at the global first miss.
+            // Window completed. G-01-7 lever 3 (01-12): RX-settle gate — the
+            // next window request waits out IMG_WINDOW_RX_SETTLE_MS after the
+            // last accepted chunk. The 01-11 session-2 discriminator (five
+            // immediate tail re-requests seq 53/55-59 for the 13..14/14..14
+            // windows, 6 END MARKER MISS, base2.log:415-498) named the
+            // half-duplex immediate-retransmit turnaround-collision class;
+            // the settle gap breaks the collision. The check is NESTED in
+            // this branch, so during the settle window no pass is charged and
+            // the stall branch below cannot fire (settle 500 << stall 8000).
+            if ((millis() - pull->lastProgressMs) < IMG_WINDOW_RX_SETTLE_MS) {
+                return;   // settle holds this pass — no request, no stall path
+            }
+            // Advance to the next missing span. All chunks before the span
+            // are present by construction (windows complete before
+            // advancing), so the span starts at the global first miss.
             uint16_t fm = firstMissingChunk(*pull, 0);
             if (fm >= pull->totalChunks) {
                 finalizeTransfer(*pull);
@@ -157,7 +170,12 @@ void ImageRxManager::process() {
     } else {
         // FIFO advance (D-19): no active pull — activate the earliest
         // manifest-arrival queued full (issues its first window request =
-        // the manifest-while-idle trigger)
+        // the manifest-while-idle trigger). G-01-7 lever 1 EXCEPTION
+        // (01-12): activation is HELD while a non-terminal holed thumbnail
+        // with a same-id FULL slot exists (pendingHealThumbnail) — the
+        // thumbnail's heal completes first; the hold is priority ordering
+        // between two existing D-21 triggers, not a new one, and it is
+        // bounded by the D-24 3-pass finalization.
         activateNextPull();
     }
 
@@ -338,6 +356,32 @@ ImageRxTransfer* ImageRxManager::findActivePull() {
         }
     }
     return nullptr;
+}
+
+ImageRxTransfer* ImageRxManager::pendingHealThumbnail() {
+    // G-01-7 lever 1 (01-12): the earliest-by-arrival non-terminal THUMBNAIL
+    // slot with holes AND a same-id FULL slot. The FULL slot's existence is
+    // the heal loop's gate-2 proof (manifests arrive post-push), so this
+    // condition can never hold while a push is still streaming — no separate
+    // push-state tracking is needed. While a slot is returned, full-pull
+    // activation is HELD: the thumbnail's heal (the existing stall-driven
+    // D-22 path) completes first, then the FIFO advances.
+    ImageRxTransfer* best = nullptr;
+    for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+        ImageRxTransfer& t = transfers[i];
+        if (!t.used || t.terminal ||
+            t.imageKind != static_cast<uint8_t>(ImageKind::THUMBNAIL) ||
+            t.receivedCount >= t.totalChunks) {
+            continue;
+        }
+        if (findTransfer(t.imageId, static_cast<uint8_t>(ImageKind::FULL_IMAGE)) == nullptr) {
+            continue;   // push not provably finished — no FULL manifest yet
+        }
+        if (best == nullptr || t.arrivalSeq < best->arrivalSeq) {
+            best = &t;
+        }
+    }
+    return best;
 }
 
 ImageRxTransfer* ImageRxManager::allocateSlot(uint8_t kind) {
@@ -534,7 +578,10 @@ void ImageRxManager::startTransfer(const ImageManifestBody& m) {
     if (m.imageKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) && !t->pullActive) {
         // QUEUED (D-19 FIFO). If no pull is active this manifest arrived
         // while idle — the one trigger that starts a pull immediately.
-        if (findActivePull() == nullptr) {
+        // G-01-7 lever 1 (01-12): the trigger ALSO requires no pending
+        // thumbnail heal (serialization hold) — a same-id or earlier holed
+        // thumbnail completes before any full pull activates.
+        if (findActivePull() == nullptr && pendingHealThumbnail() == nullptr) {
             t->pullActive = true;
             // CR-01: the SD file opens HERE, at activation — a QUEUED
             // manifest must never touch the kind handle an active pull owns
@@ -767,6 +814,25 @@ void ImageRxManager::writeSidecarFor(const ImageRxTransfer& t, bool complete,
 // ===========================
 
 void ImageRxManager::activateNextPull() {
+    // G-01-7 lever 1 (01-12) — serialization hold: while a non-terminal holed
+    // thumbnail whose same-id FULL manifest already arrived exists, full-pull
+    // activation is HELD so the thumbnail completes (push + heal, D-22 single
+    // path) before its full pull starts. This covers the FIFO branch and both
+    // post-finalize advances. The hold reorders priority between two existing
+    // D-21 triggers — the heal loop below needs no change: with activation
+    // held there is no active pull, its gate 1 passes, and the existing
+    // stall-driven heal fires on its own clock. Bounded: the D-24 3-pass
+    // finalization makes a stuck thumbnail terminal, releasing the hold.
+    ImageRxTransfer* held = pendingHealThumbnail();
+    if (held != nullptr) {
+        if (held->imageId != healHoldLoggedId) {
+            Serial.printf("ImageRx: full-pull activation held - thumbnail heal pending for image %u\n",
+                          held->imageId);
+            healHoldLoggedId = held->imageId;
+        }
+        return;   // hold — no full pull activates while the heal is pending
+    }
+
     // FIFO by manifest arrival order (D-19 base side): the earliest queued
     // full becomes the active pull and issues its first window request
     ImageRxTransfer* best = nullptr;

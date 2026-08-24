@@ -83,6 +83,19 @@ static constexpr uint32_t IMG_WINDOW_STALL_MS        = 8000;
 // base's 8 s stall while the balloon still holds it armed.
 static constexpr uint32_t IMG_WINDOW_SERVICE_PREEMPT_MS = 5000;
 
+// Inter-window RX-settle gap (01-12 / G-01-7 lever 3): after a window's last
+// chunk lands (base side) or a window is freshly (re-)armed (balloon side),
+// the FIRST chunk traffic of the next exchange waits out this gap. The 01-11
+// session-2 discriminator proved the class it treats: five immediate tail
+// re-requests for the 13..14 / 14..14 windows (seq 53/55-59, base2.log:415-
+// 498, 6 END MARKER MISS) where the balloon armed and sent each time yet the
+// chunks never arrived — the half-duplex immediate-retransmit turnaround-
+// collision class: a re-request answered instantly collides with the link
+// still turning around. INVARIANT CHAIN: settle (500) < preempt (5000) < stall
+// (8000) — a settled window still preempts push work inside the 5000 ms bound
+// and can never trip the base's 8000 ms stall clock.
+static constexpr uint32_t IMG_WINDOW_RX_SETTLE_MS     = 500;
+
 // Oversize-thumbnail heal fallback (02-05 / CR-01 base half): an oversize
 // image's thumbnail never gets a FULL_IMAGE manifest (the balloon parks it at
 // THUMB_PUSHED without announcing), so the manifest-arrived proof gate can
