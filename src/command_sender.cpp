@@ -223,9 +223,23 @@ void CommandSender::process() {
 
         // Check if command needs to be sent
         if (cmd->state == CommandState::PENDING) {
+            // G-01-7 channel-quiet gate: never transmit a command frame
+            // into an inbound chunk stream the balloon is occupying (session
+            // 5: seq=6 lost all 4 transmissions that way). A hold consumes
+            // nothing — no retryCount, no lastRetryTime change, no failure,
+            // sendTime untouched; the D-07 backoff block above is unaffected
+            // (it only paces attempts that are about to fire). A held
+            // PENDING IMAGE_WINDOW_REQUEST stays non-terminal, so
+            // windowRequestInFlight still counts it: the base D-24 stall
+            // clock extends and no pass is charged — the 01-15 defer-aware
+            // machinery composes.
+            if (!canTransmitNow(cmd, currentTime)) {
+                continue;   // hold: wait for the stream's natural pause
+            }
             if (transmitCommand(cmd)) {
                 cmd->state = CommandState::SENT;
                 cmd->sendTime = currentTime;
+                cmd->channelHoldStartMs = 0;   // a later hold episode logs freshly
                 commandsSent++;
 
                 if (DEBUG_COMMAND_SENDER) {
@@ -256,7 +270,15 @@ void CommandSender::process() {
             if (currentTime - cmd->sendTime > ackTimeoutFor(static_cast<uint8_t>(cmd->packet.cmd))) {
                 // Check if we should retry
                 if (cmd->retryCount < maxRetries) {
-                    retryCommand(cmd);
+                    // G-01-7 channel-quiet gate on the timeout retry: when
+                    // held, skip this pass — the timeout condition persists
+                    // (sendTime untouched) and the retry fires on the first
+                    // quiet pass; the D-05 window restarts from the actual
+                    // retransmit inside retryCommand, which resets sendTime
+                    // on both outcomes. A hold consumes no retry budget.
+                    if (canTransmitNow(cmd, currentTime)) {
+                        retryCommand(cmd);
+                    }
                 } else {
                     // Max retries reached
                     cmd->state = CommandState::TIMEOUT;
@@ -609,6 +631,7 @@ void CommandSender::retryCommand(TrackedCommand* cmd) {
     cmd->sendTime = cmd->lastRetryTime;
 
     if (transmitCommand(cmd)) {
+        cmd->channelHoldStartMs = 0;   // transmit left the ground: a later hold episode logs freshly
         if (DEBUG_COMMAND_SENDER) {
             // WINDOWS entry 6 (01-15): print the RETRY ordinal against the
             // bound it enforces — retryCount is post-increment 1..maxRetries
