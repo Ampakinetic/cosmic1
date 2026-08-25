@@ -1785,6 +1785,9 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             } else if (d.gpsValid === false) {
                 detailRow(list, 'Position', 'GPS no fix');
             }
+            if (d.camera && d.camera.resLabel) {
+                detailRow(list, 'Resolution', d.camera.resLabel);
+            }
             if (d.camera) {
                 detailRow(list, 'Camera', 'resolution ' + d.camera.resolution
                     + ' · quality ' + d.camera.quality
@@ -1793,6 +1796,13 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                     + ' · saturation ' + d.camera.saturation
                     + ' · exposure ' + d.camera.exposure
                     + ' · wb ' + d.camera.wbMode);
+            }
+            if (typeof d.fullBytes === 'number' && d.fullBytes > 0) {
+                detailRow(list, 'Filesize', d.fullBytes >= 1024
+                    ? (d.fullBytes / 1024).toFixed(1) + ' KB'
+                    : d.fullBytes + ' B');
+            } else if (typeof d.bytesReceived === 'number') {
+                detailRow(list, 'Filesize', d.bytesReceived + ' B received');
             }
             if (typeof d.chunksReceived === 'number' && typeof d.chunksTotal === 'number') {
                 const pct = (typeof d.percent === 'number') ? (' · ' + d.percent + '%') : '';
@@ -3538,6 +3548,24 @@ void handleGalleryList() {
 // the handleImage discipline — strictly numeric, 1..0xFFFF, validated
 // before any file access (T-03-10: no network-supplied fragment ever
 // reaches a path).
+// Gallery-detail label for a FrameSize wire code — mirrors the dashboard's
+// <option> vocabulary exactly so the detail view shows the operator the same
+// names the settings form uses (never the bare numeric code)
+static const char* frameSizeLabel(uint8_t code) {
+    switch (code) {
+        case 5:  return "QQVGA 160x120";
+        case 6:  return "QVGA 320x240";
+        case 7:  return "HQVGA 240x176";
+        case 8:  return "CIF 400x296";
+        case 9:  return "VGA 640x480";
+        case 10: return "SVGA 800x600";
+        case 11: return "XGA 1024x768";
+        case 12: return "SXGA 1280x1024";
+        case 13: return "UXGA 1600x1200";
+        default: return "unknown";
+    }
+}
+
 void handleGalleryDetail(const String& uri) {
     static const char PREFIX[] = "/gallery/";
 
@@ -3584,6 +3612,9 @@ void handleGalleryDetail(const String& uri) {
     json += "{\"id\":" + String(static_cast<unsigned long>(imageId));
     json += ",\"complete\":" + String(complete ? "true" : "false");
     json += ",\"hasFull\":" + String((haveEntry && entry.hasFull) ? "true" : "false");
+    if (haveEntry && entry.hasFull) {
+        json += ",\"fullBytes\":" + String(static_cast<unsigned long>(entry.fullSize));
+    }
 
     if (haveMeta) {
         if (meta.present & SD_SC_PRESENT_CAPTURETIME) {
@@ -3608,6 +3639,7 @@ void handleGalleryDetail(const String& uri) {
         if (meta.present & SD_SC_PRESENT_CAMERA) {
             json += ",\"camera\":{";
             json += "\"resolution\":" + String(static_cast<unsigned long>(meta.resolution));
+            json += ",\"resLabel\":\"" + String(frameSizeLabel(meta.resolution)) + "\"";
             json += ",\"quality\":" + String(static_cast<unsigned long>(meta.quality));
             json += ",\"brightness\":" + String(static_cast<long>(meta.brightness));
             json += ",\"contrast\":" + String(static_cast<long>(meta.contrast));
@@ -3618,6 +3650,7 @@ void handleGalleryDetail(const String& uri) {
         if (meta.present & SD_SC_PRESENT_CHUNKS) {
             json += ",\"chunksReceived\":" + String(static_cast<unsigned long>(meta.chunksReceived));
             json += ",\"chunksTotal\":" + String(static_cast<unsigned long>(meta.chunksTotal));
+            json += ",\"bytesReceived\":" + String(static_cast<unsigned long>(meta.bytesReceived));
             uint32_t percent = (meta.chunksTotal > 0)
                 ? (static_cast<uint32_t>(meta.chunksReceived) * 100UL / meta.chunksTotal)
                 : 0;
