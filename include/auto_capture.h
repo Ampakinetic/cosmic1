@@ -75,6 +75,15 @@ public:
     uint16_t allocateImageId();        // Pre-increments and returns the counter
     uint16_t getLastImageId() const { return lastImageId; }
 
+    // WR-03 (01-19): a MANUAL capture resets the interval baseline exactly
+    // as every automatic capture does inside fire() — D-27 arithmetic (any
+    // capture resets the interval clock) and D-28 spacing (any two captures)
+    // then hold for manual triggers too, so an interval capture can never
+    // fire moments after a manual one. Safe to call while disabled: the
+    // interval branch is gated on enabled, and enable() resets the baseline
+    // regardless.
+    void markCaptureBaseline();
+
 private:
     CameraManager* camera;
     bool enabled;

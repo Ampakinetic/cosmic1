@@ -257,6 +257,15 @@ CommandResult CommandHandler::handleCaptureNow(const CommandPacket& cmd) {
         result.responseData[1] = imageId & 0xFF;
         result.responseLength = 2;
 
+        // WR-03 (01-19): a successful MANUAL capture advances the shared
+        // interval baseline exactly as every automatic capture does inside
+        // fire() — the next interval capture counts one full interval from
+        // this capture, and event triggers are spaced from it too (D-27/
+        // D-28 hold for manual triggers). Only on success: a failed capture
+        // above must not defer the schedule (mirrors fire()'s success-gated
+        // ID allocation).
+        AutoCap().markCaptureBaseline();
+
         commandsExecuted++;
 
         if (DEBUG_COMMAND_HANDLER) {

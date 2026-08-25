@@ -125,6 +125,15 @@ void AutoCapture::disable() {
     }
 }
 
+void AutoCapture::markCaptureBaseline() {
+    // WR-03 (01-19): manual captures advance the SAME baseline every
+    // automatic capture advances in fire() (same wraparound-safe millis
+    // field, so the elapsed arithmetic in process() stays correct across
+    // rollover). Called only from a successful manual capture — a failed
+    // attempt must not defer the schedule.
+    lastCaptureTime = millis();
+}
+
 // ===========================
 // Event-Trigger Control
 // ===========================
