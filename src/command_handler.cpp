@@ -128,6 +128,37 @@ void CommandHandler::process() {
 // Command Execution
 // ===========================
 
+// CR-04 (01-19): does this command class touch camera hardware? The refusal
+// reason must match the resource the command needs — a camera-down window
+// (low-battery enableCamera(false) in main_balloon.cpp) must not strand
+// announced fulls (IMAGE_WINDOW_REQUEST needs only ImageTx PSRAM buffers and
+// the radio) or blind the status poll (GET_STATUS reads cached settings
+// getters, safe when !initialized) while those resources stay operational.
+// Exactly the eight handlers that drive the sensor stay gated; every other
+// class — and anything unknown, by default — falls through to its own honest
+// verdict (handler outcome / NACK_INVALID).
+static bool commandRequiresCamera(CameraCommand cmd) {
+    switch (cmd) {
+        case CameraCommand::CAPTURE_NOW:
+        case CameraCommand::SET_RESOLUTION:
+        case CameraCommand::SET_QUALITY:
+        case CameraCommand::SET_BRIGHTNESS:
+        case CameraCommand::SET_CONTRAST:
+        case CameraCommand::SET_SATURATION:
+        case CameraCommand::SET_EXPOSURE:
+        case CameraCommand::SET_WB_MODE:
+            return true;
+
+        case CameraCommand::AUTO_CAPTURE_ENABLE:
+        case CameraCommand::AUTO_CAPTURE_DISABLE:
+        case CameraCommand::GET_STATUS:
+        case CameraCommand::IMAGE_WINDOW_REQUEST:
+        case CameraCommand::SET_EVENT_THRESHOLDS:
+        default:
+            return false;
+    }
+}
+
 CommandResult CommandHandler::executeCommand(const CommandPacket& cmd) {
     CommandResult result{};
     result.success = false;
@@ -136,8 +167,13 @@ CommandResult CommandHandler::executeCommand(const CommandPacket& cmd) {
 
     commandsReceived++;
 
-    // Check if camera is ready
-    if (!camera->isReady()) {
+    // Camera-ready gate, scoped per CR-04 (01-19): identical NACK_BUSY
+    // message, commandsFailed accounting, and return shape as before — but
+    // the refusal now fires only for command classes that actually need the
+    // camera. The old blanket form refused EVERY command during a
+    // camera-down window, stranding announced fulls and blinding the status
+    // poll while ImageTx buffers and the radio stayed operational.
+    if (commandRequiresCamera(cmd.cmd) && !camera->isReady()) {
         result.responseType = ResponseType::NACK_BUSY;
         strncpy(result.message, "Camera not ready", sizeof(result.message) - 1);
         commandsFailed++;
