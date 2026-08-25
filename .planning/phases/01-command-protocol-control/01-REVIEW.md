@@ -1,172 +1,189 @@
 ---
 phase: 01-command-protocol-control
-reviewed: 2026-08-24T12:00:00Z
+reviewed: 2026-08-25T02:08:01Z
 depth: standard
 files_reviewed: 22
 files_reviewed_list:
   - include/auto_capture.h
   - include/command_handler.h
-  - include/command_protocol.h
   - include/command_sender.h
-  - include/common_types.h
+  - include/command_protocol.h
   - include/e32_lora.h
   - include/image_protocol.h
-  - include/image_rx_manager.h
   - include/image_tx_manager.h
-  - platformio.ini
-  - scripts/verify_protocol_roundtrip.mjs
+  - include/image_rx_manager.h
+  - include/sensor_pins.h
   - src/auto_capture.cpp
-  - src/camera_manager.h
-  - src/camera_manager.cpp
   - src/command_handler.cpp
   - src/command_protocol.cpp
   - src/command_sender.cpp
+  - src/camera_manager.cpp
+  - src/camera_manager.h
   - src/e32_lora.cpp
-  - src/image_rx_manager.cpp
   - src/image_tx_manager.cpp
+  - src/image_rx_manager.cpp
   - src/main_balloon.cpp
   - src/main_basestation.cpp
+  - platformio.ini
+  - scripts/verify_protocol_roundtrip.mjs
 findings:
-  critical: 3
-  warning: 5
-  info: 7
-  total: 15
+  critical: 1
+  warning: 2
+  info: 9
+  total: 12
 status: issues_found
 ---
 
-# Phase 01: Code Review Report
+# Phase 01: Code Review Report (Round #8)
 
-**Reviewed:** 2026-08-24T12:00:00Z
+**Reviewed:** 2026-08-25T02:08:01Z
 **Depth:** standard
 **Files Reviewed:** 22
+**Diff Base:** da84250 (round-#7 fix commits 70543c5..02142e1 verified in this pass)
 **Status:** issues_found
 
 ## Summary
 
-Adversarial review of all 22 in-scope source files (balloon TX chain, base RX chain, command protocol, camera manager, both main firmwares, wire-format harness). Cross-module tracing was driven by the four bench-known defects and the repo's bench logs (base*.log, balloon*.log). The headline result: the "stored-bytes CRC mismatch on a fully-received full" (base4.log:854, bench priority 1) is not an SD-layer flake — it is a provable wire-protocol routing defect (CR-01): chunk frames carry no image-kind byte and the base's routing heuristic misroutes late thumbnail-heal stragglers into the active FULL transfer, so thumbnail bytes occupy full-image indices and the real full chunks are then discarded as "duplicates". The bench log itself carries the signature of this misroute (duplicate drops of chunks 21/22/25/26/27 while the 19..29 heal window was still outstanding). The other two bench-priority defects (full-sized thumbnails passing the metadata-only guard; one-shot FULL manifest consumed by a failed transmit) are confirmed as CR-02/CR-03 with log evidence. Five warnings cover failed-transmit state advances on the thumbnail push path, overflow eviction of in-flight heals, a silent capture-drop race in the balloon loop order, duplicate window-request churn, and NACK_BUSY poisoning the link-truth LED. Base-side SD storage was re-verified line-by-line and is NOT the source of the corruption (flush-before-verify present, re-manifest truncation paired with bitmap reset, kind-split seek math consistent).
+Adversarial standard-depth review of the full Phase 01/02 chain: balloon TX
+(auto capture, command handler/protocol, camera, E32, image TX), base RX
+(command sender, image RX, base main/web server), protocol headers, build
+config, and the wire harness. All prior-round (round #7) fixes were
+re-verified at root and are confirmed FIXED — the fixer must NOT re-apply
+them (list below). This round found one new Critical defect in the command
+dispatch gate, one new Warning in the chunk-push failure path, and carried
+forward the remaining prior findings (WR-03, IN-02..IN-07), all re-confirmed
+present at the cited lines.
 
-## Narrative Findings (AI reviewer)
+## Prior-Round Fixes Verified FIXED (do not re-apply)
+
+| Prior ID | Root-cause fix verified | Evidence |
+|---|---|---|
+| CR-01 | imageKind byte in `ImageChunkBody`; stamped at both TX sites; validated at deserialize; kind-exact slot routing | include/image_protocol.h:166-171; src/image_tx_manager.cpp:580, :860; src/command_protocol.cpp:464-467; src/image_rx_manager.cpp:314-339 |
+| CR-02 | `announceFullManifest` success-gated, bounded by `IMG_MANIFEST_MAX_ATTEMPTS`, park-and-free keeps thumbBuffer | src/image_tx_manager.cpp:623-684 |
+| CR-03 | `THUMB_MAX_BYTES` (8192) clamp + stale-frame drain before capture | src/camera_manager.cpp:12, :357-366, :393-407 |
+| WR-01 | `pushThumbManifest` success-gated | src/image_tx_manager.cpp:538-564 |
+| WR-02 | two-pass sensor-overflow scan before capture | src/camera_manager.cpp:346-368 |
+| WR-04 | defer-aware `windowRequestSeq` accounting + cancel-before-next + post-terminal cancels | src/image_rx_manager.cpp:134-138, :160-166, :235-243, :806-810, :838-841 |
+| WR-05 | NACK_BUSY deferral scoped to IMAGE_WINDOW_REQUEST only | src/command_sender.cpp:427-439 |
+| IN-01 | retry-ordinal labels ("retry %d/%d") | src/command_sender.cpp:561-566 |
 
 ## Critical Issues
 
-### CR-01: Chunk frames carry no imageKind; routing heuristic writes thumbnail bytes into the active FULL transfer (root cause of the 36/36 stored-bytes CRC mismatch)
+### CR-04: Camera-ready gate in executeCommand blocks image window service and status while the radio and ImageTx remain alive
 
-**File:** `include/image_protocol.h:154-159`, `src/image_rx_manager.cpp:253-284`
-**Issue:** `ImageChunkBody` is `{imageId, chunkIndex, dataLen, data}` — no imageKind byte (the window REQUEST carries one, the chunk ANSWER does not). The base therefore routes every 0x13 frame by imageId alone with a heuristic: (1) a non-terminal THUMBNAIL slot with `windowActive` wins; (2) otherwise any non-terminal FULL slot wins; (3) otherwise the thumbnail slot. Rule 1's protection ends the moment the thumbnail slot finalizes (`terminal = true`), but the balloon can still be sending thumbnail chunks after that point: `CommandSender` retries a thumb-heal window request whose ACK was lost (up to 3 retries inside a 15 s window — the same churn that logs "attempt 4/3"), and each retried request makes the balloon re-arm and re-send the thumbnail window (`handleWindowRequest` arming is deliberately idempotent-restart, `src/image_tx_manager.cpp:714-728`). Those late thumbnail chunks fall through to rule 2 and land in the active FULL slot. Any index the full still needs gets thumbnail bytes; when the real full chunks for those indices arrive later they are discarded by the bitmap as duplicates. Result: 36/36 chunks "received", correct file length, wrong content, end-to-end CRC fails, image finalized INCOMPLETE. base4.log shows the exact signature: duplicate drops of chunks 2,3,21,22,25,26,27 of image 7 (lines 821-847) while the FULL's own 19..29 heal window was still outstanding (line 824), a still-retrying window request seq 28 at line 839, then `stored-bytes CRC mismatch (got FCAFC250, manifest 9DE9EFA0)` at line 854. CR-02 below (full-sized thumbnails) makes the two kinds' index spaces overlap almost exactly (36 vs 36 chunks for image 7), which is what makes the misroute so destructive.
-**Fix:** Add the kind to the chunk frame — one byte in `ImageChunkBody` (e.g. after `imageId`), set from `windowKind`/push kind in `createChunkPacket` callers (`src/image_tx_manager.cpp:529,778`), validated against the slot kind in `onChunkFrame` before any bitmap/SD write (mismatched kind = frame dropped and counted, never written). Update `scripts/verify_protocol_roundtrip.mjs` and `deserializeChunk`/`serializeChunk` in `src/command_protocol.cpp` together. Interim hardening if the wire change must wait: in `onChunkFrame`, route to the FULL slot only when `t->pullActive && t->windowActive` (a queued or between-windows full accepts nothing), and drop chunks that arrive for a slot whose window/push context cannot account for them — the current fallback-to-any-slot behavior is what converts a late straggler into silent data corruption.
+**File:** `src/command_handler.cpp:139-145` (with `src/main_balloon.cpp:858-867`, `src/camera_manager.h:134`, `src/camera_manager.cpp:87-91`)
+**Issue:** `executeCommand` rejects EVERY command with `NACK_BUSY "Camera not ready"` when `camera->isReady()` is false (`isReady()` is just `initialized`). On low battery (`batteryVoltage < BATTERY_LOW_THRESHOLD`), `main_balloon.cpp:864` calls `Camera().enableCamera(false)` → `end()` → `esp_camera_deinit()` + `initialized = false`. From that moment:
 
-### CR-02: One-shot FULL manifest announcement is consumed even when the transmit fails — the full image is then silently never transferable
+1. `IMAGE_WINDOW_REQUEST` (command_handler.cpp:182-183) is refused — yet window service needs only the ImageTx PSRAM buffers and the E32 radio, both still fully operational (`ImageTx().process()` keeps running at main_balloon.cpp:895 and keeps transmitting 0x14 beacons). Every full image already announced becomes unretrievable for the entire low-battery window — exactly the final images an operator needs to recover before power is lost. The stranded data is then destroyed by power-off or TTL eviction (IMG_ENTRY_TTL_MS). NACK_BUSY tells the base "retry later," so each pull burns its full retry budget before terminal-failing.
+2. `GET_STATUS` (line 179-180) is also refused, so the base's periodic status poll (src/main_basestation.cpp:1990-1995) fails permanently and the dashboard's last-command row latches a perpetual failure while the balloon is still beaconing.
 
-**File:** `src/image_tx_manager.cpp:585-603`
-**Issue:** `announceFullManifest` sets `entry.state = ANNOUNCED` unconditionally, including when `serializeManifest(...) && lora->transmit(...)` returned false (line 589). The state machine treats ANNOUNCED as "manifest emitted exactly ONCE per entry" (comment at 599-600): there is no re-announce path, and chunks flow only through windows armed by a base request — a request the base can never issue because it never saw the manifest. A single failed E32 transmit (AUX handshake failure, link turnaround collision) therefore strands every full image with no log at the base and no recovery: the entry eventually ages out and the image is gone. This is the "silently lost FULL manifest" bench defect.
-**Fix:** Only consume the announcement on success:
+This is a data-loss-risk behavior gap, not just degradation: the refusal reason (camera) is unrelated to the resource the command needs.
+**Fix:** Remove the global gate and apply `isReady()` checks only where camera hardware is actually touched:
+
 ```cpp
-bool ok = CommandProtocol::serializeManifest(pkt, buffer, length) && lora->transmit(buffer, length);
-if (ok) {
-    entry.state = ImageTxEntryState::ANNOUNCED;
-} else {
-    entry.announceAttempts++;                       // new field
-    if (entry.announceAttempts >= ANNOUNCE_MAX_ATTEMPTS) {
-        // log and park: entry.state = THUMB_PUSHED-equivalent, free fullBuffer
+// executeCommand — replace the blanket gate with dispatch, then guard
+// inside the camera-touching handlers:
+case CameraCommand::CAPTURE_NOW:
+case CameraCommand::SET_RESOLUTION:
+case CameraCommand::SET_QUALITY:
+    /* ... */ {
+    if (!camera->isReady()) {
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Camera not ready", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
     }
-    // otherwise stay in ANNOUNCE_FULL; the next process() pass retries
+    // ... existing handler body
 }
-entry.lastActivityMs = millis();
+// IMAGE_WINDOW_REQUEST, GET_STATUS, SET_EVENT_THRESHOLDS,
+// AUTO_CAPTURE_ENABLE/DISABLE: no camera gate (AutoCap/ImageTx/cached
+// settings only).
 ```
-Bound the retries (e.g. 3) so a dead link cannot spin the announce forever, and free `fullBuffer` when the bound is hit.
-
-### CR-03: Thumbnail size guard checks only frame metadata, not byte length — full-size frames with QQVGA metadata still pass
-
-**File:** `src/camera_manager.cpp:361-376`
-**Issue:** The 01-11 "thumbnail-sizing quirk" guard added after balloon3.log (7138-byte thumb byte-equal to the QVGA full) validates only `fb->width == 160 && fb->height == 120`. The current bench session still shows full-sized thumbnails passing in 4/6 captures (SVGA thumbnail = 145 chunks vs the full's 144) — i.e. the esp32-camera driver (fb_count=2, `CAMERA_GRAB_LATEST`, camera_manager.cpp:168-173) can deliver a frame whose dimension METADATA reflects the new QQVGA config while the buffer BYTES are a stale full-size capture. `fb->len` is never bounded: line 376 `malloc(fb->len)` happily takes ~28 KB and the enqueue path pushes it as a "thumbnail". Consequences: double airtime per capture, and — decisively for CR-01 — a thumbnail whose chunk-index space overlaps the full's, making kind-misrouted bytes land at valid full offsets instead of failing a bounds check.
-**Fix:** Bound the byte length as part of the same guard, and discard the first frame after a framesize change:
-```cpp
-if (fb->width != 160 || fb->height != 120 || fb->len > THUMB_MAX_BYTES) {   // e.g. 8192
-    ... existing bail path ...
-}
-```
-Additionally, after `setFrameSize(FRAMESIZE_QQVGA)` succeeds, fetch-and-discard one frame (`esp_camera_fb_get()` + `esp_camera_fb_return()`) before the real capture — with fb_count=2/GRAB_LATEST the first post-config frame can be the stale pre-config capture. A belt-and-suspenders option is parsing the JPEG SOF marker dimensions from `fb->buf` and rejecting on disagreement with the metadata.
 
 ## Warnings
 
-### WR-01: Failed thumbnail-manifest transmit still advances the push state machine — thumbnail becomes permanently undeliverable
+### WR-03 (remaining from round #7): Manual capture never advances the auto-capture baseline — interval capture can fire moments after a manual one
 
-**File:** `src/image_tx_manager.cpp:500-515`
-**Issue:** `pushThumbManifest` sets `entry.state = PUSH_THUMB_CHUNKS` (line 513) regardless of whether the manifest transmit succeeded (line 502). If the manifest frame is lost, the base never allocates a THUMBNAIL slot, so every subsequent thumb chunk is dropped at `onChunkFrame` (`findTransfer` fails), and no heal is possible — heals require an existing holed slot. The balloon meanwhile believes the push completed and proceeds to announce the full. Same defect family as CR-02 but on the push path; loses the thumbnail silently (no slot ever exists at the base to even report INCOMPLETE).
-**Fix:** Mirror the CR-02 fix: advance to `PUSH_THUMB_CHUNKS` only when `ok`; on failure stay in `PUSH_THUMB_MANIFEST` with a bounded attempt counter (the manifest is 34 bytes — cheap to retry on the next process() pass).
+**File:** `src/command_handler.cpp:200-237` with `src/auto_capture.cpp:175-178`
+**Issue:** `handleCaptureNow` captures and allocates an image id but never touches `AutoCap`'s `lastCaptureTime`. `AutoCapture::process` fires when `millis() - lastCaptureTime >= intervalMs`, so a manual capture does not reset the interval baseline. If the operator triggers a manual capture just before an interval deadline, the balloon captures twice in quick succession (duplicate frame, doubled TX queue pressure); there is no suppression path. Re-confirmed present this round.
+**Fix:** Add `void markCaptureBaseline() { lastCaptureTime = millis(); }` to AutoCapture and call it from `handleCaptureNow` after a successful `captureImage()` (before enqueueing the ImageTx entry), so D-27/D-28 spacing semantics treat manual captures as baseline-advancing captures.
 
-### WR-02: Queue-overflow eviction ranks an in-flight thumbnail heal as the FIRST victim — no mid-service-window deferral on this path
+### WR-08 (new): Chunk cursors advance on failed transmit; a failed tail chunk can mark an entry SERVED before every byte was offered
 
-**File:** `src/image_tx_manager.cpp:203-210, 327-361`
-**Issue:** `evictionClassOf` maps THUMB_PUSHED to class 1 (preferred eviction victim), and the overflow branch in `enqueueCapture` (327-361) picks purely by class then age — it never inspects `windowArmed`/`windowEverArmed`. The supersede path got the G-01-7 lever-2 fix (`evictEntriesOlderThan` defers entries whose window is mid-service, 817-825), but the overflow path did not. A THUMB_PUSHED entry whose heal window is armed and mid-flight (base actively re-requesting it) is evicted on the next capture's enqueue under queue pressure: its buffers are freed mid-stream, later heal requests hit "unknown/evicted image", the base burns D-24 passes and finalizes INCOMPLETE.
-**Fix:** In the overflow victim scan, skip entries with `windowArmed && windowNextIndex < windowStart + windowCount` (identical predicate to the BUSY check at 703-712) unless every entry is mid-service; at minimum demote armed THUMB_PUSHED entries to the SERVED class so they are not the first choice.
+**File:** `src/image_tx_manager.cpp:601` (`pushThumbChunk`) and `src/image_tx_manager.cpp:881-895` (`serviceWindowChunk`)
+**Issue:** Both push paths execute `serializeChunk(...) && lora->transmit(...)` and then advance the cursor unconditionally (`entry.nextThumbChunk++` / `entry.windowNextIndex++`) even when `ok == false`. Each failed transmit becomes a permanent hole for that pass whose only recovery is a base-side stall timeout (IMG_WINDOW_STALL_MS) plus a re-request round trip — a burst of E32 transmit failures converts one push into many multi-second heal cycles. Worse, in `serviceWindowChunk`, when the FAILED chunk is the last of a tail-reaching window (`windowNextIndex >= windowStart + windowCount`), the entry is marked `windowArmed = false` and `SERVED` (lines 883-895) — a preferred eviction candidate — despite the final chunk never leaving the balloon. Under queue pressure the subsequent heal re-request can hit `UNKNOWN_IMAGE` after eviction and the transfer terminal-fails INCOMPLETE, even though the data was resident the whole time.
+**Fix:** On `!ok`, do not advance the cursor; retry the same index on the next `process()` pass with a small same-index bound (e.g., 3 attempts) before skipping, and only evaluate the SERVED transition on a successful final-chunk transmit:
 
-### WR-03: Manual capture and auto/event capture in the same loop pass silently drop the first image
-
-**File:** `src/main_balloon.cpp:884-895`, `src/command_handler.cpp` (handleCaptureNow), `src/auto_capture.cpp`
-**Issue:** Loop order is `CmdHandler().process()` → `AutoCap().process()` → `ImageTx().process()`. `handleCaptureNow` executes a capture but never advances AutoCap's `lastCaptureTime`, so in a pass where the interval/event timer has also elapsed, AutoCap's spacing gate passes and fires a second capture before `ImageTx().process()` ever polls: the second capture's `freeCurrentImage()`/buffer reuse replaces the first capture's bytes, and ImageTx (which tracks only the latest imageId) enqueues only the second. The manual capture was already ACKed to the base with its imageId — the operator waits for an image that is never transmitted, with no log line at either end. Window is one 100 ms loop pass per collision; probability scales with capture cadence but is nontrivial at 1 s auto-intervals.
-**Fix:** In `handleCaptureNow`, after a successful capture, notify AutoCap to advance its spacing reference (e.g. `AutoCap().onExternalCapture(millis())` setting `lastCaptureTime`), or have AutoCap skip its fire when `Camera().getLastCaptureTime()` advanced within the same pass; alternatively make ImageTx drain pending captures by id rather than only `getLastImageId()`.
-
-### WR-04: Stall re-requests issue new IMAGE_WINDOW_REQUESTs while the prior one is still inside its 15 s tracked-command window
-
-**File:** `src/image_rx_manager.cpp:186-233` (thumb stall), window stall branch in `process()`, `src/command_sender.cpp` (tracked-command table)
-**Issue:** The stall clocks (8 s) are shorter than the window-request command's ACK timeout class (15 s, with up to 3 retries). When a request's ACK is lost, the base both keeps retrying the old request AND (after the stall fires) queues a new overlapping window request — base4.log shows seq 28 still retrying ("attempt 4/3", line 839) while seq 32 (19..29) and later seq 33 are queued for concurrent servicing. Costs: duplicate tracked commands consume `MAX_PENDING_COMMANDS` slots (risking rejection of operator commands), each duplicate downlink transmit collides with in-flight chunks on the half-duplex link (the END MARKER MISS at base4.log:842), and — via the balloon's idempotent re-arm — the duplicate-chunk flood that feeds CR-01.
-**Fix:** Before issuing a window request, check for an already-tracked non-terminal IMAGE_WINDOW_REQUEST for the same transfer (CmdSender exposes the queue snapshot) and skip/defer the new one; or clear/supersede the prior tracked request when a stall supersedes it. Sequencing the stall clock to start only after the previous request reaches a terminal state also works.
-
-### WR-05: NACK_BUSY is treated as terminal FAILED and poisons the link-truth LED/dashboard with "No link"
-
-**File:** `src/command_sender.cpp:439-449` (handleResponse), `src/main_basestation.cpp:104-122` (computeLinkTruth)
-**Issue:** A `NACK_BUSY` response transitions the tracked command to FAILED (terminal, no retry). BUSY is the protocol's routine deferral (balloon returns it when another entry's window is mid-service, `src/image_tx_manager.cpp:703-712`) — yet `processLoRa` latches `lastOutcomeBad` and `computeLinkTruth` then reports NO_LINK and drives the physical LED red (solid OFF) until some later command ACKs. During any serialized pull/heal sequence the operator sees "No link" while the link is demonstrably carrying chunks.
-**Fix:** Either retry on NACK_BUSY (it is transient by construction — re-queue within the existing retry budget instead of terminalizing), or classify it separately from failure for link-truth purposes (e.g. a `BUSY` state that `computeLinkTruth`/`processLoRa` treat like SENT, not like TIMEOUT/FAILED).
+```cpp
+if (ok) {
+    entry.windowNextIndex++;
+    if (entry.windowNextIndex >= entry.windowStart + entry.windowCount) {
+        entry.windowArmed = false;
+        if (/* tail window reached */)
+            entry.state = ImageTxEntryState::SERVED;
+    }
+} else {
+    if (++entry.windowFailCount >= 3) {
+        entry.windowFailCount = 0;
+        entry.windowNextIndex++;   // skip after bounded retries — heal path owns it
+    }
+    entry.lastActivityMs = millis();
+    return false;
+}
+```
 
 ## Info
 
-### IN-01: Retry log prints "attempt 4/3" on the final legal retry
+### IN-08 (new): Re-manifest restart clears window context without cancelling the still-tracked window request
 
-**File:** `src/command_sender.cpp:524-537`
-**Issue:** `retryCommand` increments `retryCount` then logs `attempt %d/%d` with `retryCount + 1` against `maxRetries`. With maxRetries=3, the third (legal) retry logs "attempt 4/3" — reproduced across bench logs (base2.log:458, base3.log:429, base4.log:115/290/372). Termination logic itself is sound; the label misleads bench operators into thinking the bound is exceeded.
-**Fix:** Log `cmd->retryCount` against `maxRetries` ("retry %d/%d"), or keep "attempt" but compare against `maxRetries + 1`.
+**File:** `src/image_rx_manager.cpp:549-565`
+**Issue:** `startTransfer`'s same-(id,kind) restart does `*t = ImageRxTransfer{}`, zeroing `windowRequestSeq`/`windowActive`, while the previously issued `IMAGE_WINDOW_REQUEST` may still be PENDING/SENT in CmdSender. A stale retry can later arm a pre-restart span concurrently with the fresh request the window driver will issue. Harmless today (last-arm-wins in `handleWindowRequest`, and `acceptChunk` validates id/kind/index so stale-span chunks still count), but the accounting mismatch is avoidable.
+**Fix:** On restart, cancel the outstanding tracked request the same way finalize does (the existing cancel path used at image_rx_manager.cpp:806-810/838-841) before zeroing the slot.
 
-### IN-02: System checks log a false "Camera system health check failed" on every healthy boot
+### IN-02 (remaining): Camera health check always reports failure when the camera is active
 
-**File:** `src/main_balloon.cpp:561-577`
-**Issue:** `performSystemChecks` warns "Power system health check skipped" and "Communication system health check skipped" unconditionally, and the camera branch (`if (appState.cameraActive)`) warns "Camera system health check failed" and clears `allPassed` whenever the camera is ACTIVE — the actual check is commented out but the failure branch was left live. Every good boot prints three false warnings plus "Some system checks failed".
-**Fix:** Either restore real checks or delete the dead branches; a skipped check must not log as a failure.
+**File:** `src/main_balloon.cpp:573-577`
+**Issue:** The check body is commented out (`// && !Camera().performHealthCheck()`), so whenever `appState.cameraActive` is true the log prints "Camera system health check failed" and `allPassed = false` unconditionally — a healthy camera is reported as failed on every health pass.
+**Fix:** Either implement a real check or remove the camera branch (and the misleading warning) until one exists.
 
-### IN-03: enterConfigMode saves previousMode that exitConfigMode never uses
+### IN-03 (remaining): Dead store `previousMode`
 
-**File:** `src/e32_lora.cpp:610-623`
-**Issue:** `previousMode` is captured and stored but `exitConfigMode` always sets MODE_NORMAL — dead state that suggests a restore semantic that does not exist.
-**Fix:** Remove `previousMode`, or restore it in `exitConfigMode` if callers ever enter config from sleep/wake modes.
+**File:** `src/e32_lora.cpp:612`
+**Issue:** `previousMode` is assigned and never read.
+**Fix:** Delete the variable, or use it to report mode-transition failures in the log.
 
-### IN-04: setMode records currentMode before AUX verification succeeds
+### IN-04 (remaining): `currentMode` committed before AUX verifies the mode actually took
 
-**File:** `src/e32_lora.cpp:153-180`
-**Issue:** `currentMode` is assigned before the AUX-pin wait; if the verify fails/returns false, the tracked mode no longer matches the radio's actual M0/M1 state, and later mode-dependent decisions (config vs normal) act on stale truth.
-**Fix:** Assign `currentMode` only after the AUX check passes (or roll back on failure).
+**File:** `src/e32_lora.cpp:158`
+**Issue:** The cached mode is updated before AUX confirmation, so a failed mode switch leaves the cache claiming the requested mode while the module is elsewhere.
+**Fix:** Set `currentMode` only after `waitForAux()` succeeds (mirror the pattern used at the failure branch).
 
-### IN-05: transmitToAddress uses an unused stack VLA and skips the initialized check
+### IN-05 (remaining): `transmitToAddress` unused, VLA, no initialized guard
 
 **File:** `src/e32_lora.cpp:272-290`
-**Issue:** Function builds a fixed stack buffer/VLA it does not need and does not guard on `initialized` before touching the serial port.
-**Fix:** Drop the unused buffer; early-return false when `!initialized` (mirroring `transmit`).
+**Issue:** Unused public method that builds a stack VLA from a runtime size and transmits without checking `initialized`.
+**Fix:** Remove it, or guard with `initialized` and replace the VLA with a fixed `CMD_MAX_PACKET_SIZE`-bounded buffer.
 
-### IN-06: findOldestCommand is dead code
+### IN-06 (remaining): Dead code `findOldestCommand`
 
-**File:** `src/command_sender.cpp:466-479`
-**Issue:** No caller anywhere in the tree (verified by cross-file search).
-**Fix:** Delete it, or use it for WR-04's outstanding-request check.
+**File:** `src/command_sender.cpp:493-506`
+**Issue:** Never called; duplicates slot-recycling logic that `findFreeSlot` already owns.
+**Fix:** Delete it.
 
-### IN-07: Stale "fixed 17-byte body" comments for what is a 19-byte body
+### IN-07 (remaining): Stale "fixed 17-byte body" comment
 
-**File:** `src/command_sender.cpp:329`, `scripts/verify_protocol_roundtrip.mjs:763`
-**Issue:** Comments describe a 17-byte fixed body; the actual serialized body is 19 bytes (the size constants and the roundtrip checks are correct — only the prose is wrong).
-**Fix:** Update the two comments to 19 (or reference the constant instead of a literal).
+**File:** `src/command_sender.cpp:329`
+**Issue:** The wire body is 19 bytes; the comment says 17.
+**Fix:** Update the comment (or derive the constant so comment and code cannot drift).
+
+### IN-09 (out-of-plan change, no defect found): GPS pin/baud change in sensor_pins.h
+
+**File:** `include/sensor_pins.h:35-38`
+**Issue:** `GPS_TX_PIN 35` and `GPS_BAUD_RATE 38400` changed after the plan's file scope was cut (operator-requested, per handoff). Verified internally consistent: `src/sensor_manager.cpp:137` and `src/main_balloon.cpp:615` consume the same macros, and the values match the hardware-proven config documented in `src/test_lora_balloon.cpp:42-44`. Note only: `src/test_minimal_hardware.cpp:17-18` still hardcodes the obsolete 45/46 pins — harmless while that test sketch stays out of the default build environment (platformio.ini default envs unchanged).
+**Fix:** None required; optionally update the minimal-hardware test sketch pins the next time it is used on hardware.
 
 ---
 
-**Verification notes for the record:** base-side SD storage was audited as a corruption candidate and cleared: `flushTransfer` precedes `verifyStoredCrc32` (`src/image_rx_manager.cpp:672-702`), re-manifest restart truncation is paired with a full bitmap/slot reset (`:500-510`), the CR-01 reopen path is non-truncating (`src/sd_storage.cpp:204-235`), and `verifyStoredCrc32` rejects length disagreement before comparing (`:971-976`) — the image-7 file had the right length and wrong content, which is what pinpointed the chunk-routing defect (CR-01) rather than the storage layer.
-
-_Reviewed: 2026-08-24T12:00:00Z_
+_Reviewed: 2026-08-25T02:08:01Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
