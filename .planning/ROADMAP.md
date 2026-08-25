@@ -102,7 +102,7 @@ Plans:
 
 **Wave 13** *(narrow residual round #8, 2026-08-25; blocked on Wave 12 — 01-17/01-18/01-19 are file-disjoint and run in parallel)*
 
-- [ ] 01-17-PLAN.md — G-01-9 defect C + WR-08 (balloon TX truth): receipt-informed FULL-manifest re-announce while ANNOUNCED-and-idle (no FULL window ever armed) with a named drop log at the bound; chunk-cursor advance + SERVED gated on transmit success with a same-index retry bound; CR-04/WR-08 routed in WINDOWS entries 8/9 (IMG-02, IMG-03, IMG-04, PRI-03)
+- [x] 01-17-PLAN.md — G-01-9 defect C + WR-08 (balloon TX truth): receipt-informed FULL-manifest re-announce while ANNOUNCED-and-idle (no FULL window ever armed) with a named drop log at the bound; chunk-cursor advance + SERVED gated on transmit success with a same-index retry bound; CR-04/WR-08 routed in WINDOWS entries 8/9 (IMG-02, IMG-03, IMG-04, PRI-03)
 - [ ] 01-18-PLAN.md — G-01-7 residual (base): command-survivability quiet gate — command transmits (first attempts and timeout retries) hold while inbound 0x13 chunk frames arrived within 750 ms, consuming nothing (no retry, no failure, no ACK-window start), 30 s best-effort bound (CTRL-01, CTRL-06, PRI-02, IMG-03)
 - [ ] 01-19-PLAN.md — CR-04 + WR-03 (balloon command path): camera-ready gate scoped to the 8 camera-touching handlers (IMAGE_WINDOW_REQUEST/GET_STATUS/SET_EVENT_THRESHOLDS/AUTO_CAPTURE_* servable while ImageTx/radio live during camera-down); manual capture advances the auto-capture interval baseline (IMG-03, IMG-05, CTRL-03, CTRL-04)
 

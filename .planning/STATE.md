@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 4
+current_plan: 2
 status: executing
-stopped_at: "01-16 COMPLETE (bench session #5 ledgers flipped: G-01-9 defects A+B fixed at bench, G-01-7 failure modes eliminated, WINDOWS 6+7 fixed; residuals open — receipt-driven manifest recovery + command survivability under unspaced load + SC-3 pairs)"
-last_updated: "2026-08-25T10:47:00.184Z"
-state_head: d8ba14e11887d2ca5972722489d7873e64f5aa4d
+stopped_at: Completed 01-17-PLAN.md (WR-08 cursor/SERVED gating + G-01-9 defect C re-announce + WINDOWS 8/9 routed open; bench flips at 01-20)
+last_updated: "2026-08-25T11:11:56.903Z"
+state_head: b1948dbc3983f72f828e1d9f4620a5ea6c96b079
 progress:
   total_phases: 3
-  completed_phases: 2
+  completed_phases: 0
   total_plans: 30
-  completed_plans: 24
+  completed_plans: 26
 milestone_name: milestone
-current_phase_name: Command Protocol & Control
 current_phase: 2
+current_phase_name: Command Protocol & Control
 ---
 
 # Project State
@@ -28,7 +28,7 @@ current_phase: 2
 
 ## Current Position
 
-**Current Plan:** 4
+**Current Plan:** 2
 **Total Plans in Phase:** 20
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -129,9 +129,9 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-25T13:50:00.000Z
-**Stopped at:** 01-16 COMPLETE (bench session #5 ledgers flipped: G-01-9 defects A+B fixed at bench, G-01-7 failure modes eliminated, WINDOWS 6+7 fixed; residuals open — receipt-driven manifest recovery + command survivability under unspaced load + SC-3 pairs)
-**Resume file:** None — next step is planning the 01-17 narrow remediation round or /gsd-progress
+**Last session:** 2026-08-25T11:11:39.878Z
+**Stopped at:** Completed 01-17-PLAN.md (WR-08 cursor/SERVED gating + G-01-9 defect C re-announce + WINDOWS 8/9 routed open; bench flips at 01-20)
+**Resume file:** None
 
 ## Performance Metrics
 
@@ -161,6 +161,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P14 | 8min | 2 tasks | 3 files |
 | Phase 01 P15 | 11min | 2 tasks | 3 files |
 | Phase 01 P16 | ~2h across executor + operator bench session #5 (2026-08-25) | 2 tasks | 4 files |
+| Phase 01 P17 | 15min | 3 tasks | 4 files |
 
 ## Decisions
 
@@ -222,3 +223,5 @@ See: `.planning/PROJECT.md`
 - [Phase ?]: 01-15: retryCommand prints the retry ordinal (post-increment retryCount, 1..maxRetries) against maxRetries — the 'attempt 4/3' label (WINDOWS entry 6) is gone with zero counter/bound/timing change; one mechanism split across two files (BUSY deferral keeps the request non-terminal BECAUSE the base stall guard keys on it)
 - [Phase 01]: 01-16: closure honesty on partial evidence — a gap with three defects (G-01-9) closes its log-proven thirds (A: thumbs, B: CRC) with verbatim bench quotes while the third (C) stays open NARROWED to the exact uncovered class (TX-success + air loss consumes the one-shot announce); the reboot clause was judged on base-side wire evidence (beacon seq reset 451->0 amid continuous post-reset chunk flow proves a fresh ImageTxManager; image 21 NVS-continued + QVGA-class) with the missing balloon console explicitly recorded rather than assumed
 - [Phase 01]: 01-16: two log-reading traps documented for future rounds — '[HTTP] GET /img/... -> 404' is the handleNotFound DISPATCH banner (main_basestation.cpp:3641) printed before the image handler serves 200, NOT a response code; and healed-thumb finalize lines undercount 'B persisted' by design (sd_storage.cpp:234 accounting restarts at each reopen flip) while complete=true still reflects the read-back CRC — neither is a defect
+- [Phase 01]: 01-17: window-arm IS the receipt signal — the FULL-manifest re-announce keys on fullWindowEverArmed (set ONLY at non-thumb arms, so a THUMBNAIL heal never stops it; image-15 class), fires only in pushPending's idle slot (no push work, no armed window) after 10 s idle, and consumes one attempt + one idle period per transmit regardless of TX verdict; bounded at 3 with park-and-free + named drop (mirrors the 01-14 announce bound)
+- [Phase 01]: 01-17: SERVED means bytes offered, not cursor reached — both TX push paths gate cursor advance on transmit success with a bounded same-index retry (IMG_CHUNK_TX_RETRY_MAX 3, named skip log); a final chunk skipped after the bound completes the window (windowArmed cleared, tail re-request re-opens service) but leaves the entry ANNOUNCED, never SERVED for bytes that never left the balloon (WR-08)
