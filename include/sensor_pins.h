@@ -29,10 +29,13 @@
 #define OLED_HEIGHT       64   // Display height
 
 // MAX-M10S GPS Module (UART)
-#define GPS_TX_PIN        45  // GPS TX → ESP32 RX
+// Config proven on hardware in src/test_lora_balloon.cpp (GPS fixes outdoors):
+// ESP32 RX on GPIO 35 (45 is a VDD_SPI strapping pin and never received data),
+// GPS RX on 47, and 38400 baud (M10S UART1 default — at 9600 every checksum failed).
+#define GPS_TX_PIN        35  // GPS TX → ESP32 RX (proven GPIO 35; was 45)
 #define GPS_RX_PIN        47  // GPS RX → ESP32 TX (changed from 46 - not exposed on DevKitC-1)
 #define GPS_PPS_PIN       42  // Pulse Per Second (optional)
-#define GPS_BAUD_RATE     9600
+#define GPS_BAUD_RATE     38400
 #define GPS_UART_NUM      UART_NUM_1
 
 // LoRa Module E32 900T30D (UART)
@@ -82,7 +85,7 @@
 
 // Ensure no conflicts with existing camera pins
 // Camera pins used: 4,5,6,7,8,9,10,11,12,13,15,16,17,18
-// Sensor pins used: 1,2,14,19,20,21,38,39,40,42,45,46,48
+// Sensor pins used: 1,2,14,19,20,21,35,38,39,40,42,47,48
 // No conflicts detected
 
 #endif // SENSOR_PINS_H
