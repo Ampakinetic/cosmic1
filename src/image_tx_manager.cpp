@@ -598,12 +598,35 @@ bool ImageTxManager::pushThumbChunk(ImageTxEntry& entry) {
                      ok ? "sent" : "FAILED");
     }
 
-    entry.nextThumbChunk++;
+    // WR-08 (01-17): the cursor advances ONLY on a successful transmit — a
+    // failed transmit retries the SAME index on subsequent process() passes
+    // (one transmit per pass is the existing pacing), bounded by
+    // IMG_CHUNK_TX_RETRY_MAX. At the bound the chunk is skipped for its pass
+    // with a named log; before the bound the failed index simply retries.
+    if (ok) {
+        entry.thumbChunkFailStreak = 0;
+        entry.nextThumbChunk++;
+    } else {
+        entry.thumbChunkFailStreak++;
+        if (entry.thumbChunkFailStreak >= IMG_CHUNK_TX_RETRY_MAX) {
+            Serial.printf("ImageTx: chunk(image %u kind %u, %u/%u) skipped after %u failed transmit attempts\n",
+                         entry.imageId,
+                         static_cast<unsigned>(ImageKind::THUMBNAIL),
+                         static_cast<unsigned>(entry.nextThumbChunk + 1),
+                         static_cast<unsigned>(entry.thumbTotalChunks),
+                         static_cast<unsigned>(IMG_CHUNK_TX_RETRY_MAX));
+            entry.thumbChunkFailStreak = 0;
+            entry.nextThumbChunk++;
+        }
+        // else: stay on the same index — the next pass retries it
+    }
+    // Every transmit attempt is activity — keeps the preempt clock honest
+    // against pushPending (a retrying entry is not an idle entry)
     entry.lastActivityMs = millis();
     if (entry.nextThumbChunk >= entry.thumbTotalChunks) {
         entry.state = completedThumbState(entry);
-        // Thumbnail holes from failed transmits are healed by the SAME
-        // windowed-pull re-request path (D-22), wired in 02-02/02-03
+        // Thumbnail holes from skipped-after-bound chunks are healed by the
+        // SAME windowed-pull re-request path (D-22), wired in 02-02/02-03
     }
     return ok;
 }
@@ -878,7 +901,35 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
                      ok ? "sent" : "FAILED");
     }
 
-    entry.windowNextIndex++;
+    // WR-08 (01-17): the cursor advances ONLY on a successful transmit — the
+    // same same-index bound as the push path, with the skip log naming the
+    // window kind. The SERVED transition is SUCCESS-GATED on the final
+    // chunk: a final chunk skipped after the bound still completes the window
+    // (cursor advanced, windowArmed cleared — the base's tail re-request
+    // re-opens service) but leaves the entry at ANNOUNCED, never SERVED for
+    // bytes that never left the balloon.
+    bool finalChunkSkipped = false;
+    if (ok) {
+        entry.windowChunkFailStreak = 0;
+        entry.windowNextIndex++;
+    } else {
+        entry.windowChunkFailStreak++;
+        if (entry.windowChunkFailStreak >= IMG_CHUNK_TX_RETRY_MAX) {
+            Serial.printf("ImageTx: window chunk(image %u kind %u, %u/%u) skipped after %u failed transmit attempts\n",
+                         entry.imageId,
+                         static_cast<unsigned>(entry.windowKind),
+                         static_cast<unsigned>(idx - entry.windowStart + 1),
+                         static_cast<unsigned>(entry.windowCount),
+                         static_cast<unsigned>(IMG_CHUNK_TX_RETRY_MAX));
+            entry.windowChunkFailStreak = 0;
+            entry.windowNextIndex++;
+            finalChunkSkipped =
+                (entry.windowNextIndex >= entry.windowStart + entry.windowCount);
+        }
+        // else: stay on the same index — the next pass retries it
+    }
+    // Every transmit attempt is activity — keeps the preempt clock honest
+    // (a retrying window never looks idle to pushPending)
     entry.lastActivityMs = millis();
     if (entry.windowNextIndex >= entry.windowStart + entry.windowCount) {
         // Window complete: clear the armed context and await the next request
@@ -888,8 +939,13 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
         // fullTotalChunks) has offered the base every full chunk at least
         // once — mark SERVED (preferred eviction candidate; buffers KEPT so
         // a tail re-request can still heal). THUMBNAIL windows never change
-        // entry state.
-        if (entry.windowKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) &&
+        // entry state. WR-08 (01-17): SERVED is reachable ONLY from the
+        // transmit-success path of the final chunk — finalChunkSkipped keeps
+        // the skip-after-bound completion at ANNOUNCED so a never-offered
+        // tail can still pull (and the base's tail re-request re-opens
+        // service exactly as it does for any ANNOUNCED entry).
+        if (!finalChunkSkipped &&
+            entry.windowKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) &&
             static_cast<uint32_t>(entry.windowStart) + entry.windowCount >= entry.fullTotalChunks) {
             entry.state = ImageTxEntryState::SERVED;
         }
@@ -1004,6 +1060,8 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     entry.thumbTotalChunks = 0;
     entry.nextThumbChunk = 0;
     entry.manifestAttempts = 0;   // CR-02/WR-01: a recycled slot starts with a clean manifest budget
+    entry.thumbChunkFailStreak = 0;   // WR-08: a recycled slot starts with clean fail streaks
+    entry.windowChunkFailStreak = 0;
     entry.windowArmed = false;
     entry.windowKind = 0;
     entry.windowEverArmed = false;

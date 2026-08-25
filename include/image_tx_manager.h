@@ -102,6 +102,11 @@ struct ImageTxEntry {
 
     ImageTxEntryState state;
     uint16_t nextThumbChunk;  // 0-based index of the next chunk to push
+    // WR-08 (01-17): consecutive same-index transmit failures in the push
+    // path. The cursor advances only on a successful transmit — or at
+    // IMG_CHUNK_TX_RETRY_MAX with a named skip log; reset on any successful
+    // transmit and in freeEntry.
+    uint8_t thumbChunkFailStreak;
 
     // Window context (D-21 pull half) — armed ONLY by handleWindowRequest.
     // KIND-PARAMETERIZED (02-05/CR-01): windowKind names which of the entry's
@@ -117,6 +122,11 @@ struct ImageTxEntry {
     uint16_t windowStart;     // first chunk index of the armed window
     uint16_t windowCount;     // chunks in the armed window
     uint16_t windowNextIndex; // next chunk index to transmit
+    // WR-08 (01-17): consecutive same-index transmit failures in the window
+    // service path — same semantics as thumbChunkFailStreak (same-index
+    // retry bounded by IMG_CHUNK_TX_RETRY_MAX, then a named skip; the SERVED
+    // transition additionally requires a transmit-successful final chunk).
+    uint8_t windowChunkFailStreak;
     // G-01-7 lever 3 (01-12): when this window context was (re-)armed — the
     // balloon-side RX-settle clock. Only the FIRST chunk of a freshly (re-)
     // armed window waits out IMG_WINDOW_RX_SETTLE_MS (a re-armed span

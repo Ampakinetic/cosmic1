@@ -64,6 +64,14 @@ static constexpr uint8_t  IMG_TX_QUEUE_DEPTH         = 3;
 // an image incomplete
 static constexpr uint8_t  IMG_RETRANSMIT_MAX_PASSES  = 3;
 
+// WR-08 (01-17): a FAILED chunk transmit retries the SAME index on subsequent
+// process() passes up to this bound before the chunk is skipped for its pass
+// — a transmit failure never permanently skips a chunk silently (the skip at
+// the bound is logged by name). The D-22 kind-addressable window re-request
+// remains the recovery path for skipped chunks, so the bound trades 3 cheap
+// same-index retries for a multi-second stall-timeout round trip.
+static constexpr uint8_t  IMG_CHUNK_TX_RETRY_MAX     = 3;
+
 // CR-02 / WR-01 (01-14): a manifest transmit failure must not consume its
 // one-shot state — the ANNOUNCED / PUSH_THUMB_CHUNKS advance happens only on
 // a successful transmit, and failures retry on later process() passes (one
