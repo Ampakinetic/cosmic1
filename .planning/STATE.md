@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 01-18-PLAN.md (command transmit channel-quiet gate; G-01-7 code half in, bench flips at 01-20)
-last_updated: "2026-08-25T11:25:55.240Z"
-state_head: 101ebd780540ac9eebdbc769cf26ec0780e47a1b
+stopped_at: Completed 01-19-PLAN.md (CR-04 scoped camera gate + WR-03 manual-capture baseline; WINDOWS entry 8 flips at the 01-20 bench)
+last_updated: "2026-08-25T11:39:11.617Z"
+state_head: 393c8db6a8f2e5aa69e394bdc6a466b58207c1f0
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 30
-  completed_plans: 27
+  completed_plans: 28
 milestone_name: milestone
 current_phase: 2
 current_phase_name: Command Protocol & Control
@@ -28,7 +28,7 @@ current_phase_name: Command Protocol & Control
 
 ## Current Position
 
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 20
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -129,8 +129,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-25T11:25:54.857Z
-**Stopped at:** Completed 01-18-PLAN.md (command transmit channel-quiet gate; G-01-7 code half in, bench flips at 01-20)
+**Last session:** 2026-08-25T11:39:11.158Z
+**Stopped at:** Completed 01-19-PLAN.md (CR-04 scoped camera gate + WR-03 manual-capture baseline; WINDOWS entry 8 flips at the 01-20 bench)
 **Resume file:** None
 
 ## Performance Metrics
@@ -163,6 +163,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P16 | ~2h across executor + operator bench session #5 (2026-08-25) | 2 tasks | 4 files |
 | Phase 01 P17 | 15min | 3 tasks | 4 files |
 | Phase 01 P18 | 7min | 2 tasks | 2 files |
+| Phase 01 P19 | 7min | 2 tasks | 3 files |
 
 ## Decisions
 
@@ -228,3 +229,5 @@ See: `.planning/PROJECT.md`
 - [Phase 01]: 01-17: SERVED means bytes offered, not cursor reached — both TX push paths gate cursor advance on transmit success with a bounded same-index retry (IMG_CHUNK_TX_RETRY_MAX 3, named skip log); a final chunk skipped after the bound completes the window (windowArmed cleared, tail re-request re-opens service) but leaves the entry ANNOUNCED, never SERVED for bytes that never left the balloon (WR-08)
 - [Phase 01]: 01-18: command transmit channel-quiet gate — a receive-time latch on inbound 0x13 chunk frames (sole storm class; 0x12/0x14 unlatched) holds BOTH the PENDING first transmit and the SENT timeout retry while a frame arrived within 750 ms; a hold writes only channelHoldStartMs (no retry, no failure, no D-05 window start — sendTime is set only by an actual transmit), bounded by a 30 s best-effort transmit
 - [Phase 01]: 01-18: wrap-don't-rewrite — the quiet gate composes with 01-15 (a held PENDING IMAGE_WINDOW_REQUEST stays non-terminal so windowRequestInFlight extends the D-24 stall clock, no pass charged) and leaves the D-07 backoff block, BUSY-deferral branch, terminal-state guard, ackTimeoutFor, and frame dispatch byte-identical to pre-plan HEAD (diff-hunk-proven)
+- [Phase 01]: 01-19: CR-04 gate scoping, not removal - commandRequiresCamera() classifies exactly CAPTURE_NOW + the seven SET_* sensor classes as camera-touching (NACK_BUSY refusal byte-identical in message/counter/shape); AUTO_CAPTURE_ENABLE/DISABLE, GET_STATUS, IMAGE_WINDOW_REQUEST, SET_EVENT_THRESHOLDS and unknown commands dispatch ungated so a camera-down window never strands announced fulls or blinds the status poll
+- [Phase 01]: 01-19: WR-03 - public AutoCapture::markCaptureBaseline() (lastCaptureTime = millis(), the same field fire() advances) called exactly once in handleCaptureNow success; a failed manual capture leaves the baseline untouched (a failed attempt must not defer the schedule); safe while disabled since the interval branch is gated on enabled and enable() resets the baseline
