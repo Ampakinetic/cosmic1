@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 14/16 plans executed (gap-closure round 01-13..01-16 pending)
+**Plans:** 15/16 plans executed (all 16 numbered plans 01-01..01-16 executed — 01-16 bench re-verification 2026-08-25 closed G-01-9 defects A+B and WINDOWS 6/7; the unmatched 16th is the phase master PLAN.md, which has no summary partner by design. Remaining before phase complete: narrow residual round — receipt-driven FULL-manifest recovery + command survivability under unspaced load (WINDOWS 3/5) with SC-3 pairs riding — then the security gate)
 
 Plans:
 **Wave 1**
@@ -98,7 +98,7 @@ Plans:
 
 **Wave 12** *(blocked on Wave 11)*
 
-- [ ] 01-16-PLAN.md — Bench re-verification: flash both boards (wire change), series A (3 unspaced captures, every kind COMPLETE), settings series (CIF/SVGA both-kinds COMPLETE with sized thumbs, QVGA restore, reboot boot-resolution, SC-3 visible-effect pairs), dashboard regression glance; G-01-7/G-01-9 + WINDOWS 3/5/6 flipped on evidence (CTRL-01, CTRL-02, IMG-02, IMG-03)
+- [x] 01-16-PLAN.md — Bench re-verification: flash both boards (wire change), series A (3 unspaced captures, every kind COMPLETE), settings series (CIF/SVGA both-kinds COMPLETE with sized thumbs, QVGA restore, reboot boot-resolution, SC-3 visible-effect pairs), dashboard regression glance; G-01-7/G-01-9 + WINDOWS 3/5/6 flipped on evidence (CTRL-01, CTRL-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 
