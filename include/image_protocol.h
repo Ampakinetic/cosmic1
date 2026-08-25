@@ -82,6 +82,28 @@ static constexpr uint8_t  IMG_CHUNK_TX_RETRY_MAX     = 3;
 // full-only) with a named log — never silent (PRI-03).
 static constexpr uint8_t  IMG_MANIFEST_MAX_ATTEMPTS = 3;
 
+// G-01-9 defect C (01-17): receipt-informed FULL-manifest re-announce. The
+// 01-14 announce bound is TX-verdict-gated and structurally cannot see a
+// manifest that left with TX success but never arrived (balloon5.log:274 —
+// image 15's full silently lost). After the announce succeeds, the only
+// receipt signal the balloon can observe is the base arming its first FULL
+// window (window-arm IS the receipt). While an ANNOUNCED full sits with no
+// FULL window ever armed, a re-announce fires only in the channel's idle
+// slot (no push work, no armed window) after this idle bound. The bound
+// sits above every legitimate pre-pull quiet period — base inter-window
+// gap ~1-2 s, IMG_WINDOW_RX_SETTLE_MS 500 ms, thumb-heal-to-full-pull
+// handoff ~1-2 s — and delays nothing it must not: a base that received
+// the manifest arms its first FULL window within seconds of the
+// serialization hold releasing, which permanently stops the mechanism.
+static constexpr uint32_t IMG_FULL_REANNOUNCE_IDLE_MS = 10000;
+
+// Re-announce attempt bound — mirrors IMG_MANIFEST_MAX_ATTEMPTS so a
+// dead-link full can never spin re-announces: at the bound the full is
+// dropped with a named log (park at THUMB_PUSHED, full buffers freed,
+// thumbBuffer kept so THUMBNAIL window heals keep working) — never
+// silently (PRI-03).
+static constexpr uint8_t  IMG_FULL_REANNOUNCE_MAX    = 3;
+
 // Full-image transfer cap (research Q4 resolution): fulls larger than this
 // never arm a pull — the balloon logs a warning naming the image ID and size
 // while the thumbnail still pushes, and the base never sees a FULL_IMAGE

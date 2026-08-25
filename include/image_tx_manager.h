@@ -119,6 +119,12 @@ struct ImageTxEntry {
     bool windowArmed;
     uint8_t  windowKind;      // ImageKind the armed window serves
     bool windowEverArmed;     // any window (either kind) has armed on this entry — marks the active-pull context, the LAST-resort overflow-eviction class (02-05 / CR-03 fix c)
+    // G-01-9 defect C (01-17): a FULL window has armed on this entry — the
+    // receipt signal that permanently stops FULL-manifest re-announces.
+    // Distinct from windowEverArmed (which THUMBNAIL heals also set): a
+    // thumb-healed entry whose FULL manifest was air-lost (image-15 class)
+    // must KEEP re-announcing, so only a non-thumb arm sets this.
+    bool fullWindowEverArmed;
     uint16_t windowStart;     // first chunk index of the armed window
     uint16_t windowCount;     // chunks in the armed window
     uint16_t windowNextIndex; // next chunk index to transmit
@@ -143,6 +149,14 @@ struct ImageTxEntry {
     // other's count. At IMG_MANIFEST_MAX_ATTEMPTS the kind is dropped
     // honestly (buffer freed, named log).
     uint8_t manifestAttempts;
+
+    // G-01-9 defect C (01-17): FULL-manifest re-announces issued while the
+    // entry is ANNOUNCED with no FULL window ever armed; reset in freeEntry.
+    // Bounded by IMG_FULL_REANNOUNCE_MAX — each transmit attempt counts
+    // regardless of TX verdict (air loss is the class being treated); at the
+    // bound the full is dropped with a named log (park at THUMB_PUSHED
+    // keeping thumbBuffer for heals).
+    uint8_t reannounceAttempts;
 };
 
 class ImageTxManager {
@@ -207,6 +221,9 @@ private:
     void pushPending();
     ImageTxEntry* findActiveEntry();          // earliest entry with push work (thumb or full announcement)
     ImageTxEntry* findWindowServiceEntry();   // earliest entry with an armed, incomplete window (ANNOUNCED, or THUMB_PUSHED with a heal window armed)
+    // G-01-9 defect C (01-17): earliest ANNOUNCED full with no FULL window
+    // ever armed (receipt never observed) idle past IMG_FULL_REANNOUNCE_IDLE_MS
+    ImageTxEntry* findReannounceCandidate();
 
     // Eviction policy (bounded memory)
     void evictEntriesOlderThan(const ImageTxEntry& reference); // newer-ID window request (D-19)
@@ -220,6 +237,13 @@ private:
     bool pushThumbManifest(ImageTxEntry& entry);
     bool pushThumbChunk(ImageTxEntry& entry);
     bool announceFullManifest(ImageTxEntry& entry);
+    // G-01-9 defect C (01-17): bounded idle FULL-manifest re-announce with a
+    // named drop at the bound (park-and-free mirroring the 01-14 announce
+    // bound); fires only in pushPending's idle slot
+    void reannounceFullManifest(ImageTxEntry& entry);
+    // Shared 0x12 FULL body construction — the one-shot announce and the
+    // re-announce call the same helper (one construction site, no wire change)
+    static ImageManifestBody fillFullManifestBody(const ImageTxEntry& entry);
     bool serviceWindowChunk(ImageTxEntry& entry);
     void freeEntry(ImageTxEntry& entry);
 };

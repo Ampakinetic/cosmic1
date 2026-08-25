@@ -500,6 +500,21 @@ void ImageTxManager::pushPending() {
     ImageTxEntry* serving = findWindowServiceEntry();
     if (serving != nullptr) {
         serviceWindowChunk(*serving);
+        return; // one transmit per pass
+    }
+
+    // G-01-9 defect C (01-17): the channel's natural idle slot — no push
+    // work, no armed window. Re-announce an ANNOUNCED full whose FULL window
+    // never armed (receipt never observed) and which has been idle past
+    // IMG_FULL_REANNOUNCE_IDLE_MS, as this pass's single transmit. The
+    // re-announce thus NEVER competes with push work or window service, and
+    // the beacon early-return in process() still outranks it (PRI-01
+    // untouched); the first FULL window arm permanently stops the mechanism
+    // (fullWindowEverArmed), confining any duplicate manifests to the
+    // pre-first-arm phase where the base-side restart is benign (IN-08).
+    ImageTxEntry* lost = findReannounceCandidate();
+    if (lost != nullptr) {
+        reannounceFullManifest(*lost);
     }
 }
 
@@ -643,7 +658,10 @@ ImageTxEntryState ImageTxManager::completedThumbState(const ImageTxEntry& entry)
 // Full-Image Announcement (D-17 pull half)
 // ===========================
 
-bool ImageTxManager::announceFullManifest(ImageTxEntry& entry) {
+// Shared 0x12 FULL_IMAGE manifest body construction (G-01-9 defect C, 01-17):
+// the one-shot announce and the idle re-announce transmit the IDENTICAL body —
+// one construction site, no duplication, no wire change (body stays 27 B).
+ImageManifestBody ImageTxManager::fillFullManifestBody(const ImageTxEntry& entry) {
     ImageManifestBody body{};
     body.imageId = entry.imageId;
     body.imageKind = static_cast<uint8_t>(ImageKind::FULL_IMAGE);
@@ -660,6 +678,11 @@ bool ImageTxManager::announceFullManifest(ImageTxEntry& entry) {
     body.saturation = entry.settings.saturation;
     body.exposure = entry.settings.exposure;
     body.wbMode = entry.settings.wbMode;
+    return body;
+}
+
+bool ImageTxManager::announceFullManifest(ImageTxEntry& entry) {
+    ImageManifestBody body = fillFullManifestBody(entry);
 
     ImageManifestPacket pkt = createManifestPacket(body); // factory owns the 0x12 type byte
 
@@ -706,6 +729,83 @@ bool ImageTxManager::announceFullManifest(ImageTxEntry& entry) {
     }
     entry.lastActivityMs = millis();
     return ok;
+}
+
+// G-01-9 defect C (01-17): the earliest (lowest enqueueSeq) ANNOUNCED full
+// that has NEVER had a FULL window armed (the receipt signal) and has been
+// idle past IMG_FULL_REANNOUNCE_IDLE_MS — the air-lost-manifest class the
+// TX-verdict-gated 01-14 bound structurally cannot see (balloon5.log:274:
+// TX-success accounting, zero base receipts, silent full loss). A thumb
+// heal alone never disqualifies the entry (image-15 class).
+ImageTxEntry* ImageTxManager::findReannounceCandidate() {
+    ImageTxEntry* best = nullptr;
+    for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+        if (!entries[i].used ||
+            entries[i].state != ImageTxEntryState::ANNOUNCED ||
+            entries[i].fullBuffer == nullptr ||
+            entries[i].fullWindowEverArmed) {
+            continue;
+        }
+        if ((millis() - entries[i].lastActivityMs) < IMG_FULL_REANNOUNCE_IDLE_MS) {
+            continue;
+        }
+        if (best == nullptr || entries[i].enqueueSeq < best->enqueueSeq) {
+            best = &entries[i];
+        }
+    }
+    return best;
+}
+
+// Bounded idle re-announce (G-01-9 defect C / PRI-03): retransmits the FULL
+// manifest for an announced-but-never-pulled full, via the SAME body
+// construction as the one-shot announce. Each transmit attempt is one
+// bounded attempt AND one idle period (reannounceAttempts and
+// lastActivityMs advance on every verdict — air loss is the class being
+// treated, so a TX-successful re-announce that still draws no window must
+// consume budget). At IMG_FULL_REANNOUNCE_MAX the full is dropped with a
+// named log — park-and-free exactly like the announce-bound branch in
+// announceFullManifest (thumbBuffer kept so THUMBNAIL window heals keep
+// working on the parked entry).
+void ImageTxManager::reannounceFullManifest(ImageTxEntry& entry) {
+    ImageManifestBody body = fillFullManifestBody(entry);
+    ImageManifestPacket pkt = createManifestPacket(body); // factory owns the 0x12 type byte
+
+    uint8_t buffer[CMD_MAX_PACKET_SIZE];
+    size_t length = 0;
+    bool ok = CommandProtocol::serializeManifest(pkt, buffer, length) && lora->transmit(buffer, length);
+
+    entry.reannounceAttempts++;
+    if (ok) {
+        Serial.printf("ImageTx: FULL manifest(image %u, %u B, %u chunks) re-announced (%u/%u) - no window armed since announce\n",
+                     entry.imageId,
+                     static_cast<unsigned>(entry.fullLength),
+                     static_cast<unsigned>(entry.fullTotalChunks),
+                     static_cast<unsigned>(entry.reannounceAttempts),
+                     static_cast<unsigned>(IMG_FULL_REANNOUNCE_MAX));
+    } else {
+        Serial.printf("ImageTx: FULL manifest(image %u, %u B, %u chunks) re-announce FAILED (%u/%u) - no window armed since announce\n",
+                     entry.imageId,
+                     static_cast<unsigned>(entry.fullLength),
+                     static_cast<unsigned>(entry.fullTotalChunks),
+                     static_cast<unsigned>(entry.reannounceAttempts),
+                     static_cast<unsigned>(IMG_FULL_REANNOUNCE_MAX));
+    }
+    if (entry.reannounceAttempts >= IMG_FULL_REANNOUNCE_MAX) {
+        Serial.printf("ImageTx: image %u full dropped - no FULL window armed after %u re-announces\n",
+                     entry.imageId,
+                     static_cast<unsigned>(IMG_FULL_REANNOUNCE_MAX));
+        // Park-and-free at the bound (PRI-03 honest degradation, mirroring
+        // the announce-bound branch): the base degrades to thumbnail-only
+        // for this capture — bounded, logged, never silent. thumbBuffer
+        // stays owned so THUMBNAIL window heals keep working.
+        free(entry.fullBuffer);
+        entry.fullBuffer = nullptr;
+        entry.fullLength = 0;
+        entry.fullCrc32 = 0;
+        entry.fullTotalChunks = 0;
+        entry.state = ImageTxEntryState::THUMB_PUSHED;
+    }
+    entry.lastActivityMs = millis();
 }
 
 // ===========================
@@ -828,6 +928,14 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     target->windowArmed = true;
     target->windowKind = imageKind;
     target->windowEverArmed = true;
+    // G-01-9 defect C (01-17): a FULL window arm is the receipt signal that
+    // permanently stops the FULL-manifest re-announce — set ONLY for
+    // non-thumb windows. A THUMBNAIL heal arm must NOT stop it: image 15's
+    // exact shape is thumb-healed-COMPLETE with the FULL manifest air-lost,
+    // and that entry still needs its full re-announced.
+    if (!thumbWindow) {
+        target->fullWindowEverArmed = true;
+    }
     target->windowStart = startChunk;
     target->windowCount = count;
     target->windowNextIndex = startChunk;
@@ -1062,6 +1170,8 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     entry.manifestAttempts = 0;   // CR-02/WR-01: a recycled slot starts with a clean manifest budget
     entry.thumbChunkFailStreak = 0;   // WR-08: a recycled slot starts with clean fail streaks
     entry.windowChunkFailStreak = 0;
+    entry.fullWindowEverArmed = false;   // G-01-9 defect C: a recycled slot re-opens the re-announce gate
+    entry.reannounceAttempts = 0;
     entry.windowArmed = false;
     entry.windowKind = 0;
     entry.windowEverArmed = false;
