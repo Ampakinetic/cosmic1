@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 15/16 plans executed (all 16 numbered plans 01-01..01-16 executed — 01-16 bench re-verification 2026-08-25 closed G-01-9 defects A+B and WINDOWS 6/7; the unmatched 16th is the phase master PLAN.md, which has no summary partner by design. Remaining before phase complete: narrow residual round — receipt-driven FULL-manifest recovery + command survivability under unspaced load (WINDOWS 3/5) with SC-3 pairs riding — then the security gate)
+**Plans:** 16/20 plans executed (01-01..01-16 done — 01-16 bench re-verification 2026-08-25 closed G-01-9 defects A+B and WINDOWS 6/7; the unmatched 16th is the phase master PLAN.md, which has no summary partner by design. Residual round #8 planned 2026-08-25 as 01-17..01-20: receipt-informed FULL-manifest re-announce + WR-08 cursor gating + WINDOWS routing of CR-04/WR-08, base command-survivability quiet gate, CR-04 dispatch scoping + WR-03 baseline, bench re-verification with SC-3 pairs riding. Then the security gate)
 
 Plans:
 **Wave 1**
@@ -99,6 +99,16 @@ Plans:
 **Wave 12** *(blocked on Wave 11)*
 
 - [x] 01-16-PLAN.md — Bench re-verification: flash both boards (wire change), series A (3 unspaced captures, every kind COMPLETE), settings series (CIF/SVGA both-kinds COMPLETE with sized thumbs, QVGA restore, reboot boot-resolution, SC-3 visible-effect pairs), dashboard regression glance; G-01-7/G-01-9 + WINDOWS 3/5/6 flipped on evidence (CTRL-01, CTRL-02, IMG-02, IMG-03)
+
+**Wave 13** *(narrow residual round #8, 2026-08-25; blocked on Wave 12 — 01-17/01-18/01-19 are file-disjoint and run in parallel)*
+
+- [ ] 01-17-PLAN.md — G-01-9 defect C + WR-08 (balloon TX truth): receipt-informed FULL-manifest re-announce while ANNOUNCED-and-idle (no FULL window ever armed) with a named drop log at the bound; chunk-cursor advance + SERVED gated on transmit success with a same-index retry bound; CR-04/WR-08 routed in WINDOWS entries 8/9 (IMG-02, IMG-03, IMG-04, PRI-03)
+- [ ] 01-18-PLAN.md — G-01-7 residual (base): command-survivability quiet gate — command transmits (first attempts and timeout retries) hold while inbound 0x13 chunk frames arrived within 750 ms, consuming nothing (no retry, no failure, no ACK-window start), 30 s best-effort bound (CTRL-01, CTRL-06, PRI-02, IMG-03)
+- [ ] 01-19-PLAN.md — CR-04 + WR-03 (balloon command path): camera-ready gate scoped to the 8 camera-touching handlers (IMAGE_WINDOW_REQUEST/GET_STATUS/SET_EVENT_THRESHOLDS/AUTO_CAPTURE_* servable while ImageTx/radio live during camera-down); manual capture advances the auto-capture interval baseline (IMG-03, IMG-05, CTRL-03, CTRL-04)
+
+**Wave 14** *(blocked on Wave 13)*
+
+- [ ] 01-20-PLAN.md — Bench re-verification session #6: flash both boards, series A (3 unspaced captures — 3/3 ACKed, 6/6 COMPLETE, zero command timeouts, zero silent full losses), WR-03 cadence discriminator, SC-3 visible-effect pairs (fourth round riding), settings regression + dashboard glance; G-01-7/G-01-9 + WINDOWS 3/5/8/9 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 
