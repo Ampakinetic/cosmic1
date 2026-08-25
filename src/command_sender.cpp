@@ -70,6 +70,7 @@ CommandSender::CommandSender()
     , commandsTimeout(0)
     , receiveIndex(0)
     , inPacket(false)
+    , lastChunkFrameMs(0)
     , hasStatusData(false)
 {
     memset(pendingCommands, 0, sizeof(pendingCommands));
@@ -137,6 +138,7 @@ uint16_t CommandSender::sendCommand(CameraCommand cmd, const void* payload, size
     slot->retryCount = 0;
     slot->sendTime = 0;
     slot->lastRetryTime = 0;
+    slot->channelHoldStartMs = 0;   // G-01-7: a fresh command starts un-held
     slot->hasResponse = false;
 
     // Increment sequence number
@@ -370,6 +372,12 @@ void CommandSender::processIncomingByte(uint8_t byte) {
                         ImageRx().onManifestFrame(receiveBuffer, expectedTotal);
                         break;
                     case static_cast<uint8_t>(PACKET_TYPE_IMAGE_CHUNK):
+                        // G-01-7 channel-activity latch: this is the ONLY
+                        // inbound chunk path on the base — stamp it so the
+                        // transmit gate knows a chunk stream is active.
+                        // Manifests (0x12) and beacons (0x14) are single
+                        // frames, not the storm class, and are NOT latched.
+                        lastChunkFrameMs = millis();
                         ImageRx().onChunkFrame(receiveBuffer, expectedTotal);
                         break;
                     case static_cast<uint8_t>(PACKET_TYPE_TELEMETRY_BEACON):
@@ -525,6 +533,50 @@ TrackedCommand* CommandSender::findFreeSlot() {
     }
 
     return nullptr;
+}
+
+// ===========================
+// Channel-Quiet Transmit Gate (G-01-7 residual)
+// ===========================
+
+bool CommandSender::channelQuietForTx() const {
+    // Quiet when no chunk frame was ever seen, or the last one is older
+    // than the quiet window (wraparound-safe subtraction — project idiom)
+    return lastChunkFrameMs == 0 ||
+           (millis() - lastChunkFrameMs) >= CMD_TX_CHANNEL_QUIET_MS;
+}
+
+bool CommandSender::canTransmitNow(TrackedCommand* cmd, uint32_t now) {
+    if (channelQuietForTx()) {
+        // Release: clear the hold latch so a later hold episode logs freshly
+        cmd->channelHoldStartMs = 0;
+        return true;
+    }
+
+    // Inbound chunk stream active — hold the transmit. The hold consumes
+    // NOTHING: no retryCount increment, no lastRetryTime change, no failure
+    // booked, no D-05 ACK window started (sendTime is set only by an actual
+    // transmit). A hold is a wait, not an outcome.
+    if (cmd->channelHoldStartMs == 0) {
+        cmd->channelHoldStartMs = now;   // log-once per hold episode
+        if (DEBUG_COMMAND_SENDER) {
+            Serial.printf("CommandSender: command seq=%d transmit held - inbound chunk stream active\n",
+                         cmd->sequenceNumber);
+        }
+    }
+
+    // Bounded hold: a sustained stream can never strand the command —
+    // transmit best-effort, honest terminal semantics still apply
+    if ((now - cmd->channelHoldStartMs) >= CMD_TX_CHANNEL_HOLD_MAX_MS) {
+        cmd->channelHoldStartMs = 0;
+        if (DEBUG_COMMAND_SENDER) {
+            Serial.printf("CommandSender: command seq=%d held >= %u ms; transmitting best-effort\n",
+                         cmd->sequenceNumber, (unsigned)CMD_TX_CHANNEL_HOLD_MAX_MS);
+        }
+        return true;
+    }
+
+    return false;
 }
 
 bool CommandSender::transmitCommand(TrackedCommand* cmd) {

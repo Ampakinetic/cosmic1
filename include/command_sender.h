@@ -13,6 +13,23 @@
 // Maximum pending commands
 static constexpr uint8_t MAX_PENDING_COMMANDS = 5;
 
+// G-01-7 residual (session 5, base5.log:55/:73/:81/:92): a 16-byte command
+// frame transmitted while inbound 217-byte 0x13 chunk frames flowed lost all
+// 4 transmissions (original + retries 1/3, 2/3, 3/3) — a half-duplex channel
+// the balloon is occupying gives a command transmitted into it near-zero
+// landing probability, and the honest 3-retry budget burned in ~16 s of
+// storm. Command transmits (first attempt and timeout retry) therefore wait
+// for the quiet gap that necessarily follows every window/push completion
+// (windows complete, pushes drain; the RX settle + request/ACK round trip
+// at window boundaries is the landing slot — far above this threshold).
+static constexpr uint32_t CMD_TX_CHANNEL_QUIET_MS = 750;
+
+// Bound on the quiet hold: a sustained chunk stream can never strand a
+// command indefinitely — at this bound the command transmits best-effort
+// with a named log, and the honest D-05/D-07 terminal semantics apply to
+// that attempt like any other.
+static constexpr uint32_t CMD_TX_CHANNEL_HOLD_MAX_MS = 30000;
+
 // Command transmission state
 enum class CommandState : uint8_t {
     IDLE = 0,
@@ -31,6 +48,7 @@ struct TrackedCommand {
     uint8_t retryCount;
     uint32_t sendTime;
     uint32_t lastRetryTime;
+    uint32_t channelHoldStartMs;   // G-01-7 quiet gate: hold-episode start (0 = not currently held)
     ResponsePacket response;
     bool hasResponse;
 };
@@ -125,6 +143,11 @@ private:
     size_t receiveIndex;
     bool inPacket;
 
+    // Channel-activity latch (G-01-7): millis() of the last inbound 0x13
+    // chunk frame — the storm class that ate seq=6's 4 transmissions.
+    // 0 = no chunk frame ever seen.
+    uint32_t lastChunkFrameMs;
+
     // Latched GET_STATUS payload (D-26) — survives tracked-slot reuse
     ResponseStatusData latestStatus;
     bool hasStatusData;
@@ -133,6 +156,10 @@ private:
     TrackedCommand* findTrackedCommand(uint16_t sequenceNumber);
     TrackedCommand* findOldestCommand();
     TrackedCommand* findFreeSlot();
+    // Channel-quiet transmit gate (G-01-7): decides whether a command frame
+    // may occupy the half-duplex channel right now
+    bool channelQuietForTx() const;
+    bool canTransmitNow(TrackedCommand* cmd, uint32_t now);
     bool transmitCommand(TrackedCommand* cmd);
     void retryCommand(TrackedCommand* cmd);
     void handleResponse(const ResponsePacket& response);
