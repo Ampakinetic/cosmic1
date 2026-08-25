@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 01-17-PLAN.md (WR-08 cursor/SERVED gating + G-01-9 defect C re-announce + WINDOWS 8/9 routed open; bench flips at 01-20)
-last_updated: "2026-08-25T11:11:56.903Z"
-state_head: b1948dbc3983f72f828e1d9f4620a5ea6c96b079
+stopped_at: Completed 01-18-PLAN.md (command transmit channel-quiet gate; G-01-7 code half in, bench flips at 01-20)
+last_updated: "2026-08-25T11:25:55.240Z"
+state_head: 101ebd780540ac9eebdbc769cf26ec0780e47a1b
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 30
-  completed_plans: 26
+  completed_plans: 27
 milestone_name: milestone
 current_phase: 2
 current_phase_name: Command Protocol & Control
@@ -28,7 +28,7 @@ current_phase_name: Command Protocol & Control
 
 ## Current Position
 
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 20
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -129,8 +129,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-25T11:11:39.878Z
-**Stopped at:** Completed 01-17-PLAN.md (WR-08 cursor/SERVED gating + G-01-9 defect C re-announce + WINDOWS 8/9 routed open; bench flips at 01-20)
+**Last session:** 2026-08-25T11:25:54.857Z
+**Stopped at:** Completed 01-18-PLAN.md (command transmit channel-quiet gate; G-01-7 code half in, bench flips at 01-20)
 **Resume file:** None
 
 ## Performance Metrics
@@ -162,6 +162,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P15 | 11min | 2 tasks | 3 files |
 | Phase 01 P16 | ~2h across executor + operator bench session #5 (2026-08-25) | 2 tasks | 4 files |
 | Phase 01 P17 | 15min | 3 tasks | 4 files |
+| Phase 01 P18 | 7min | 2 tasks | 2 files |
 
 ## Decisions
 
@@ -225,3 +226,5 @@ See: `.planning/PROJECT.md`
 - [Phase 01]: 01-16: two log-reading traps documented for future rounds — '[HTTP] GET /img/... -> 404' is the handleNotFound DISPATCH banner (main_basestation.cpp:3641) printed before the image handler serves 200, NOT a response code; and healed-thumb finalize lines undercount 'B persisted' by design (sd_storage.cpp:234 accounting restarts at each reopen flip) while complete=true still reflects the read-back CRC — neither is a defect
 - [Phase 01]: 01-17: window-arm IS the receipt signal — the FULL-manifest re-announce keys on fullWindowEverArmed (set ONLY at non-thumb arms, so a THUMBNAIL heal never stops it; image-15 class), fires only in pushPending's idle slot (no push work, no armed window) after 10 s idle, and consumes one attempt + one idle period per transmit regardless of TX verdict; bounded at 3 with park-and-free + named drop (mirrors the 01-14 announce bound)
 - [Phase 01]: 01-17: SERVED means bytes offered, not cursor reached — both TX push paths gate cursor advance on transmit success with a bounded same-index retry (IMG_CHUNK_TX_RETRY_MAX 3, named skip log); a final chunk skipped after the bound completes the window (windowArmed cleared, tail re-request re-opens service) but leaves the entry ANNOUNCED, never SERVED for bytes that never left the balloon (WR-08)
+- [Phase 01]: 01-18: command transmit channel-quiet gate — a receive-time latch on inbound 0x13 chunk frames (sole storm class; 0x12/0x14 unlatched) holds BOTH the PENDING first transmit and the SENT timeout retry while a frame arrived within 750 ms; a hold writes only channelHoldStartMs (no retry, no failure, no D-05 window start — sendTime is set only by an actual transmit), bounded by a 30 s best-effort transmit
+- [Phase 01]: 01-18: wrap-don't-rewrite — the quiet gate composes with 01-15 (a held PENDING IMAGE_WINDOW_REQUEST stays non-terminal so windowRequestInFlight extends the D-24 stall clock, no pass charged) and leaves the D-07 backoff block, BUSY-deferral branch, terminal-state guard, ackTimeoutFor, and frame dispatch byte-identical to pre-plan HEAD (diff-hunk-proven)
