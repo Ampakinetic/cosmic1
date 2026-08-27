@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 4
+current_plan: 5
 status: executing
-stopped_at: "Completed 01-23-PLAN.md (round-#9 findings WR-01..WR-05 routed WINDOWS 10-14 and all fixed per option-a; builds 2/2, harness 52/52; ready for the 01-24 bench reflash)"
-last_updated: "2026-08-27T16:09:48.709Z"
-state_head: 3d0aaea891ceaa88b4730231704fab3cb84d2f7d
+stopped_at: Completed 01-24-PLAN.md
+last_updated: "2026-08-27T20:29:26.559Z"
+state_head: bb5932e0c49ca03a2d2ed9352d62c043c8f89a0a
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 34
-  completed_plans: 32
+  completed_plans: 33
 milestone_name: milestone
 current_phase: 2
 current_phase_name: Command Protocol & Control
@@ -28,7 +28,7 @@ current_phase_name: Command Protocol & Control
 
 ## Current Position
 
-**Current Plan:** 4
+**Current Plan:** 5
 **Total Plans in Phase:** 24
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -132,8 +132,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-27T16:09:48.226Z
-**Stopped at:** Completed 01-23-PLAN.md (round-#9 findings WR-01..WR-05 routed WINDOWS 10-14 and all fixed per option-a; builds 2/2, harness 52/52; ready for the 01-24 bench reflash)
+**Last session:** 2026-08-27T20:29:25.897Z
+**Stopped at:** Completed 01-24-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -171,6 +171,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P21 | 12min | 3 tasks | 3 files |
 | Phase 01 P22 | 10min | 2 tasks | 2 files |
 | Phase 01 P23 | 12min | 3 tasks | 9 files |
+| Phase 01 P24 | 15303s | 2 tasks | 3 files |
 
 ## Decisions
 
@@ -248,3 +249,5 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: 01-23: WR-02 is refuse-don't-NACK — the second complete frame in one drain is dropped with the named log 'CommandHandler: second command frame dropped - handler busy (sender will retry)' and the base's existing D-05/D-07 retry re-delivers it as a fresh command; no new protocol surface, 01-15 BUSY-deferral stays scoped to IMAGE_WINDOW_REQUEST — Review's own fix shape plus the plan's prohibition against a NACK_BUSY protocol addition
 - [Phase 2]: 01-23: framer inter-byte resync CMD_FRAME_INTERBYTE_MS 200 (wrap-safe millis subtraction, lastFrameByteMs stamped per byte, both framers) is independent of the 01-18 quiet gate — the gate latches on completed frame types at frame-completion time; diff-proven untouched — A truncated frame resets the parser in 200 ms instead of destroying subsequent frames until a forced CRC failure
 - [Phase 2]: 01-23: jsonEscape contract is strictly RFC-8259-valid output for any 1-32 byte SSID (control bytes as \u00XX, bytes >= 0x80 dropped rather than invalid UTF-8) so /api/state can never freeze the dashboard poll; password never appears in any response (T-03-12 unchanged) — WR-04 is a fabrication-class truth on the trust boundary from arbitrary SSID bytes into operator browsers
+- [Phase 2]: Session-7 bench FAILED recorded honestly: balloon hard-crashed twice in series A; zero ledger flips; D1 crash regression routed as blocker (G-01-10/WINDOWS 15) with debug round before any bench re-run
+- [Phase 2]: Session consoles retained as balloon.log/base.log (not plan's balloon12/base7); provenance deviation recorded in 01-UAT.md rather than renaming operator files

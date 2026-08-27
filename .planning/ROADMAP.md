@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 22/24 plans executed (01-01..01-20 done — round #8 closed G-01-9 + WINDOWS 5/8/9 at bench session #6 and left G-01-7 open-rescoped to burst full-delivery with levers named. Gap-closure round #10 planned 2026-08-28 as 01-21..01-24: balloon receipt-evidence re-announce + eviction ranking, base full-arm deadline, review round #9 WR-01..WR-05 routing + operator-dispositioned companion fixes, bench re-verification session #7 carrying the five-round-riding SC-3 pairs + WR-03 discriminator + CIF/QVGA-restore clauses. Then the security gate)
+**Plans:** 23/24 plans executed (01-01..01-20 done — round #8 closed G-01-9 + WINDOWS 5/8/9 at bench session #6 and left G-01-7 open-rescoped to burst full-delivery with levers named. Gap-closure round #10 planned 2026-08-28 as 01-21..01-24: balloon receipt-evidence re-announce + eviction ranking, base full-arm deadline, review round #9 WR-01..WR-05 routing + operator-dispositioned companion fixes, bench re-verification session #7 carrying the five-round-riding SC-3 pairs + WR-03 discriminator + CIF/QVGA-restore clauses. Then the security gate)
 
 Plans:
 **Wave 1**
@@ -118,7 +118,7 @@ Plans:
 
 **Wave 16** *(blocked on Wave 15)*
 
-- [ ] 01-24-PLAN.md — Bench re-verification session #7: flash both boards, series A re-run (6/6 COMPLETE target), WR-03 cadence discriminator, SC-3 visible-effect pairs (fifth round riding), CIF cycle + QVGA restore, dashboard LOOK glance; G-01-7 + WINDOWS 3/10-14 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
+- [x] 01-24-PLAN.md — Bench re-verification session #7: flash both boards, series A re-run (6/6 COMPLETE target), WR-03 cadence discriminator, SC-3 visible-effect pairs (fifth round riding), CIF cycle + QVGA restore, dashboard LOOK glance; G-01-7 + WINDOWS 3/10-14 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 
