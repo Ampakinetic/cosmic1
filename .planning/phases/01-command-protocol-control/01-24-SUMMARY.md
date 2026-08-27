@@ -128,3 +128,13 @@ None - no code was written; every ledger claim carries a log-line citation.
 ## Windows Ledger
 
 Entries 15 (D1) and 16 (D2) recorded OPEN this plan (via direct ledger edit; `gsd-tools windows append` equivalent). Entry 3 annotated with the session-7 no-evidence note, status unchanged. Ledger stands at 3 open / 13 fixed / 16 total and blocks `/gsd-ship` until a clean bench session closes them - which is exactly what an honest ledger should do after a failed bench.
+
+## Self-Check: PASSED
+
+- File check: `.planning/phases/01-command-protocol-control/01-24-SUMMARY.md` FOUND
+- Commit check: bb5932e (ledger evidence commit) FOUND; 967373d (plan-completion commit) FOUND
+- Task 2 verify greps re-run after edits: 01-UAT.md cites balloon.log/base.log (16 lines); WINDOWS.md cites them (7 lines); STATE.md contains "01-24" (7x) and "secure-phase" (4x)
+- WINDOWS.md integrity: JSON copy parses; 16 entries; open ids exactly {3, 15, 16}; front matter 3/13/16 reconciles with table (16 rows) and JSON
+- Honesty audit: no G-01-7/G-01-9 closure claims, no WINDOWS status flips on entries 3/10-14, no requirements marked complete (requirements.mark-complete deliberately skipped; requirements-completed: [])
+- Untracked residue: balloon.log/base.log (session evidence, prior-session convention - left untracked), plus pre-existing .gsd/, .planning/milestone.lock, .planning/research/ (not this plan's output, left untouched)
+- Bench verdict: FAILED (recorded as such everywhere) - record-keeping tasks complete, gaps honestly open
