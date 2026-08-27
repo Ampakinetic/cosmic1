@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 18/20 plans executed (01-01..01-16 done — 01-16 bench re-verification 2026-08-25 closed G-01-9 defects A+B and WINDOWS 6/7; the unmatched 16th is the phase master PLAN.md, which has no summary partner by design. Residual round #8 planned 2026-08-25 as 01-17..01-20: receipt-informed FULL-manifest re-announce + WR-08 cursor gating + WINDOWS routing of CR-04/WR-08, base command-survivability quiet gate, CR-04 dispatch scoping + WR-03 baseline, bench re-verification with SC-3 pairs riding. Then the security gate)
+**Plans:** 20/24 plans executed (01-01..01-20 done — round #8 closed G-01-9 + WINDOWS 5/8/9 at bench session #6 and left G-01-7 open-rescoped to burst full-delivery with levers named. Gap-closure round #10 planned 2026-08-28 as 01-21..01-24: balloon receipt-evidence re-announce + eviction ranking, base full-arm deadline, review round #9 WR-01..WR-05 routing + operator-dispositioned companion fixes, bench re-verification session #7 carrying the five-round-riding SC-3 pairs + WR-03 discriminator + CIF/QVGA-restore clauses. Then the security gate)
 
 Plans:
 **Wave 1**
@@ -108,7 +108,17 @@ Plans:
 
 **Wave 14** *(blocked on Wave 13)*
 
-- [ ] 01-20-PLAN.md — Bench re-verification session #6: flash both boards, series A (3 unspaced captures — 3/3 ACKed, 6/6 COMPLETE, zero command timeouts, zero silent full losses), WR-03 cadence discriminator, SC-3 visible-effect pairs (fourth round riding), settings regression + dashboard glance; G-01-7/G-01-9 + WINDOWS 3/5/8/9 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
+- [x] 01-20-PLAN.md — Bench re-verification session #6: flash both boards, series A (3 unspaced captures — 3/3 ACKed, 6/6 COMPLETE, zero command timeouts, zero silent full losses), WR-03 cadence discriminator, SC-3 visible-effect pairs (fourth round riding), settings regression + dashboard glance; G-01-7/G-01-9 + WINDOWS 3/5/8/9 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
+
+**Wave 15** *(gap-closure round #10, 2026-08-28; wave numbers restart for this round — 01-21/01-22/01-23 are file-disjoint and run in parallel)*
+
+- [ ] 01-21-PLAN.md — G-01-7 burst full-delivery (balloon half): re-announce drop-clock known-busy hold on inbound window traffic + per-entry receipt re-arm, overflow eviction ranked by receipt evidence (IMG-03, IMG-04, PRI-03)
+- [ ] 01-22-PLAN.md — G-01-7 burst full-delivery (base half): full-arm deadline bounds the thumbnail-heal serialization hold — a queued FULL activates within 20 s of manifest arrival (IMG-02, IMG-03, PRI-03)
+- [ ] 01-23-PLAN.md — Review round #9 routing: WR-01..WR-05 as WINDOWS entries 10-14 + operator disposition decision (fix-now vs waive-with-reason) + approved companion fixes (CTRL-06, PRI-02, IMG-05, IMG-06, WEB-05)
+
+**Wave 16** *(blocked on Wave 15)*
+
+- [ ] 01-24-PLAN.md — Bench re-verification session #7: flash both boards, series A re-run (6/6 COMPLETE target), WR-03 cadence discriminator, SC-3 visible-effect pairs (fifth round riding), CIF cycle + QVGA restore, dashboard LOOK glance; G-01-7 + WINDOWS 3/10-14 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 
