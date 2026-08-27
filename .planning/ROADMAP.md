@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 23/24 plans executed (01-01..01-20 done — round #8 closed G-01-9 + WINDOWS 5/8/9 at bench session #6 and left G-01-7 open-rescoped to burst full-delivery with levers named. Gap-closure round #10 planned 2026-08-28 as 01-21..01-24: balloon receipt-evidence re-announce + eviction ranking, base full-arm deadline, review round #9 WR-01..WR-05 routing + operator-dispositioned companion fixes, bench re-verification session #7 carrying the five-round-riding SC-3 pairs + WR-03 discriminator + CIF/QVGA-restore clauses. Then the security gate)
+**Plans:** 24/24 plans executed through round #10 (01-24 bench session #7 FAILED on the D1 crash regression — balloon hard-crashed twice in series A, nothing flipped; G-01-7 unjudgeable, SC-3/WR-03/CIF/QVGA clauses riding, review 7d96a98 WR-01..03 unrouted). Gap-closure round #11 planned 2026-08-28 as 01-25..01-27: D1 debug round (addr2line root cause + fix + D2 stamp fix), review 7d96a98 routing + dispositioned fixes, bench re-verification session #8 (D1/D2/G-01-7 acceptance + the six-round-riding clauses). Then the security gate
 
 Plans:
 **Wave 1**
@@ -119,6 +119,18 @@ Plans:
 **Wave 16** *(blocked on Wave 15)*
 
 - [x] 01-24-PLAN.md — Bench re-verification session #7: flash both boards, series A re-run (6/6 COMPLETE target), WR-03 cadence discriminator, SC-3 visible-effect pairs (fifth round riding), CIF cycle + QVGA restore, dashboard LOOK glance; G-01-7 + WINDOWS 3/10-14 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
+
+**Wave 17** *(gap-closure round #11, 2026-08-28; round-local wave 1 — the D1 blocker first, before any bench re-run)*
+
+- [ ] 01-25-PLAN.md — D1 debug round (BLOCKER, G-01-10/WINDOWS 15): addr2line the session-7 crash dumps against the retained ELF, disposition every round-#10 suspect, rank one root cause, implement the evidence-selected fix + the D2 receipt-ever stamp fix (G-01-11/WINDOWS 16); builds + harness, no bench claims (CTRL-01, CTRL-06, PRI-02, IMG-01, IMG-03, IMG-04, PRI-03)
+
+**Wave 18** *(blocked on Wave 17 — shares src/image_tx_manager.cpp with 01-25)*
+
+- [ ] 01-26-PLAN.md — Review 7d96a98 routing (01-VERIFICATION gap 4, the one gap the ledgers did not carry): WR-01..WR-03 as WINDOWS entries 17-19 + operator disposition + approved fixes (WR-01 ps_malloc degradation fall-through, WR-02 honest health check, WR-03 uint32 ACK counter) (IMG-02, IMG-03, CTRL-06)
+
+**Wave 19** *(blocked on Waves 17-18; bench re-verification trailing wave)*
+
+- [ ] 01-27-PLAN.md — Bench re-verification session #8: flash both boards, D1 spaced smoke + series A (zero crash signatures), D2 boot-window discriminator, G-01-7 series-A acceptance, WR-03 cadence discriminator, SC-3 visible-effect pairs (sixth round riding), CIF cycle + QVGA restore, dashboard LOOK glance; G-01-10/G-01-11/G-01-7 + WINDOWS 3/15/16/17-19 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 
