@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 1
+open_count: 6
 waived_count: 0
 fixed_count: 8
-total_count: 9
-last_updated: 2026-08-27T12:50:00.000Z
+total_count: 14
+last_updated: 2026-08-27T15:59:09.000Z
 ---
 
 # Broken Windows Ledger
@@ -24,6 +24,11 @@ last_updated: 2026-08-27T12:50:00.000Z
 | 7 | 01 | deviation | .planning/phases/01-command-protocol-control/01-15-SUMMARY.md |  | 01-15 deviation (positive): heal-site defer log 'heal deferred - window request seq ...' added beyond the named artifacts for 01-16 bench discrimination at session-4's failure site; shares the deferSkipLoggedSeq latch, pinned 'stall deferred' grep still == 1 | fixed | RESOLVED at the 01-16 bench (session #5, 2026-08-25, base5.log): the heal-site defer log fired as designed exactly once — :283 'ImageRx: heal deferred - window request seq 12 still in flight for image 15 kind 0' (image 15's thumb then healed to COMPLETE 7/7 at :310); the related 'stall deferred' line fired 16x, all benign, every affected transfer COMPLETE. Discrimination purpose served, no false positives | 2026-08-24T04:31:30.154Z | 2026-08-25T13:45:00.000Z |
 | 8 | 01 | unmet-truth | src/command_handler.cpp | 139 | CR-04 blanket camera-ready gate in CommandHandler::executeCommand refuses EVERY command when camera->isReady() is false (isReady is just 'initialized'), so a low-battery camera-down window (main_balloon.cpp:864 enableCamera(false)) blocks IMAGE_WINDOW_REQUEST and GET_STATUS while ImageTx PSRAM buffers and the E32 radio stay operational — announced fulls become unretrievable exactly when an operator must recover them before power loss, and the base status poll fails while the balloon still beacons; found by review round #8 (01-REVIEW.md d546ace), confirmed at source by re-verification #7 | fixed | FIXED by 01-19 (5b9a8a7): CommandHandler::executeCommand now gates only the 8 camera-touching handlers on camera readiness — IMAGE_WINDOW_REQUEST, GET_STATUS, and all non-camera commands execute from the operational radio + PSRAM path, so announced fulls stay retrievable in a low-battery camera-down window. Re-verified 2026-08-27 on HEAD 898fcc6: both environments build clean (pio run 2/2 succeeded) and the protocol harness exits 0 (verify_protocol_roundtrip.mjs all checks pass). Bench session 6 (base6.log/balloon11.log) exercised the gate's live path with the camera UP all session — 103 IMAGE_WINDOW_REQUEST and 849 GET_STATUS commands served, zero camera-down occurrences to stage. HONEST LIMIT recorded: the rig cannot stage a low-battery camera-down window without power emulation, so the gate's camera-down branch is closed on code fix + builds + harness + review, never on a fabricated bench moment — the CR-04 truth (fulls retrievable while camera is down) is code-proven, recorded as such | 2026-08-25T11:07:14.000Z | 2026-08-28T00:20:00.000Z |
 | 9 | 01 | unmet-truth | src/image_tx_manager.cpp | 601 | WR-08 push paths advance chunk cursors on failed transmit (pushThumbChunk nextThumbChunk++ and serviceWindowChunk windowNextIndex++ unconditional), and a failed tail chunk can mark an entry SERVED whose final bytes never left the balloon; unexercised at session 5 (zero TX failures); found by review round #8, confirmed at source by re-verification #7 | fixed | FIXED by 01-17 (c517c4f): pushThumbChunk and serviceWindowChunk advance their chunk cursors only on TX success, with same-index retransmit bounded by IMG_CHUNK_TX_RETRY_MAX before a named drop — a failed tail chunk can no longer mark an entry SERVED whose final bytes never left the balloon. Re-verified 2026-08-27 on HEAD 898fcc6 (builds 2/2, harness exit 0). Bench session 6: ZERO chunk TX failures occurred (zero 'chunk ... FAILED' and zero 'skipped after' lines in balloon11.log), so the bounded-retry path is WIRED BUT UNEXERCISED at bench — the established convention for this rig (code fix + builds + harness; no failure was fabricated to exercise it). Every session-6 drop is named by the 01-17 re-announce bound, not by a TX failure | 2026-08-25T11:07:14.000Z | 2026-08-28T00:20:00.000Z |
+| 10 | 01 | unmet-truth | src/sd_storage.cpp | 313 | WR-01: finalizeImage reads *persistedBytes unconditionally while the kind handle resets only when *handleId == meta.imageId (:296), so a slot-pressure-evicted transfer's sidecar (and /gallery detail) can claim storedToSd from the newer image's counter — fabricated stored-to-SD state; found by review round #9 (7342b46), confirmed at source by re-verification #8 | open | disposition pending (01-23 Task 2 operator decision) | 2026-08-27T15:59:09.000Z |  |
+| 11 | 01 | unmet-truth | src/command_handler.cpp | 872 | WR-02: a second complete command frame in the same 100 ms drain overwrites pendingCommand before execution with no NACK; the base recovers via timeout+retry at 2-15 s cost and re-executes on retry (double-triggered captures); found by review round #9 (7342b46), confirmed at source by re-verification #8 | open | disposition pending (01-23 Task 2 operator decision) | 2026-08-27T15:59:09.000Z |  |
+| 12 | 01 | unmet-truth | src/command_sender.cpp | 302 | review-WR-03 (framer inter-byte timeout — distinct from 01-19's WR-03 auto-capture baseline vocabulary): zero inter-byte resync timeout in either length-driven framer (command_sender.cpp:302 processIncomingByte + command_handler.cpp:814 processIncomingByte); a truncated frame (or corrupted bodyLen passing the bound check) wedges the parser mid-frame and destroys subsequent frames until accumulated bytes force a CRC failure; found by review round #9 (7342b46), confirmed at source by re-verification #8 | open | disposition pending (01-23 Task 2 operator decision) | 2026-08-27T15:59:09.000Z |  |
+| 13 | 01 | unmet-truth | src/main_basestation.cpp | 3134 | WR-04: jsonEscape escapes only quote and backslash; a station SSID containing a control byte makes /api/state invalid JSON (RFC 8259), JSON.parse throws, and the dashboard poll freezes for as long as the base is joined to that network; found by review round #9 (7342b46), confirmed at source by re-verification #8 | open | disposition pending (01-23 Task 2 operator decision) | 2026-08-27T15:59:09.000Z |  |
+| 14 | 01 | unmet-truth | src/main_balloon.cpp | 1104 | WR-05: the emergency camera-disable is unreachable (onSystemEvent dispatch body commented out at main_balloon.cpp:1085-1102, never registered) and the CRITICAL battery branch never disables the camera (only LOW does), so at critical battery the balloon enters emergency mode while the camera keeps running — STANDS SEPARATE from entry 8 (CR-04 scoped gate, fixed): entry 8 made camera-down safe to serve through; this finding is about reaching camera-down at all; found by review round #9 (7342b46), confirmed at source by re-verification #8 | open | disposition pending (01-23 Task 2 operator decision) | 2026-08-27T15:59:09.000Z |  |
 
 ````json
 [
@@ -134,6 +139,66 @@ last_updated: 2026-08-27T12:50:00.000Z
     "reason": "FIXED by 01-17 (c517c4f): pushThumbChunk and serviceWindowChunk advance their chunk cursors only on TX success, with same-index retransmit bounded by IMG_CHUNK_TX_RETRY_MAX before a named drop — a failed tail chunk can no longer mark an entry SERVED whose final bytes never left the balloon. Re-verified 2026-08-27 on HEAD 898fcc6 (builds 2/2, harness exit 0). Bench session 6: ZERO chunk TX failures occurred (zero 'chunk ... FAILED' and zero 'skipped after' lines in balloon11.log), so the bounded-retry path is WIRED BUT UNEXERCISED at bench — the established convention for this rig (code fix + builds + harness; no failure was fabricated to exercise it). Every session-6 drop is named by the 01-17 re-announce bound, not by a TX failure",
     "recorded_at": "2026-08-25T11:07:14.000Z",
     "resolved_at": "2026-08-28T00:20:00.000Z"
+  },
+  {
+    "id": 10,
+    "kind": "unmet-truth",
+    "phase": "01",
+    "file": "src/sd_storage.cpp",
+    "line": 313,
+    "description": "WR-01: finalizeImage reads *persistedBytes unconditionally while the kind handle resets only when *handleId == meta.imageId (:296), so a slot-pressure-evicted transfer's sidecar (and /gallery detail) can claim storedToSd from the newer image's counter — fabricated stored-to-SD state; found by review round #9 (7342b46), confirmed at source by re-verification #8",
+    "status": "open",
+    "reason": "disposition pending (01-23 Task 2 operator decision)",
+    "recorded_at": "2026-08-27T15:59:09.000Z",
+    "resolved_at": null
+  },
+  {
+    "id": 11,
+    "kind": "unmet-truth",
+    "phase": "01",
+    "file": "src/command_handler.cpp",
+    "line": 872,
+    "description": "WR-02: a second complete command frame in the same 100 ms drain overwrites pendingCommand before execution with no NACK; the base recovers via timeout+retry at 2-15 s cost and re-executes on retry (double-triggered captures); found by review round #9 (7342b46), confirmed at source by re-verification #8",
+    "status": "open",
+    "reason": "disposition pending (01-23 Task 2 operator decision)",
+    "recorded_at": "2026-08-27T15:59:09.000Z",
+    "resolved_at": null
+  },
+  {
+    "id": 12,
+    "kind": "unmet-truth",
+    "phase": "01",
+    "file": "src/command_sender.cpp",
+    "line": 302,
+    "description": "review-WR-03 (framer inter-byte timeout — distinct from 01-19's WR-03 auto-capture baseline vocabulary): zero inter-byte resync timeout in either length-driven framer (command_sender.cpp:302 processIncomingByte + command_handler.cpp:814 processIncomingByte); a truncated frame (or corrupted bodyLen passing the bound check) wedges the parser mid-frame and destroys subsequent frames until accumulated bytes force a CRC failure; found by review round #9 (7342b46), confirmed at source by re-verification #8",
+    "status": "open",
+    "reason": "disposition pending (01-23 Task 2 operator decision)",
+    "recorded_at": "2026-08-27T15:59:09.000Z",
+    "resolved_at": null
+  },
+  {
+    "id": 13,
+    "kind": "unmet-truth",
+    "phase": "01",
+    "file": "src/main_basestation.cpp",
+    "line": 3134,
+    "description": "WR-04: jsonEscape escapes only quote and backslash; a station SSID containing a control byte makes /api/state invalid JSON (RFC 8259), JSON.parse throws, and the dashboard poll freezes for as long as the base is joined to that network; found by review round #9 (7342b46), confirmed at source by re-verification #8",
+    "status": "open",
+    "reason": "disposition pending (01-23 Task 2 operator decision)",
+    "recorded_at": "2026-08-27T15:59:09.000Z",
+    "resolved_at": null
+  },
+  {
+    "id": 14,
+    "kind": "unmet-truth",
+    "phase": "01",
+    "file": "src/main_balloon.cpp",
+    "line": 1104,
+    "description": "WR-05: the emergency camera-disable is unreachable (onSystemEvent dispatch body commented out at main_balloon.cpp:1085-1102, never registered) and the CRITICAL battery branch never disables the camera (only LOW does), so at critical battery the balloon enters emergency mode while the camera keeps running — STANDS SEPARATE from entry 8 (CR-04 scoped gate, fixed): entry 8 made camera-down safe to serve through; this finding is about reaching camera-down at all; found by review round #9 (7342b46), confirmed at source by re-verification #8",
+    "status": "open",
+    "reason": "disposition pending (01-23 Task 2 operator decision)",
+    "recorded_at": "2026-08-27T15:59:09.000Z",
+    "resolved_at": null
   }
 ]
 ````
