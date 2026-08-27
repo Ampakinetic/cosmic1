@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 26/27 plans executed through round #10 (01-24 bench session #7 FAILED on the D1 crash regression — balloon hard-crashed twice in series A, nothing flipped; G-01-7 unjudgeable, SC-3/WR-03/CIF/QVGA clauses riding, review 7d96a98 WR-01..03 unrouted). Gap-closure round #11 planned 2026-08-28 as 01-25..01-27: D1 debug round (addr2line root cause + fix + D2 stamp fix), review 7d96a98 routing + dispositioned fixes, bench re-verification session #8 (D1/D2/G-01-7 acceptance + the six-round-riding clauses). Then the security gate
+**Plans:** 27/27 plans executed through round #11 (01-27 bench session #8 FAILED at image 38's FULL TX — D1 RECURRED and re-opened on the new task-watchdog-starvation axis, 01-25 warm-up disconfirmed as sufficient; D2/G-01-11 closed; G-01-7 unjudgeable seventh round; SC-3/WR-03/CIF-as-specified/QVGA clauses riding). Gap-closure round #12 planned 2026-08-28 as 01-28..01-29: D1 debug round #2 (WDT-starvation audit of the serviceWindowChunk -> E32 transmit path per debug doc §6.5, dispositioned fix, discriminators) then bench re-verification session #9 (both D1 crash classes + G-01-7 series A + every riding clause). Then the security gate
 
 Plans:
 **Wave 1**
@@ -131,6 +131,14 @@ Plans:
 **Wave 19** *(blocked on Waves 17-18; bench re-verification trailing wave)*
 
 - [x] 01-27-PLAN.md — Bench re-verification session #8: flash both boards, D1 spaced smoke + series A (zero crash signatures), D2 boot-window discriminator, G-01-7 series-A acceptance, WR-03 cadence discriminator, SC-3 visible-effect pairs (sixth round riding), CIF cycle + QVGA restore, dashboard LOOK glance; G-01-10/G-01-11/G-01-7 + WINDOWS 3/15/16/17-19 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
+
+**Wave 20** *(gap-closure round #12, 2026-08-28; round-local wave 1 — the re-opened D1 blocker first, before any bench re-run)*
+
+- [ ] 01-28-PLAN.md — D1 debug round #2 (BLOCKER, G-01-10/WINDOWS 15 re-opened at session 8): WDT-starvation audit of the serviceWindowChunk -> E32 transmit path per debug doc §6.5 — watchdog topology of the deployed build (TG0 period + silent-vs-panic behavior), post-chunk crash-window reconstruction, candidate-block arithmetic (UART flush ~226 ms at 9600, AUX waits, OLED I2C frame, sensor reads, beacon, PSRAM slicing), one-mechanism-or-two vs session-7's spinlock wedge, ranked root cause + disposition-checkpoint fix + named bench discriminators; builds + harness, no bench claims (CTRL-01, CTRL-06, PRI-02, IMG-03)
+
+**Wave 21** *(blocked on Wave 20 — bench re-verification trailing wave)*
+
+- [ ] 01-29-PLAN.md — Bench re-verification session #9: flash both boards, D1 re-acceptance on BOTH crash classes (spaced smoke + SUSTAINED multi-window FULL service — the session-8 killer pattern — + series A, with the 01-28 fix's §7 discriminators engaged), G-01-7 series-A acceptance, WR-03 cadence discriminator, SC-3 visible-effect pairs (seventh round riding), CIF cycle (wire 8 as specified) + QVGA restore, dashboard LOOK glance; G-01-10/G-01-7 + WINDOWS 15/3 flipped on evidence; STATE names /gsd-secure-phase 1 as the remaining gate (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 
