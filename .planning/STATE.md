@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 5
+current_plan: 2
 status: executing
-stopped_at: Completed 01-24-PLAN.md
-last_updated: "2026-08-27T21:17:17.711Z"
-state_head: d0c80ed576512b883cf682ce7d876a38a570d942
+stopped_at: Completed 01-25-PLAN.md (D1 debug round + D2 fix; WINDOWS 15/16 stay open for 01-27)
+last_updated: "2026-08-27T21:42:18.724Z"
+state_head: 8539c4ce1e61028774e41dd6dd1fa870b4a4376e
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 37
-  completed_plans: 33
+  completed_plans: 34
 milestone_name: milestone
-current_phase_name: command-protocol-control
 current_phase: 2
+current_phase_name: Command Protocol & Control
 ---
 
 # Project State
@@ -28,7 +28,7 @@ current_phase: 2
 
 ## Current Position
 
-**Current Plan:** 5
+**Current Plan:** 2
 **Total Plans in Phase:** 27
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -132,8 +132,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-27T20:29:25.897Z
-**Stopped at:** Completed 01-24-PLAN.md
+**Last session:** 2026-08-27T21:42:18.219Z
+**Stopped at:** Completed 01-25-PLAN.md (D1 debug round + D2 fix; WINDOWS 15/16 stay open for 01-27)
 **Resume file:** None
 
 ## Performance Metrics
@@ -172,6 +172,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P22 | 10min | 2 tasks | 2 files |
 | Phase 01 P23 | 12min | 3 tasks | 9 files |
 | Phase 01 P24 | 15303s | 2 tasks | 3 files |
+| Phase 01 P25 | 1170 | 3 tasks | 4 files |
 
 ## Decisions
 
@@ -251,3 +252,5 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: 01-23: jsonEscape contract is strictly RFC-8259-valid output for any 1-32 byte SSID (control bytes as \u00XX, bytes >= 0x80 dropped rather than invalid UTF-8) so /api/state can never freeze the dashboard poll; password never appears in any response (T-03-12 unchanged) — WR-04 is a fabrication-class truth on the trust boundary from arbitrary SSID bytes into operator browsers
 - [Phase 2]: Session-7 bench FAILED recorded honestly: balloon hard-crashed twice in series A; zero ledger flips; D1 crash regression routed as blocker (G-01-10/WINDOWS 15) with debug round before any bench re-run
 - [Phase 2]: Session consoles retained as balloon.log/base.log (not plan's balloon12/base7); provenance deviation recorded in 01-UAT.md rather than renaming operator files
+- [Phase 2]: 01-25: session-7 crash root cause ranked as internal-RAM corruption at first-post-boot push (memory-subsystem class) after eliminating every round-#10 suspect by execution evidence; fix = boot-time PSRAM warm-up + bounded [MEM] instrumentation, no stack raise (arithmetic eliminates overflow)
+- [Phase 2]: 01-25 Task 2 auto-selected under auto_advance (01-23 convention): option-a lever + option-b instrumentation ride-along, recorded in debug doc §5 for end-of-phase operator confirmation

@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 24/24 plans executed through round #10 (01-24 bench session #7 FAILED on the D1 crash regression — balloon hard-crashed twice in series A, nothing flipped; G-01-7 unjudgeable, SC-3/WR-03/CIF/QVGA clauses riding, review 7d96a98 WR-01..03 unrouted). Gap-closure round #11 planned 2026-08-28 as 01-25..01-27: D1 debug round (addr2line root cause + fix + D2 stamp fix), review 7d96a98 routing + dispositioned fixes, bench re-verification session #8 (D1/D2/G-01-7 acceptance + the six-round-riding clauses). Then the security gate
+**Plans:** 24/27 plans executed through round #10 (01-24 bench session #7 FAILED on the D1 crash regression — balloon hard-crashed twice in series A, nothing flipped; G-01-7 unjudgeable, SC-3/WR-03/CIF/QVGA clauses riding, review 7d96a98 WR-01..03 unrouted). Gap-closure round #11 planned 2026-08-28 as 01-25..01-27: D1 debug round (addr2line root cause + fix + D2 stamp fix), review 7d96a98 routing + dispositioned fixes, bench re-verification session #8 (D1/D2/G-01-7 acceptance + the six-round-riding clauses). Then the security gate
 
 Plans:
 **Wave 1**
@@ -122,7 +122,7 @@ Plans:
 
 **Wave 17** *(gap-closure round #11, 2026-08-28; round-local wave 1 — the D1 blocker first, before any bench re-run)*
 
-- [ ] 01-25-PLAN.md — D1 debug round (BLOCKER, G-01-10/WINDOWS 15): addr2line the session-7 crash dumps against the retained ELF, disposition every round-#10 suspect, rank one root cause, implement the evidence-selected fix + the D2 receipt-ever stamp fix (G-01-11/WINDOWS 16); builds + harness, no bench claims (CTRL-01, CTRL-06, PRI-02, IMG-01, IMG-03, IMG-04, PRI-03)
+- [x] 01-25-PLAN.md — D1 debug round (BLOCKER, G-01-10/WINDOWS 15): addr2line the session-7 crash dumps against the retained ELF, disposition every round-#10 suspect, rank one root cause, implement the evidence-selected fix + the D2 receipt-ever stamp fix (G-01-11/WINDOWS 16); builds + harness, no bench claims (CTRL-01, CTRL-06, PRI-02, IMG-01, IMG-03, IMG-04, PRI-03)
 
 **Wave 18** *(blocked on Wave 17 — shares src/image_tx_manager.cpp with 01-25)*
 
