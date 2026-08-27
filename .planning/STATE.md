@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Completed 01-25-PLAN.md (D1 debug round + D2 fix; WINDOWS 15/16 stay open for 01-27)
-last_updated: "2026-08-27T21:42:18.724Z"
-state_head: 8539c4ce1e61028774e41dd6dd1fa870b4a4376e
+stopped_at: Completed 01-26-PLAN.md (review 7d96a98 routing + companion fixes; WINDOWS 17-19 fixed; ready for 01-27 bench)
+last_updated: "2026-08-27T21:55:00.507Z"
+state_head: 8041b276b1fbf9ddfa493cb3bfc68dc779d0a8dd
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 37
-  completed_plans: 34
+  completed_plans: 35
 milestone_name: milestone
 current_phase: 2
 current_phase_name: Command Protocol & Control
@@ -28,7 +28,7 @@ current_phase_name: Command Protocol & Control
 
 ## Current Position
 
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 27
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -132,8 +132,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-27T21:42:18.219Z
-**Stopped at:** Completed 01-25-PLAN.md (D1 debug round + D2 fix; WINDOWS 15/16 stay open for 01-27)
+**Last session:** 2026-08-27T21:55:00.007Z
+**Stopped at:** Completed 01-26-PLAN.md (review 7d96a98 routing + companion fixes; WINDOWS 17-19 fixed; ready for 01-27 bench)
 **Resume file:** None
 
 ## Performance Metrics
@@ -173,6 +173,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P23 | 12min | 3 tasks | 9 files |
 | Phase 01 P24 | 15303s | 2 tasks | 3 files |
 | Phase 01 P25 | 1170 | 3 tasks | 4 files |
+| Phase 01 P26 | 546s | 3 tasks | 5 files |
 
 ## Decisions
 
@@ -254,3 +255,5 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: Session consoles retained as balloon.log/base.log (not plan's balloon12/base7); provenance deviation recorded in 01-UAT.md rather than renaming operator files
 - [Phase 2]: 01-25: session-7 crash root cause ranked as internal-RAM corruption at first-post-boot push (memory-subsystem class) after eliminating every round-#10 suspect by execution evidence; fix = boot-time PSRAM warm-up + bounded [MEM] instrumentation, no stack raise (arithmetic eliminates overflow)
 - [Phase 2]: 01-25 Task 2 auto-selected under auto_advance (01-23 convention): option-a lever + option-b instrumentation ride-along, recorded in debug doc §5 for end-of-phase operator confirmation
+- [Phase 2]: 01-26: review 7d96a98's three confirmed warnings routed (WINDOWS 17-19) and ALL FIXED per option-a auto-selected at the Task 2 gate=blocking checkpoint under auto_advance (01-23 convention) — ps_malloc fall-through keeps the thumbnail under PSRAM exhaustion, the camera health check warns only on a genuinely absent sensor handle (stageable at every 01-27 healthy boot), ackedAtLastPoll uint32 end-to-end; builds 2/2 + harness exit 0; WR-01/WR-03 unstageable triggers recorded by name (entries 8-14 convention)
+- [Phase 2]: 01-26: routing-before-disposition — confirmed findings enter the ledger open-first regardless of the checkpoint outcome, so the unrouted-findings gap's minimum bar never depends on the disposition decision; end-of-phase operator confirmations pending: 01-23 fix-all (entries 10-14) + this round's option-a (entries 17-19)

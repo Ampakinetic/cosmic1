@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 24/27 plans executed through round #10 (01-24 bench session #7 FAILED on the D1 crash regression — balloon hard-crashed twice in series A, nothing flipped; G-01-7 unjudgeable, SC-3/WR-03/CIF/QVGA clauses riding, review 7d96a98 WR-01..03 unrouted). Gap-closure round #11 planned 2026-08-28 as 01-25..01-27: D1 debug round (addr2line root cause + fix + D2 stamp fix), review 7d96a98 routing + dispositioned fixes, bench re-verification session #8 (D1/D2/G-01-7 acceptance + the six-round-riding clauses). Then the security gate
+**Plans:** 25/27 plans executed through round #10 (01-24 bench session #7 FAILED on the D1 crash regression — balloon hard-crashed twice in series A, nothing flipped; G-01-7 unjudgeable, SC-3/WR-03/CIF/QVGA clauses riding, review 7d96a98 WR-01..03 unrouted). Gap-closure round #11 planned 2026-08-28 as 01-25..01-27: D1 debug round (addr2line root cause + fix + D2 stamp fix), review 7d96a98 routing + dispositioned fixes, bench re-verification session #8 (D1/D2/G-01-7 acceptance + the six-round-riding clauses). Then the security gate
 
 Plans:
 **Wave 1**
@@ -126,7 +126,7 @@ Plans:
 
 **Wave 18** *(blocked on Wave 17 — shares src/image_tx_manager.cpp with 01-25)*
 
-- [ ] 01-26-PLAN.md — Review 7d96a98 routing (01-VERIFICATION gap 4, the one gap the ledgers did not carry): WR-01..WR-03 as WINDOWS entries 17-19 + operator disposition + approved fixes (WR-01 ps_malloc degradation fall-through, WR-02 honest health check, WR-03 uint32 ACK counter) (IMG-02, IMG-03, CTRL-06)
+- [x] 01-26-PLAN.md — Review 7d96a98 routing (01-VERIFICATION gap 4, the one gap the ledgers did not carry): WR-01..WR-03 as WINDOWS entries 17-19 + operator disposition + approved fixes (WR-01 ps_malloc degradation fall-through, WR-02 honest health check, WR-03 uint32 ACK counter) (IMG-02, IMG-03, CTRL-06)
 
 **Wave 19** *(blocked on Waves 17-18; bench re-verification trailing wave)*
 
