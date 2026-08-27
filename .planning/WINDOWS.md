@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 3
+open_count: 6
 waived_count: 0
 fixed_count: 13
-total_count: 16
-last_updated: 2026-08-28T09:05:00.000Z
+total_count: 19
+last_updated: 2026-08-28T09:46:11.000Z
 ---
 
 # Broken Windows Ledger
@@ -31,6 +31,9 @@ last_updated: 2026-08-28T09:05:00.000Z
 | 14 | 01 | unmet-truth | src/main_balloon.cpp | 1104 | WR-05: the emergency camera-disable is unreachable (onSystemEvent dispatch body commented out at main_balloon.cpp:1085-1102, never registered) and the CRITICAL battery branch never disables the camera (only LOW does), so at critical battery the balloon enters emergency mode while the camera keeps running — STANDS SEPARATE from entry 8 (CR-04 scoped gate, fixed): entry 8 made camera-down safe to serve through; this finding is about reaching camera-down at all; found by review round #9 (7342b46), confirmed at source by re-verification #8 | fixed | FIXED by 01-23 (this plan's companion-fix commit, hash in 01-23-SUMMARY.md) per operator disposition option-a (fix all five): the CRITICAL battery branch in processPowerManagement disables the camera exactly as the LOW branch does (enableCamera(false) + appState.cameraActive = false + the distinct SYS_INFO 'Camera disabled due to critical power' so the bench can discriminate) inside the existing !isEmergencyActive() guard — critical battery no longer keeps the biggest non-radio draw running; the commented-out onSystemEvent dispatcher block is left untouched (inert; its dead status recorded here). Re-verified this round: builds 2/2 SUCCESS, harness exit 0. HONEST LIMIT recorded: unexercised at bench — the rig cannot stage critical battery without power emulation; the distinct SYS_INFO line rides the 01-24 reflash, closed on code fix + builds + harness, never a fabricated bench moment | 2026-08-27T15:59:09.000Z | 2026-08-27T16:04:13.000Z |
 | 15 | 01 | unmet-truth | src/image_tx_manager.cpp |  | D1 (BLOCKER): crash regression at the start of post-capture radio push — the balloon hard-crashed twice during 01-24 session-7 series A (crash 1: i2cWrite ESP_ERR_INVALID_STATE balloon.log:301 + 'Core 1 panic'ed (Interrupt wdt timeout on CPU1)' :302 + stack-canary second panic :313-314, EXCCAUSE 0x6 :311/:351, rst:0xc RTC_SW_CPU_RST :377-380; crash 2: rst:0x7 TG0WDT_SYS_RST :526-528 with no panic output, seconds after image 36's first chunk :519-520 and beacon start :525) — a pattern session 6 ran clean on pre-round-#10 firmware, so the regression is from 01-21/01-22/01-23; root cause NOT established (suspects: 01-21 pushPending busy-hold/budget re-arm, 01-23 framer resync/command guard, latent instability under the new TX cadence); routed G-01-10 (01-UAT.md) | open | needs debug round: addr2line on the crash-1 backtrace (ELF SHA256 3d2b351b4), deterministic-repro check at first-post-boot push, fix, then the series-A bench re-run; downstream consequences already quoted: image-36 rejects balloon.log:670/:673/:728/:785/:845, base NACK_INVALID seq 7/8/10/12 base.log:167/:199/:236/:273, forbidden CAPTURE_NOW timeouts :141/:143; interim discipline: avoid unspaced capture bursts until fixed — 01-25 UPDATE: debug round landed (.planning/debug/d1-crash-regression-push-start.md, commit ed1ec47): root cause ESTABLISHED as internal-RAM corruption of RTOS/driver state at the first-post-boot capture push (memory-subsystem class on marginal OPI-PSRAM hardware; all round-#10 suspects eliminated — the balloon-side paths provably never executed near either crash; ELF SHA 3d2b351b4 cross-checked before any decoded frame was trusted); fix landed per the Task 2 selection (option-a lever + option-b bounded instrumentation ride-along): boot-time PSRAM first-use warm-up in ImageTxManager::begin() + [MEM] diagnostics (one line per enqueueCapture + 1 s new-low watch, removal condition named in-source); builds 2/2 SUCCESS + wire harness exit 0 on the fix commit; stays OPEN pending 01-27 bench hardware evidence — discriminator: fresh boot then series-A 3x unspaced CAPTURE_NOW with ZERO crash signatures and ZERO [MEM] new-low anomalies, plus a repeat first-post-boot push after reboot | 2026-08-28T08:20:00.000Z |  |
 | 16 | 01 | unmet-truth | src/image_tx_manager.cpp |  | D2 (minor): the 01-21 discriminator line 'ImageTx: re-announce held - inbound window traffic active' fires spuriously at EVERY boot with zero inbound traffic (balloon.log:135/:504/:652, each within seconds of System ready) — the zero-initialized lastInboundWindowRequestMs satisfies the wrap-safe (millis() - stamp) < IMG_FULL_REANNOUNCE_BUSY_MS check for the first 15 s of uptime, so 'never received' reads as 'received at boot'; consumes nothing (latch-guarded, once per boot) but pollutes G-01-7 discriminator evidence; routed G-01-11 (01-UAT.md) | open | fix rides the D1 debug round (entry 15): make the zero stamp inert (receipt-ever flag or begin()-time stamp) so the line only fires on genuine inbound window traffic — 01-25 UPDATE: fix landed — inboundWindowRequestSeen receipt-ever flag (declared beside the stamp in include/image_tx_manager.h, initialized false in the ctor and begin(), set true at the stamp site before kind validation, ANDed into the busy-hold gate) makes the boot-epoch zero stamp inert by construction; the hold line is NOT muted (G-01-7 discriminator preserved); builds 2/2 SUCCESS + harness exit 0; stays OPEN pending 01-27 bench — discriminator: zero 're-announce held' lines in any boot window before the first genuine inbound window request | 2026-08-28T08:20:00.000Z |  |
+| 17 | 01 | unmet-truth | src/image_tx_manager.cpp | 276 | WR-01 (review 7d96a98 — round #11 numbering, distinct from round #9's WR-01/entry 10): enqueueCapture's full-buffer ps_malloc failure logs and returns BEFORE the thumbnail branch, so PSRAM exhaustion drops the cheapest highest-value payload the degradation ladder was designed to keep (inconsistent with the oversize path :266 and the thumb-alloc-failure path :306); the base sees no manifest at all; confirmed at HEAD by re-verification #9 | open | routed open-first per the round-#7 convention; disposition (fix vs waive-with-reason) at the 01-26 Task 2 checkpoint — fix shape supplied by the review (fall through to the thumbnail branch with the full marked unavailable) | 2026-08-28T09:46:11.000Z |  |
+| 18 | 01 | unmet-truth | src/main_balloon.cpp | 573 | WR-02 (review 7d96a98 — round #11 numbering, distinct from round #9's WR-02/entry 11): the camera health check's negation was lost when the call was stubbed, so every healthy active camera logs a failed health check at boot (and an absent camera produces no warning at all) — warning-channel noise that masks the real failure case; carried across two review cycles; confirmed at HEAD by re-verification #9 | open | routed open-first per the round-#7 convention; disposition at the 01-26 Task 2 checkpoint — the rare stageable review class: every healthy boot either shows the spurious warning (pre-fix) or does not (post-fix), so the 01-27 bench session's boot windows are the live discriminator | 2026-08-28T09:46:11.000Z |  |
+| 19 | 01 | unmet-truth | src/main_basestation.cpp | 2207 | WR-03 (review 7d96a98 — round #11 numbering, distinct from round #9's review-WR-03/entry 12 and from 01-19's WR-03 baseline vocabulary): ackedAtLastPoll is uint16 while commandsAcked is uint32, so each 65536-ACK wrap between polls makes the truncated comparison false and skips that poll's lastAckTime refresh — the IN-03 LED-truth staleness signal runs stale until the next post-boundary ACK; confirmed at HEAD by re-verification #9 | open | routed open-first per the round-#7 convention; disposition at the 01-26 Task 2 checkpoint — fix is a pure uint32 widening of the member and comparison (counter semantics, poll cadence, staleness thresholds untouched) | 2026-08-28T09:46:11.000Z |  |
 
 ````json
 [
@@ -224,6 +227,42 @@ last_updated: 2026-08-28T09:05:00.000Z
     "status": "open",
     "reason": "fix rides the D1 debug round (entry 15): make the zero stamp inert (receipt-ever flag or begin()-time stamp) so the line only fires on genuine inbound window traffic — 01-25 UPDATE: fix landed — inboundWindowRequestSeen receipt-ever flag (declared beside the stamp in include/image_tx_manager.h, initialized false in the ctor and begin(), set true at the stamp site before kind validation, ANDed into the busy-hold gate) makes the boot-epoch zero stamp inert by construction; the hold line is NOT muted (G-01-7 discriminator preserved); builds 2/2 SUCCESS + harness exit 0; stays OPEN pending 01-27 bench — discriminator: zero 're-announce held' lines in any boot window before the first genuine inbound window request",
     "recorded_at": "2026-08-28T08:20:00.000Z",
+    "resolved_at": null
+  },
+  {
+    "id": 17,
+    "kind": "unmet-truth",
+    "phase": "01",
+    "file": "src/image_tx_manager.cpp",
+    "line": 276,
+    "description": "WR-01 (review 7d96a98 — round #11 numbering, distinct from round #9's WR-01/entry 10): enqueueCapture's full-buffer ps_malloc failure logs and returns BEFORE the thumbnail branch, so PSRAM exhaustion drops the cheapest highest-value payload the degradation ladder was designed to keep (inconsistent with the oversize path :266 and the thumb-alloc-failure path :306); the base sees no manifest at all; confirmed at HEAD by re-verification #9",
+    "status": "open",
+    "reason": "routed open-first per the round-#7 convention; disposition (fix vs waive-with-reason) at the 01-26 Task 2 checkpoint — fix shape supplied by the review (fall through to the thumbnail branch with the full marked unavailable)",
+    "recorded_at": "2026-08-28T09:46:11.000Z",
+    "resolved_at": null
+  },
+  {
+    "id": 18,
+    "kind": "unmet-truth",
+    "phase": "01",
+    "file": "src/main_balloon.cpp",
+    "line": 573,
+    "description": "WR-02 (review 7d96a98 — round #11 numbering, distinct from round #9's WR-02/entry 11): the camera health check's negation was lost when the call was stubbed, so every healthy active camera logs a failed health check at boot (and an absent camera produces no warning at all) — warning-channel noise that masks the real failure case; carried across two review cycles; confirmed at HEAD by re-verification #9",
+    "status": "open",
+    "reason": "routed open-first per the round-#7 convention; disposition at the 01-26 Task 2 checkpoint — the rare stageable review class: every healthy boot either shows the spurious warning (pre-fix) or does not (post-fix), so the 01-27 bench session's boot windows are the live discriminator",
+    "recorded_at": "2026-08-28T09:46:11.000Z",
+    "resolved_at": null
+  },
+  {
+    "id": 19,
+    "kind": "unmet-truth",
+    "phase": "01",
+    "file": "src/main_basestation.cpp",
+    "line": 2207,
+    "description": "WR-03 (review 7d96a98 — round #11 numbering, distinct from round #9's review-WR-03/entry 12 and from 01-19's WR-03 baseline vocabulary): ackedAtLastPoll is uint16 while commandsAcked is uint32, so each 65536-ACK wrap between polls makes the truncated comparison false and skips that poll's lastAckTime refresh — the IN-03 LED-truth staleness signal runs stale until the next post-boundary ACK; confirmed at HEAD by re-verification #9",
+    "status": "open",
+    "reason": "routed open-first per the round-#7 convention; disposition at the 01-26 Task 2 checkpoint — fix is a pure uint32 widening of the member and comparison (counter semantics, poll cadence, staleness thresholds untouched)",
+    "recorded_at": "2026-08-28T09:46:11.000Z",
     "resolved_at": null
   }
 ]
