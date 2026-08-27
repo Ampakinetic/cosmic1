@@ -78,7 +78,7 @@ struct BaseStationState {
     char lastStatus[64];
     // LED truth (IN-03): link state derived from real ACK activity
     uint32_t lastAckTime;
-    uint16_t ackedAtLastPoll;
+    uint32_t ackedAtLastPoll;
     bool lastOutcomeBad;
     uint32_t lastTerminalFailTime;
     // Auto-capture chip: latched from the newest ACKed auto-capture command
@@ -2202,12 +2202,14 @@ void processLoRa() {
         }
     }
 
-    // LED truth (IN-03): record when the latest ACK arrived
+    // LED truth (IN-03): record when the latest ACK arrived — uint32
+    // end-to-end (WR-03, review 7d96a98): no truncating cast, so a
+    // 65536-ACK wrap between polls can no longer skip this refresh
     uint32_t acked = CmdSender().getCommandsAcked();
-    if (static_cast<uint16_t>(acked) > appState.ackedAtLastPoll) {
+    if (acked > appState.ackedAtLastPoll) {
         appState.lastAckTime = millis();
     }
-    appState.ackedAtLastPoll = static_cast<uint16_t>(acked);
+    appState.ackedAtLastPoll = acked;
 }
 
 // ===========================

@@ -570,10 +570,18 @@ bool performSystemChecks() {
     // LoRaComm().performHealthCheck(); // Method doesn't exist yet
     SYS_WARNING("Communication system health check skipped");
     
-    // Check camera system (if active)
-    if (appState.cameraActive) { // && !Camera().performHealthCheck()) {
-        SYS_WARNING("Camera system health check failed");
-        allPassed = false;
+    // Check camera system (if active) — honest branch (WR-02, review
+    // 7d96a98): warn only when the sensor handle is genuinely absent; a
+    // healthy active camera warns nothing. Inactive camera gets the same
+    // honest skipped-note shape the power/communication checks use above.
+    if (appState.cameraActive) {
+        sensor_t* s = esp_camera_sensor_get();
+        if (s == nullptr) {
+            SYS_WARNING("Camera system health check failed (no sensor handle)");
+            allPassed = false;
+        }
+    } else {
+        SYS_WARNING("Camera system health check skipped - camera inactive");
     }
     
     // Run system diagnostics

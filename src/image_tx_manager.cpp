@@ -354,16 +354,23 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
         // pull bytes out from under a transfer
         entry.fullBuffer = (uint8_t*)ps_malloc(img.length);
         if (!entry.fullBuffer) {
-            if (DEBUG_IMAGE_TX) {
-                Serial.printf("ImageTx: PSRAM allocation failed for image %u full buffer (%u bytes); dropped\n",
-                             imageId, static_cast<unsigned>(img.length));
-            }
-            return;
+            // WR-01 (review 7d96a98): PSRAM exhaustion is exactly when the
+            // cheapest payload must survive — mark the full unavailable and
+            // fall through to the thumbnail branch (mirrors the oversize
+            // skip above and the thumb-alloc-failure path below); the
+            // both-empty guard after the thumbnail branch keeps a
+            // nothing-transferable capture from occupying a queue slot.
+            Serial.printf("ImageTx: PSRAM allocation failed for image %u full buffer (%u bytes); full dropped, thumbnail still pushes\n",
+                         imageId, static_cast<unsigned>(img.length));
+            entry.fullBuffer = nullptr;
+            entry.fullLength = 0;
+            entry.fullTotalChunks = 0;
+        } else {
+            memcpy(entry.fullBuffer, img.buffer, img.length);
+            entry.fullLength = img.length;
+            entry.fullCrc32 = esp_rom_crc32_le(0, entry.fullBuffer, entry.fullLength);
+            entry.fullTotalChunks = chunksForSize(entry.fullLength);
         }
-        memcpy(entry.fullBuffer, img.buffer, img.length);
-        entry.fullLength = img.length;
-        entry.fullCrc32 = esp_rom_crc32_le(0, entry.fullBuffer, entry.fullLength);
-        entry.fullTotalChunks = chunksForSize(entry.fullLength);
     } else {
         entry.fullBuffer = nullptr;
         entry.fullLength = 0;
