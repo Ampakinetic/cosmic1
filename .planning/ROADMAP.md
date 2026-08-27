@@ -112,7 +112,7 @@ Plans:
 
 **Wave 15** *(gap-closure round #10, 2026-08-28; wave numbers restart for this round — 01-21/01-22/01-23 are file-disjoint and run in parallel)*
 
-- [ ] 01-21-PLAN.md — G-01-7 burst full-delivery (balloon half): re-announce drop-clock known-busy hold on inbound window traffic + per-entry receipt re-arm, overflow eviction ranked by receipt evidence (IMG-03, IMG-04, PRI-03)
+- [x] 01-21-PLAN.md — G-01-7 burst full-delivery (balloon half): re-announce drop-clock known-busy hold on inbound window traffic + per-entry receipt re-arm, overflow eviction ranked by receipt evidence (IMG-03, IMG-04, PRI-03)
 - [ ] 01-22-PLAN.md — G-01-7 burst full-delivery (base half): full-arm deadline bounds the thumbnail-heal serialization hold — a queued FULL activates within 20 s of manifest arrival (IMG-02, IMG-03, PRI-03)
 - [ ] 01-23-PLAN.md — Review round #9 routing: WR-01..WR-05 as WINDOWS entries 10-14 + operator disposition decision (fix-now vs waive-with-reason) + approved companion fixes (CTRL-06, PRI-02, IMG-05, IMG-06, WEB-05)
 

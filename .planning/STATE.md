@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v1.0
 current_plan: 2
 status: executing
-stopped_at: "Completed 01-20-PLAN.md (bench session #6 ledger flips: G-01-9 resolved, WINDOWS 5/8/9 fixed; G-01-7 open rescoped to burst full-delivery; SC-3/WR-03 clauses ride the next bench moment; /gsd-secure-phase 1 is the remaining phase-close gate)"
-last_updated: "2026-08-27T15:17:44.331Z"
-state_head: 84ffadac4a1fe527078738a12e5e001391b5bad1
+stopped_at: "Completed 01-21-PLAN.md (G-01-7 balloon TX half: busy-hold + receipt re-arm + receipt-evidence eviction ranking in image_tx_manager; builds 2/2, harness 52/52; G-01-7 closure judged at the 01-24 bench)"
+last_updated: "2026-08-27T15:36:32.108Z"
+state_head: 866087b2d2035cd93e95cfcbe34b68e42a795aa8
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 34
-  completed_plans: 28
+  completed_plans: 30
 milestone_name: milestone
-current_phase_name: Command Protocol & Control
 current_phase: 2
+current_phase_name: Command Protocol & Control
 ---
 
 # Project State
@@ -130,8 +130,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-27T13:02:29.583Z
-**Stopped at:** Completed 01-20-PLAN.md (bench session #6 ledger flips: G-01-9 resolved, WINDOWS 5/8/9 fixed; G-01-7 open rescoped to burst full-delivery; SC-3/WR-03 clauses ride the next bench moment; /gsd-secure-phase 1 is the remaining phase-close gate)
+**Last session:** 2026-08-27T15:36:31.704Z
+**Stopped at:** Completed 01-21-PLAN.md (G-01-7 balloon TX half: busy-hold + receipt re-arm + receipt-evidence eviction ranking in image_tx_manager; builds 2/2, harness 52/52; G-01-7 closure judged at the 01-24 bench)
 **Resume file:** None
 
 ## Performance Metrics
@@ -166,6 +166,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P18 | 7min | 2 tasks | 2 files |
 | Phase 01 P19 | 7min | 2 tasks | 3 files |
 | Phase 01 P20 | ~2h across executor + operator bench session #6 (2026-08-27/28, bootloop debug saga included) | 2 tasks | 3 files |
+| Phase 01 P21 | 12min | 3 tasks | 3 files |
 
 ## Decisions
 
@@ -236,3 +237,5 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: 01-20: session-6 verdict honesty — command survivability (quiet gate) and defect-C silent-loss both SOLVED at bench, but series-A verdicts failed 2/6 on a NEW named axis (burst full-delivery: re-announce bound expires during burst thumb serialization; depth-3 queue eviction), so G-01-7 stays open rescoped rather than closing on the solved sub-truths
 - [Phase 2]: 01-20: evidence-class flips held — CR-04 (WINDOWS 8) flipped on code fix + builds + harness with the unstageable camera-down scenario recorded by name (never fabricated); WR-08 (WINDOWS 9) flipped WIRED-but-unexercised (zero chunk TX failures at bench); the log-provenance deviation (balloon11.log carries the session's balloon console after the GPS-pin-35 bootloop saga, fixed 3f2c2c6) is recorded in the ledgers themselves
 - [Phase 2]: 01-20: SC-3 visible-effect pairs left unjudged a FIFTH round (zero settings commands at bench) and the WR-03 cadence discriminator + CIF/QVGA-restore clauses unexercised — all ride the next bench moment rather than being fabricated; Test 3 stays issue
+- [Phase 2]: 01-21: the re-announce drop-clock is receipt-informed on two levers — every inbound IMAGE_WINDOW_REQUEST (any kind, any verdict, including unknown/evicted rejects) stamps a channel-liveness clock that holds the idle-slot re-announce for IMG_FULL_REANNOUNCE_BUSY_MS 15 s consuming nothing, and a request MATCHING an ANNOUNCED never-FULL-armed entry re-arms its reannounceAttempts budget with a named log; the 01-17 IMG_FULL_REANNOUNCE_MAX 3 named-drop terminal path survives verbatim (receipt evidence holds the clock, it never deletes the bound)
+- [Phase 2]: 01-21: eviction ranking is by receipt evidence, not airtime — evictionClassOf's ANNOUNCED case returns protected last-resort class 5 when windowEverArmed OR lastWindowRequestMs != 0; class 3 stays 'queued, no airtime invested' for never-requested entries only, and the class-5 eviction label names receipt evidence (session-6 image-24 class dead)
