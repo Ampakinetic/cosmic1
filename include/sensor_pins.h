@@ -30,9 +30,21 @@
 
 // MAX-M10S GPS Module (UART)
 // Config proven on hardware in src/test_lora_balloon.cpp (GPS fixes outdoors):
-// ESP32 RX on GPIO 35 (45 is a VDD_SPI strapping pin and never received data),
 // GPS RX on 47, and 38400 baud (M10S UART1 default — at 9600 every checksum failed).
-#define GPS_TX_PIN        35  // GPS TX → ESP32 RX (proven GPIO 35; was 45)
+//
+// ESP32 RX pin history (debug session "balloon-bootloops-at-bench", 2026-08-27):
+// - 45: VDD_SPI strapping pin; never received data.
+// - 35: FORBIDDEN on this board — GPIO 35-37 are reserved octal-PSRAM (OPI) data
+//   lines on this N16R8-class module (platformio.ini: qio_opi / 16MB /
+//   psram_type = opi; per ESP32-S3 module datasheet these pins are not led out on
+//   devkits for this reason). Routing UART1 RX onto GPIO 35 via the GPIO matrix
+//   put the balloon into a TG1WDT_SYS_RST (rst:0x8) bootloop — present in every
+//   failing build, absent in the one passing build, and the bootloop vanished the
+//   moment the pad claim moved off 35 (balloon11.log: hours of clean telemetry,
+//   zero resets). Never assign ANY peripheral to GPIO 35/36/37 on this board.
+// - 41: chosen — free on the sensor and camera pin maps, not a strapping pin,
+//   outside the reserved 35-37 PSRAM set. Bench-verified stable.
+#define GPS_TX_PIN        41  // GPS TX → ESP32 RX (41; was 35 = reserved PSRAM line, originally 45)
 #define GPS_RX_PIN        47  // GPS RX → ESP32 TX (changed from 46 - not exposed on DevKitC-1)
 #define GPS_PPS_PIN       42  // Pulse Per Second (optional)
 #define GPS_BAUD_RATE     38400
@@ -85,7 +97,12 @@
 
 // Ensure no conflicts with existing camera pins
 // Camera pins used: 4,5,6,7,8,9,10,11,12,13,15,16,17,18
-// Sensor pins used: 1,2,14,19,20,21,35,38,39,40,42,47,48
-// No conflicts detected
+// Sensor pins used: 1,2,4,14,19,20,21,38,39,40,41,42,47,48
+// Known conflicts: BATTERY_SENSE_PIN 4 = camera SIOD (SCCB data) — pre-existing,
+//   pegs the ADC at 4095 (accepted for now, tracked in debug notes).
+// GPIO 35/36/37 must NEVER appear in either list — they are reserved octal-PSRAM
+//   lines on this OPI-PSRAM board (see GPS section above). A previous version of
+//   this comment listed 35 here as if it were a legal sensor pin; that stale list
+//   is what let the 2026-08-27 bootloop slip past review.
 
 #endif // SENSOR_PINS_H

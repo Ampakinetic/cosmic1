@@ -39,7 +39,13 @@ static const char* TAG = "BalloonTX";
 #define BMP280_ADDRESS   0x76
 
 // GPS Module (UART1)
-#define GPS_TX_PIN       35  // GPS TX -> ESP32 RX (trying GPIO 35)
+// WARNING: GPIO 35 is a RESERVED octal-PSRAM line on the product board (qio_opi/
+// opi PSRAM, N16R8-class) — it "works" in THIS test app only because this app
+// never exercises PSRAM (no camera, no big allocations). Do NOT copy this pin
+// into product config: doing so (commit 02142e1) caused the 2026-08-26/27
+// balloon TG1WDT bootloop (see .planning/debug, session "balloon-bootloops-at-
+// bench"). Product uses GPS_TX_PIN 41 (include/sensor_pins.h).
+#define GPS_TX_PIN       35  // GPS TX -> ESP32 RX (test-app-only; see WARNING above)
 #define GPS_RX_PIN       47  // ESP32 TX -> GPS RX (changed from 46 - not exposed)
 #define GPS_BAUD_RATE    38400  // Try 38400 (9600 didn't work - all checksums fail)
 
