@@ -70,6 +70,7 @@ CommandSender::CommandSender()
     , commandsTimeout(0)
     , receiveIndex(0)
     , inPacket(false)
+    , lastFrameByteMs(0)
     , lastChunkFrameMs(0)
     , hasStatusData(false)
 {
@@ -300,6 +301,16 @@ void CommandSender::process() {
 // ===========================
 
 void CommandSender::processIncomingByte(uint8_t byte) {
+    // review-WR-03 framer inter-byte resync (wrap-safe subtraction): while
+    // latched mid-frame, a gap beyond CMD_FRAME_INTERBYTE_MS means the frame
+    // was truncated — reset instead of consuming the next good frame's
+    // bytes as phantom payload. Does not touch the 0x13 quiet-gate latch —
+    // that keys on completed frame types at frame-completion time.
+    if (inPacket && millis() - lastFrameByteMs > CMD_FRAME_INTERBYTE_MS) {
+        resetReceiveState();
+    }
+    lastFrameByteMs = millis();
+
     if (!inPacket) {
         // Looking for start sequence
         if (receiveIndex == 0 && byte == CMD_START_BYTE1) {

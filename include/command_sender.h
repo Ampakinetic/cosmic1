@@ -142,6 +142,10 @@ private:
     uint8_t receiveBuffer[CMD_MAX_PACKET_SIZE];
     size_t receiveIndex;
     bool inPacket;
+    // review-WR-03 framer inter-byte resync: millis() stamp of the last
+    // received byte — an in-packet gap beyond CMD_FRAME_INTERBYTE_MS resets
+    // the framer instead of wedging it mid-frame
+    uint32_t lastFrameByteMs;
 
     // Channel-activity latch (G-01-7): millis() of the last inbound 0x13
     // chunk frame — the storm class that ate seq=6's 4 transmissions.

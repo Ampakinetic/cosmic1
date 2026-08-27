@@ -3130,7 +3130,10 @@ const char* commandDisplayName(uint8_t commandType) {
 
 // Minimal JSON string escape for operator-entered values (WiFi ssid):
 // quotes and backslashes are legal in network names and would otherwise
-// corrupt the hand-built /api/state payload
+// corrupt the hand-built /api/state payload. WR-04: control bytes below
+// 0x20 are escaped as \u00XX (RFC 8259 — a raw control character makes
+// the JSON invalid, JSON.parse throws, and the dashboard poll freezes);
+// non-ASCII SSID bytes are dropped rather than emitted as invalid UTF-8
 static String jsonEscape(const String& s) {
     String out;
     out.reserve(s.length());
@@ -3138,8 +3141,15 @@ static String jsonEscape(const String& s) {
         char c = s.charAt(i);
         if (c == '"' || c == '\\') {
             out += '\\';
+            out += c;
+        } else if (static_cast<unsigned char>(c) < 0x20) {
+            char buf[7];
+            snprintf(buf, sizeof(buf), "\\u%04X", static_cast<unsigned char>(c));
+            out += buf;
+        } else if (static_cast<unsigned char>(c) < 0x80) {
+            out += c;
         }
-        out += c;
+        // bytes >= 0x80: dropped — never emit invalid UTF-8 into the payload
     }
     return out;
 }

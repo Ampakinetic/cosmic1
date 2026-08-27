@@ -27,6 +27,7 @@ CommandHandler::CommandHandler()
     , receiveIndex(0)
     , inPacket(false)
     , hasCommand(false)
+    , lastFrameByteMs(0)
     , commandsReceived(0)
     , commandsExecuted(0)
     , commandsFailed(0)
@@ -812,6 +813,15 @@ bool CommandHandler::sendResponse(const ResponsePacket& response) {
 // ===========================
 
 void CommandHandler::processIncomingByte(uint8_t byte) {
+    // review-WR-03 framer inter-byte resync (wrap-safe subtraction): while
+    // latched mid-frame, a gap beyond CMD_FRAME_INTERBYTE_MS means the frame
+    // was truncated — reset instead of consuming the next good frame's
+    // bytes as phantom payload.
+    if (inPacket && millis() - lastFrameByteMs > CMD_FRAME_INTERBYTE_MS) {
+        resetReceiveState();
+    }
+    lastFrameByteMs = millis();
+
     if (!inPacket) {
         // Looking for start sequence
         if (receiveIndex == 0 && byte == CMD_START_BYTE1) {
@@ -869,9 +879,18 @@ void CommandHandler::processIncomingByte(uint8_t byte) {
         if (validatePacket(receiveBuffer, expectedTotal)) {
             CommandPacket cmd;
             if (CommandProtocol::deserializeCommand(receiveBuffer, expectedTotal, cmd)) {
-                pendingCommand.packet = cmd;
-                pendingCommand.receivedTime = millis();
-                hasCommand = true;
+                // WR-02: a second complete frame inside the same drain must
+                // never silently overwrite the un-executed pending command.
+                // Refuse it with a named drop; the base's D-05 timeout +
+                // D-07 retry re-deliver the dropped frame as a fresh
+                // command (no NACK, no counter change, no timing change).
+                if (!hasCommand) {
+                    pendingCommand.packet = cmd;
+                    pendingCommand.receivedTime = millis();
+                    hasCommand = true;
+                } else {
+                    Serial.printf("CommandHandler: second command frame dropped - handler busy (sender will retry)\n");
+                }
             }
         }
     }

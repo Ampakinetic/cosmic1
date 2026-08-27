@@ -854,6 +854,17 @@ void processPowerManagement() {
             // Enter emergency mode if not already
             if (!SysState().isEmergencyActive()) {
                 SysState().triggerEmergency("Critical battery level");
+
+                // WR-05: the camera is the biggest non-radio draw — at
+                // critical battery it must be OFF, mirroring the LOW
+                // branch's exact disable shape (the dead onSystemEvent
+                // dispatcher below stays untouched; recorded in WINDOWS
+                // entry 14)
+                if (appState.cameraActive) {
+                    Camera().enableCamera(false);
+                    appState.cameraActive = false;
+                    SYS_INFO("Camera disabled due to critical power");
+                }
             }
         } else if (powerData.batteryVoltage < BATTERY_LOW_THRESHOLD) {
             SYS_WARNING("Low battery level: %.2f V (%d%%)",

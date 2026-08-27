@@ -308,9 +308,12 @@ bool SdStorage::finalizeImage(const SdImageMetadata& meta) {
 
     // storedToSd is computed truth: whether bytes actually landed on the
     // card for this file — set here from SdStorage's own tracking, never
-    // fabricated by the caller
+    // fabricated by the caller. WR-01 ownership guard: the per-kind byte
+    // counter belongs to whichever image the kind handle last served
+    // (*handleId) — a finalize for a slot-pressure-evicted transfer must
+    // never claim a newer image's persisted bytes.
     SdImageMetadata m = meta;
-    m.storedToSd = *persistedBytes > 0;
+    m.storedToSd = (*handleId == meta.imageId) && (*persistedBytes > 0);
 
     bool ok = writeSidecar(m);
     Serial.printf("SdStorage: finalized %s (%u/%u chunks, %u B persisted, complete=%s)%s\n",

@@ -66,6 +66,10 @@ private:
     size_t receiveIndex;
     bool inPacket;
     bool hasCommand;
+    // review-WR-03 framer inter-byte resync: millis() stamp of the last
+    // received byte — an in-packet gap beyond CMD_FRAME_INTERBYTE_MS resets
+    // the framer instead of wedging it mid-frame
+    uint32_t lastFrameByteMs;
     PendingCommand pendingCommand;
 
     // Statistics
