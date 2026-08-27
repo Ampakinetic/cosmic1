@@ -1,189 +1,245 @@
 ---
 phase: 01-command-protocol-control
-reviewed: 2026-08-25T02:08:01Z
+reviewed: 2026-08-28T00:00:00Z
 depth: standard
-files_reviewed: 22
+files_reviewed: 43
 files_reviewed_list:
   - include/auto_capture.h
+  - include/base_station_config.h
   - include/command_handler.h
-  - include/command_sender.h
   - include/command_protocol.h
+  - include/command_sender.h
+  - include/common_types.h
   - include/e32_lora.h
   - include/image_protocol.h
-  - include/image_tx_manager.h
   - include/image_rx_manager.h
+  - include/image_tx_manager.h
+  - include/sd_storage.h
   - include/sensor_pins.h
+  - include/status_display.h
+  - src/alert_engine.cpp
+  - src/alert_engine.h
   - src/auto_capture.cpp
+  - src/camera_manager.cpp
+  - src/camera_manager.h
   - src/command_handler.cpp
   - src/command_protocol.cpp
   - src/command_sender.cpp
-  - src/camera_manager.cpp
-  - src/camera_manager.h
   - src/e32_lora.cpp
-  - src/image_tx_manager.cpp
   - src/image_rx_manager.cpp
+  - src/image_tx_manager.cpp
   - src/main_balloon.cpp
   - src/main_basestation.cpp
+  - src/sd_storage.cpp
+  - src/sensor_manager.cpp
+  - src/status_display.cpp
+  - src/stubs.cpp
+  - src/test_lora_balloon.cpp
+  - src/trajectory_buffer.cpp
+  - src/trajectory_buffer.h
+  - src/web_assets.h
+  - src/wifi_manager.cpp
+  - src/wifi_manager.h
   - platformio.ini
+  - scripts/embed_web_assets.mjs
   - scripts/verify_protocol_roundtrip.mjs
+  - vendor/leaflet.css
+  - vendor/leaflet.js
+  - vendor/LICENSE
+  - vendor/provenance.json
 findings:
-  critical: 1
-  warning: 2
-  info: 9
-  total: 12
+  critical: 0
+  warning: 5
+  info: 13
+  total: 18
 status: issues_found
 ---
 
-# Phase 01: Code Review Report (Round #8)
+# Phase 1: Code Review Report
 
-**Reviewed:** 2026-08-25T02:08:01Z
+**Reviewed:** 2026-08-28
 **Depth:** standard
-**Files Reviewed:** 22
-**Diff Base:** da84250 (round-#7 fix commits 70543c5..02142e1 verified in this pass)
+**Files Reviewed:** 43
 **Status:** issues_found
 
 ## Summary
 
-Adversarial standard-depth review of the full Phase 01/02 chain: balloon TX
-(auto capture, command handler/protocol, camera, E32, image TX), base RX
-(command sender, image RX, base main/web server), protocol headers, build
-config, and the wire harness. All prior-round (round #7) fixes were
-re-verified at root and are confirmed FIXED — the fixer must NOT re-apply
-them (list below). This round found one new Critical defect in the command
-dispatch gate, one new Warning in the chunk-push failure path, and carried
-forward the remaining prior findings (WR-03, IN-02..IN-07), all re-confirmed
-present at the cited lines.
+Adversarial review of the Phase 1 command-protocol path (command_protocol, command_sender, command_handler, e32_lora, auto_capture) and the image-transfer managers (image_tx_manager, image_rx_manager, sd_storage), plus both mains, the web layer, build config, scripts, and vendored assets.
 
-## Prior-Round Fixes Verified FIXED (do not re-apply)
+Overall the protocol core is solid: CRC16 framing, big-endian payload codecs used consistently on both ends (base `handleAutoCaptureEnable`/`handleSetEventThresholds` encode with `writeUint32`/`writeUint16`, balloon decodes with `readUint32`/`readUint16` — the suspected endianness mismatch was checked and does NOT exist), WR-12 type-dispatch before body arithmetic, bounded payload validation, and the sequence-sweep regression harness all check out. Vendor Leaflet hashes verify against `provenance.json`.
 
-| Prior ID | Root-cause fix verified | Evidence |
-|---|---|---|
-| CR-01 | imageKind byte in `ImageChunkBody`; stamped at both TX sites; validated at deserialize; kind-exact slot routing | include/image_protocol.h:166-171; src/image_tx_manager.cpp:580, :860; src/command_protocol.cpp:464-467; src/image_rx_manager.cpp:314-339 |
-| CR-02 | `announceFullManifest` success-gated, bounded by `IMG_MANIFEST_MAX_ATTEMPTS`, park-and-free keeps thumbBuffer | src/image_tx_manager.cpp:623-684 |
-| CR-03 | `THUMB_MAX_BYTES` (8192) clamp + stale-frame drain before capture | src/camera_manager.cpp:12, :357-366, :393-407 |
-| WR-01 | `pushThumbManifest` success-gated | src/image_tx_manager.cpp:538-564 |
-| WR-02 | two-pass sensor-overflow scan before capture | src/camera_manager.cpp:346-368 |
-| WR-04 | defer-aware `windowRequestSeq` accounting + cancel-before-next + post-terminal cancels | src/image_rx_manager.cpp:134-138, :160-166, :235-243, :806-810, :838-841 |
-| WR-05 | NACK_BUSY deferral scoped to IMAGE_WINDOW_REQUEST only | src/command_sender.cpp:427-439 |
-| IN-01 | retry-ordinal labels ("retry %d/%d") | src/command_sender.cpp:561-566 |
-
-## Critical Issues
-
-### CR-04: Camera-ready gate in executeCommand blocks image window service and status while the radio and ImageTx remain alive
-
-**File:** `src/command_handler.cpp:139-145` (with `src/main_balloon.cpp:858-867`, `src/camera_manager.h:134`, `src/camera_manager.cpp:87-91`)
-**Issue:** `executeCommand` rejects EVERY command with `NACK_BUSY "Camera not ready"` when `camera->isReady()` is false (`isReady()` is just `initialized`). On low battery (`batteryVoltage < BATTERY_LOW_THRESHOLD`), `main_balloon.cpp:864` calls `Camera().enableCamera(false)` → `end()` → `esp_camera_deinit()` + `initialized = false`. From that moment:
-
-1. `IMAGE_WINDOW_REQUEST` (command_handler.cpp:182-183) is refused — yet window service needs only the ImageTx PSRAM buffers and the E32 radio, both still fully operational (`ImageTx().process()` keeps running at main_balloon.cpp:895 and keeps transmitting 0x14 beacons). Every full image already announced becomes unretrievable for the entire low-battery window — exactly the final images an operator needs to recover before power is lost. The stranded data is then destroyed by power-off or TTL eviction (IMG_ENTRY_TTL_MS). NACK_BUSY tells the base "retry later," so each pull burns its full retry budget before terminal-failing.
-2. `GET_STATUS` (line 179-180) is also refused, so the base's periodic status poll (src/main_basestation.cpp:1990-1995) fails permanently and the dashboard's last-command row latches a perpetual failure while the balloon is still beaconing.
-
-This is a data-loss-risk behavior gap, not just degradation: the refusal reason (camera) is unrelated to the resource the command needs.
-**Fix:** Remove the global gate and apply `isReady()` checks only where camera hardware is actually touched:
-
-```cpp
-// executeCommand — replace the blanket gate with dispatch, then guard
-// inside the camera-touching handlers:
-case CameraCommand::CAPTURE_NOW:
-case CameraCommand::SET_RESOLUTION:
-case CameraCommand::SET_QUALITY:
-    /* ... */ {
-    if (!camera->isReady()) {
-        result.responseType = ResponseType::NACK_BUSY;
-        strncpy(result.message, "Camera not ready", sizeof(result.message) - 1);
-        commandsFailed++;
-        return result;
-    }
-    // ... existing handler body
-}
-// IMAGE_WINDOW_REQUEST, GET_STATUS, SET_EVENT_THRESHOLDS,
-// AUTO_CAPTURE_ENABLE/DISABLE: no camera gate (AutoCap/ImageTx/cached
-// settings only).
-```
+No Critical findings. Five Warnings: a false `storedToSd=true` sidecar written for preempted transfers, silent drop of back-to-back commands on the balloon, no inter-byte resync timeout in either framer, an SSID-control-character gap that can break the whole dashboard JSON, and an unreachable emergency camera-disable path. Thirteen Info items cover dead/incorrect driver code, sequence-wrap collision, duplicate enum values, a malformed macro, stale credentials, and related maintainability defects.
 
 ## Warnings
 
-### WR-03 (remaining from round #7): Manual capture never advances the auto-capture baseline — interval capture can fire moments after a manual one
+### WR-01: Sidecar records `storedToSd=true` from the wrong transfer's byte counter
 
-**File:** `src/command_handler.cpp:200-237` with `src/auto_capture.cpp:175-178`
-**Issue:** `handleCaptureNow` captures and allocates an image id but never touches `AutoCap`'s `lastCaptureTime`. `AutoCapture::process` fires when `millis() - lastCaptureTime >= intervalMs`, so a manual capture does not reset the interval baseline. If the operator triggers a manual capture just before an interval deadline, the balloon captures twice in quick succession (duplicate frame, doubled TX queue pressure); there is no suppression path. Re-confirmed present this round.
-**Fix:** Add `void markCaptureBaseline() { lastCaptureTime = millis(); }` to AutoCapture and call it from `handleCaptureNow` after a successful `captureImage()` (before enqueueing the ImageTx entry), so D-27/D-28 spacing semantics treat manual captures as baseline-advancing captures.
-
-### WR-08 (new): Chunk cursors advance on failed transmit; a failed tail chunk can mark an entry SERVED before every byte was offered
-
-**File:** `src/image_tx_manager.cpp:601` (`pushThumbChunk`) and `src/image_tx_manager.cpp:881-895` (`serviceWindowChunk`)
-**Issue:** Both push paths execute `serializeChunk(...) && lora->transmit(...)` and then advance the cursor unconditionally (`entry.nextThumbChunk++` / `entry.windowNextIndex++`) even when `ok == false`. Each failed transmit becomes a permanent hole for that pass whose only recovery is a base-side stall timeout (IMG_WINDOW_STALL_MS) plus a re-request round trip — a burst of E32 transmit failures converts one push into many multi-second heal cycles. Worse, in `serviceWindowChunk`, when the FAILED chunk is the last of a tail-reaching window (`windowNextIndex >= windowStart + windowCount`), the entry is marked `windowArmed = false` and `SERVED` (lines 883-895) — a preferred eviction candidate — despite the final chunk never leaving the balloon. Under queue pressure the subsequent heal re-request can hit `UNKNOWN_IMAGE` after eviction and the transfer terminal-fails INCOMPLETE, even though the data was resident the whole time.
-**Fix:** On `!ok`, do not advance the cursor; retry the same index on the next `process()` pass with a small same-index bound (e.g., 3 attempts) before skipping, and only evaluate the SERVED transition on a successful final-chunk transmit:
-
+**File:** `src/sd_storage.cpp:296-313`
+**Issue:** `finalizeImage` reads `*persistedBytes` (line 313) unconditionally, but the kind handle that counter belongs to is only closed/reset when `*handleId == meta.imageId` (line 296). When `finalizeImage` runs for a transfer whose id does NOT own the kind handle — the real case is `ImageRxManager::finalizeIncomplete` on slot-pressure eviction (`src/image_rx_manager.cpp:480-488`), which finalizes the OLDEST transfer while the single per-kind write handle already serves a newer image — the sidecar's `storedToSd` is computed from the other image's persisted byte count. A partially-received image with zero persisted bytes then gets a sidecar (and `/gallery/{id}` detail) claiming it was stored to SD.
+**Fix:**
 ```cpp
-if (ok) {
-    entry.windowNextIndex++;
-    if (entry.windowNextIndex >= entry.windowStart + entry.windowCount) {
-        entry.windowArmed = false;
-        if (/* tail window reached */)
-            entry.state = ImageTxEntryState::SERVED;
+// src/sd_storage.cpp, inside finalizeImage (replace line 313)
+SdImageMetadata m = meta;
+m.storedToSd = (*handleId == meta.imageId) && (*persistedBytes > 0);
+```
+(Keep the handle-close block at 296-299 unchanged; `*handleId` still names the last image the counter accounted for, which is exactly the guard needed.)
+
+### WR-02: A second command completing in the same drain silently overwrites the pending command
+
+**File:** `src/command_handler.cpp:872-874` (with `process()` at 78-84)
+**Issue:** `processIncomingByte` assigns `pendingCommand.packet = cmd; hasCommand = true;` for every validated frame during the drain loop, but `process()` executes only one command per pass (after the drain). If two complete COMMAND frames arrive within one 100 ms balloon loop window (two ~20-byte frames at 9600 baud fit easily), the first is overwritten before execution and never runs — no NACK is sent for it. The base sender eventually recovers via its ACK timeout and retry, but each occurrence burns a full timeout window (2-15 s) and re-executes the command on retry, degrading the queue UI and double-triggering captures on the retry path.
+**Fix:** Refuse the second frame instead of overwriting, so the base retries it as a fresh command:
+```cpp
+if (CommandProtocol::deserializeCommand(receiveBuffer, expectedTotal, cmd)) {
+    if (!hasCommand) {
+        pendingCommand.packet = cmd;
+        pendingCommand.receivedTime = millis();
+        hasCommand = true;
     }
-} else {
-    if (++entry.windowFailCount >= 3) {
-        entry.windowFailCount = 0;
-        entry.windowNextIndex++;   // skip after bounded retries — heal path owns it
+    // else: previous command not yet executed — drop the new frame; the
+    // sender's timeout/retry will re-deliver it. (Better: send NACK_BUSY
+    // for the new sequence here.)
+}
+```
+
+### WR-03: No inter-byte resync timeout in either length-driven framer
+
+**File:** `src/command_sender.cpp:302-421` and `src/command_handler.cpp:814-879`
+**Issue:** Once `inPacket` latches, both framers accumulate indefinitely toward `expectedTotal` — there is no inter-byte timeout. A frame truncated by RF noise (or a corrupted `bodyLen` field that passes the bound check but announces more bytes than will ever arrive) wedges the parser mid-frame; every subsequent good frame's bytes are consumed as payload of the phantom frame until enough bytes accumulate that the end-marker/CRC check fails and `resetReceiveState()` runs. Recovery is eventual but arbitrary later frames are destroyed in the process — on a 5 s beacon cadence this manifests as lost beacons/ACKs after any truncation event.
+**Fix:** Stamp the last-byte time and reset on a gap, e.g. in both `processIncomingByte` implementations:
+```cpp
+// member: uint32_t lastFrameByteMs = 0;
+// top of processIncomingByte:
+if (inPacket && millis() - lastFrameByteMs > 200) {  // inter-byte gap
+    resetReceiveState();                              // bytes cannot be >200ms apart at 9600 baud
+}
+lastFrameByteMs = millis();
+```
+
+### WR-04: `jsonEscape` leaves control characters unescaped — one weird SSID breaks the entire dashboard poll
+
+**File:** `src/main_basestation.cpp:3134-3145` (used at 3329/3332)
+**Issue:** `jsonEscape` escapes only `"` and `\`. WiFi SSIDs are arbitrary byte strings (1-32 bytes, no UTF-8 or printable constraint enforced by `handleWifiSwitch` beyond length); a station SSID containing a control byte (<0x20) or invalid UTF-8 is embedded raw into the `/api/state` JSON. Per RFC 8259 a raw control character makes the JSON invalid — `JSON.parse` in the browser throws, the poll handler fails, and the entire dashboard freezes (tiles, alerts, map) for as long as the base is joined to that network. The WiFi-STA path accepts such SSIDs (only length is validated), so the state is reachable.
+**Fix:** Escape control bytes and drop non-ASCII bytes that cannot be rendered safely:
+```cpp
+static String jsonEscape(const String& s) {
+    String out;
+    out.reserve(s.length());
+    for (unsigned int i = 0; i < s.length(); i++) {
+        char c = s.charAt(i);
+        if (c == '"' || c == '\\') { out += '\\'; out += c; }
+        else if (static_cast<unsigned char>(c) < 0x20) {
+            char buf[7];
+            snprintf(buf, sizeof(buf), "\\u%04X", static_cast<unsigned char>(c));
+            out += buf;
+        } else if (static_cast<unsigned char>(c) < 0x80) {
+            out += c;
+        }
+        // bytes >= 0x80: drop (or UTF-8-sanitize) rather than emit invalid UTF-8
     }
-    entry.lastActivityMs = millis();
-    return false;
+    return out;
+}
+```
+
+### WR-05: Emergency camera-disable path is unreachable — critical battery never disables the camera
+
+**File:** `src/main_balloon.cpp:1104-1118` (dispatcher at 1085-1102 commented out)
+**Issue:** `onEmergencyTriggered` contains the emergency camera power-down, but its only caller (`onSystemEvent`) has its entire dispatch body commented out and `onSystemEvent` itself is never registered anywhere. Meanwhile `processPowerManagement` (lines 849-868) disables the camera only on the LOW threshold; the CRITICAL branch calls `SysState().triggerEmergency(...)` and stops. Net effect: at critical battery the balloon enters emergency mode but the camera (the biggest non-radio draw) keeps running — the opposite of the handler's documented intent.
+**Fix:** Either delete the dead handlers or invoke the camera-disable directly in the critical branch:
+```cpp
+if (powerData.batteryVoltage < BATTERY_CRITICAL_THRESHOLD) {
+    if (!SysState().isEmergencyActive()) {
+        SysState().triggerEmergency("Critical battery level");
+        if (appState.cameraActive) {
+            Camera().enableCamera(false);
+            appState.cameraActive = false;
+        }
+    }
 }
 ```
 
 ## Info
 
-### IN-08 (new): Re-manifest restart clears window context without cancelling the still-tracked window request
-
-**File:** `src/image_rx_manager.cpp:549-565`
-**Issue:** `startTransfer`'s same-(id,kind) restart does `*t = ImageRxTransfer{}`, zeroing `windowRequestSeq`/`windowActive`, while the previously issued `IMAGE_WINDOW_REQUEST` may still be PENDING/SENT in CmdSender. A stale retry can later arm a pre-restart span concurrently with the fresh request the window driver will issue. Harmless today (last-arm-wins in `handleWindowRequest`, and `acceptChunk` validates id/kind/index so stale-span chunks still count), but the accounting mismatch is avoidable.
-**Fix:** On restart, cancel the outstanding tracked request the same way finalize does (the existing cancel path used at image_rx_manager.cpp:806-810/838-841) before zeroing the slot.
-
-### IN-02 (remaining): Camera health check always reports failure when the camera is active
-
-**File:** `src/main_balloon.cpp:573-577`
-**Issue:** The check body is commented out (`// && !Camera().performHealthCheck()`), so whenever `appState.cameraActive` is true the log prints "Camera system health check failed" and `allPassed = false` unconditionally — a healthy camera is reported as failed on every health pass.
-**Fix:** Either implement a real check or remove the camera branch (and the misleading warning) until one exists.
-
-### IN-03 (remaining): Dead store `previousMode`
-
-**File:** `src/e32_lora.cpp:612`
-**Issue:** `previousMode` is assigned and never read.
-**Fix:** Delete the variable, or use it to report mode-transition failures in the log.
-
-### IN-04 (remaining): `currentMode` committed before AUX verifies the mode actually took
-
-**File:** `src/e32_lora.cpp:158`
-**Issue:** The cached mode is updated before AUX confirmation, so a failed mode switch leaves the cache claiming the requested mode while the module is elsewhere.
-**Fix:** Set `currentMode` only after `waitForAux()` succeeds (mirror the pattern used at the failure branch).
-
-### IN-05 (remaining): `transmitToAddress` unused, VLA, no initialized guard
+### IN-01: `transmitToAddress` is dead code with a wrong E32 wire format and an unbounded VLA
 
 **File:** `src/e32_lora.cpp:272-290`
-**Issue:** Unused public method that builds a stack VLA from a runtime size and transmits without checking `initialized`.
-**Fix:** Remove it, or guard with `initialized` and replace the VLA with a fixed `CMD_MAX_PACKET_SIZE`-bounded buffer.
+**Issue:** No callers exist anywhere in `src/`. The implementation writes FOUR address bytes (two per `uint16`), but E32 ADDH/ADDL are one byte each — directed (fixed) transmission takes exactly ADDH, ADDL (+ optional CHAN) before payload, so the first two payload bytes would be eaten as address. It also uses a VLA (`uint8_t buffer[length + 4]`) with no length bound.
+**Fix:** Delete the method (and its declaration in `include/e32_lora.h:132-133`), or rewrite as 2 address bytes with `length` bounded and a fixed buffer.
 
-### IN-06 (remaining): Dead code `findOldestCommand`
+### IN-02: `uint8_t read()` inline accessor dereferences `serial` without an init guard
 
-**File:** `src/command_sender.cpp:493-506`
-**Issue:** Never called; duplicates slot-recycling logic that `findFreeSlot` already owns.
-**Fix:** Delete it.
+**File:** `include/e32_lora.h:138`
+**Issue:** Every sibling (`available()`, `read(buffer, len)`) checks `initialized` first; this one calls `serial->read()` directly — null-pointer crash if invoked before `begin()` (both real callers only call it after successful `begin`, so latent).
+**Fix:** `uint8_t read() { return initialized ? serial->read() : 0; }`
 
-### IN-07 (remaining): Stale "fixed 17-byte body" comment
+### IN-03: E32 mode bookkeeping desyncs — `currentMode` set before verification; `exitConfigMode` never restores
 
-**File:** `src/command_sender.cpp:329`
-**Issue:** The wire body is 19 bytes; the comment says 17.
-**Fix:** Update the comment (or derive the constant so comment and code cannot drift).
+**File:** `src/e32_lora.cpp:153-158` and `610-627`
+**Issue:** `setMode` assigns `currentMode = mode` (line 158) before the AUX verification that can fail (line 166-171), so a failed transition leaves the recorded mode disagreeing with pin state. `enterConfigMode` saves `previousMode` (line 612) that is never used, and `exitConfigMode` unconditionally returns to NORMAL — a caller that entered from POWER_SAVE/WAKEUP is silently dropped to NORMAL.
+**Fix:** Set `currentMode` only after verification succeeds; make `exitConfigMode` restore the saved mode (store it as a member).
 
-### IN-09 (out-of-plan change, no defect found): GPS pin/baud change in sensor_pins.h
+### IN-04: Sequence-number wraparound lets a stale terminal slot swallow a live response
 
-**File:** `include/sensor_pins.h:35-38`
-**Issue:** `GPS_TX_PIN 35` and `GPS_BAUD_RATE 38400` changed after the plan's file scope was cut (operator-requested, per handoff). Verified internally consistent: `src/sensor_manager.cpp:137` and `src/main_balloon.cpp:615` consume the same macros, and the values match the hardware-proven config documented in `src/test_lora_balloon.cpp:42-44`. Note only: `src/test_minimal_hardware.cpp:17-18` still hardcodes the obsolete 45/46 pins — harmless while that test sketch stays out of the default build environment (platformio.ini default envs unchanged).
-**Fix:** None required; optionally update the minimal-hardware test sketch pins the next time it is used on hardware.
+**File:** `src/command_sender.cpp:513-521` (with 538-558 and 440-442)
+**Issue:** Terminal slots (ACKED/FAILED/TIMEOUT) retain their sequence numbers until evicted, and `nextSequenceNumber` wraps at 65535. After a wrap, a stale terminal slot holding the same seq can sit earlier in the table than the live slot; `findTrackedCommand` returns the first match, and the terminal-state guard at line 440 discards the live command's response — the live command then false-times-out. Long horizon (needs 65535 commands), but the GET_STATUS poll plus window pulls make it reachable on multi-day flights.
+**Fix:** In `findTrackedCommand`, prefer non-terminal matches; or in `sendCommand`, evict any existing slot with the allocated sequence before arming the new one.
+
+### IN-05: Dead negative check in WB-mode validation
+
+**File:** `src/command_handler.cpp:543-544`
+**Issue:** `wbModeValue` derives from a `uint8_t` payload byte cast through the enum; `wbModeValue < 0` can never be true. The `> 4` half still catches garbage, so behavior is correct — the dead arm is just misleading.
+**Fix:** Drop the `< 0` comparison (or validate `cmd.payload[0] > 4` directly before the enum cast).
+
+### IN-06: `PacketType` / `PacketPriority` enumerators carry duplicate values
+
+**File:** `include/common_types.h:26-49` and `52-64`
+**Issue:** `GPS = 0x02` duplicates `TELEMETRY`, `CAMERA_THUMB/CAMERA_FULL` duplicate `GPS_DATA/CAMERA_DATA`, `ACK/NACK/PING` duplicate `COMMAND_ACK/STATUS/DEBUG`, and in `PacketPriority` `EMERGENCY = 1` equals `PRIORITY_NORMAL` (so any emergency-priority packet routed through `packet_handler.cpp`'s drop logic at 746-747 is treated as merely Normal). Legal C++, but switch/case dispatch can never distinguish them.
+**Fix:** Re-number the legacy aliases to unused values, or delete them if truly compat-dead.
+
+### IN-07: Malformed macro — `#define BACKUP retention_DAYS 7`
+
+**File:** `include/base_station_config.h:177`
+**Issue:** The space makes the macro name `BACKUP` with replacement text `retention_DAYS 7`; the intended `BACKUP_RETENTION_DAYS` constant does not exist. Any future use of `BACKUP` expands to garbage that happens to compile in expression contexts only by accident.
+**Fix:** `#define BACKUP_RETENTION_DAYS 7`
+
+### IN-08: Stale AP password contradicts the live one
+
+**File:** `include/base_station_config.h:50` vs `src/wifi_manager.cpp:17`
+**Issue:** `base_station_config.h` declares `WIFI_AP_PASSWORD "balloon123"` but nothing uses it — the AP actually runs on wifi_manager.cpp's static `"balloontrack"`. During incident response (operator cannot join the AP), the header actively misleads. The hardcoded fallback credential itself is a documented design choice (D-40), so Info, not Warning.
+**Fix:** Delete the dead define from `base_station_config.h` (single source of truth in `wifi_manager.cpp`).
+
+### IN-09: Camera init partial failure leaks the driver and wedges retries
+
+**File:** `src/camera_manager.cpp:116-122`
+**Issue:** If `esp_camera_init` succeeds but `esp_camera_sensor_get()` returns null, `initCamera` returns false without `esp_camera_deinit()`. `initialized` stays false, so a later `end()` skips deinit (line 87-90 gates on `initialized`), and a retrying `begin()` calls `esp_camera_init` on an already-initialized camera — which fails, leaving the camera dead until reboot.
+**Fix:** In the `!s` branch, call `esp_camera_deinit()` before returning false.
+
+### IN-10: Camera "health check" always fails when the camera is up
+
+**File:** `src/main_balloon.cpp:573-577`
+**Issue:** The actual check is commented out (`// && !Camera().performHealthCheck()`), so `performSystemChecks` unconditionally logs "Camera system health check failed" and clears `allPassed` whenever `cameraActive` is true — a misleading boot warning on every healthy flight boot.
+**Fix:** Restore the real check or drop the block until the method exists.
+
+### IN-11: Balloon E32 `begin()` bypasses `sensor_pins.h` with hardcoded pin literals
+
+**File:** `src/main_balloon.cpp:474`
+**Issue:** `E32LoRaModule().begin(loraSerial, 48, 14, 19, 20, 21, 9600)` duplicates the pin map as magic numbers instead of `LORA_RX_PIN`/`LORA_TX_PIN`/etc. The current values happen to match the header, but this project's own GPIO-35 bootloop incident (documented in `include/sensor_pins.h:35-46`) is exactly the class of bug a duplicated pin list invites.
+**Fix:** Use the `sensor_pins.h` macros (and a named baud constant) at the call site.
+
+### IN-12: Auto-capture chip can latch the wrong interval
+
+**File:** `src/main_basestation.cpp:3195-3204`
+**Issue:** On ACK, `autoCaptureIntervalAckSec` is assigned `appState.autoCaptureIntervalSec` — the LAST SUBMITTED interval, not the interval that rode the ACKed sequence. Two rapid `/auto-capture` POSTs with different intervals briefly display the second interval against the first command's ACK. Self-corrects when the second ACK lands.
+**Fix:** Store the interval alongside the sequence when queuing (e.g., record it in `handleAutoCaptureEnable` keyed to the returned seq) and latch that value on ACK.
+
+### IN-13: Asset-hash verification silently skipped when provenance lacks an entry
+
+**File:** `scripts/embed_web_assets.mjs:103-109`
+**Issue:** `if (provenance.files[name] && ...)` — if `provenance.json` is missing the entry for a vendored file, no hash comparison runs and the file is embedded unverified (the check is only toothful when the entry exists). Current committed provenance covers both files (verified: hashes MATCH), so this is a hardening gap, not an active breach.
+**Fix:** Fail when the entry is absent: `if (!provenance.files[name] || provenance.files[name].sha256 !== h) throw ...`
 
 ---
 
-_Reviewed: 2026-08-25T02:08:01Z_
+_Reviewed: 2026-08-28_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
