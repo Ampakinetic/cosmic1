@@ -104,6 +104,17 @@ static constexpr uint32_t IMG_FULL_REANNOUNCE_IDLE_MS = 10000;
 // silently (PRI-03).
 static constexpr uint8_t  IMG_FULL_REANNOUNCE_MAX    = 3;
 
+// G-01-7 burst full-delivery, balloon lever 1 (01-21): known-busy hold on the
+// re-announce drop-clock. While inbound IMAGE_WINDOW_REQUEST frames keep
+// arriving at least this often — any kind, any verdict, including the
+// unknown/evicted rejects (session-6 images 25/26: the base's post-drop
+// window requests were exactly that liveness evidence, balloon11.log:680/
+// :702/:729/:751) — the idle-slot re-announce is HELD: no attempt consumed,
+// no idle period advanced, no drop fired. 15 s covers the base's 8 s D-24
+// stall cadence plus window service with margin; the 01-17 cadence resumes
+// 15 s after the last inbound request.
+static constexpr uint32_t IMG_FULL_REANNOUNCE_BUSY_MS  = 15000;
+
 // Full-image transfer cap (research Q4 resolution): fulls larger than this
 // never arm a pull — the balloon logs a warning naming the image ID and size
 // while the thumbnail still pushes, and the base never sees a FULL_IMAGE

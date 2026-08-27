@@ -157,6 +157,14 @@ struct ImageTxEntry {
     // bound the full is dropped with a named log (park at THUMB_PUSHED
     // keeping thumbBuffer for heals).
     uint8_t reannounceAttempts;
+
+    // G-01-7 burst full-delivery, balloon lever 1 (01-21): receipt-evidence
+    // stamp — an inbound window request that MATCHED this entry (either kind:
+    // proof the base demonstrably holds at least one of its manifests and is
+    // asking). Nonzero re-arms the bounded re-announce budget and ranks the
+    // entry in the protected last-resort eviction class alongside
+    // windowEverArmed; 0 = never requested. Reset in freeEntry.
+    uint32_t lastWindowRequestMs;
 };
 
 class ImageTxManager {
@@ -210,6 +218,19 @@ private:
     bool firstBeaconLogged;  // transition-only logging: first beacon after boot
     uint32_t beaconsSent;    // successful transmits (OLED diagnostics)
     bool lastBeaconOk;       // last attempt's transmit result
+
+    // G-01-7 burst full-delivery, balloon lever 1 (01-21): receipt-informed
+    // re-announce gating. lastInboundWindowRequestMs is the channel-liveness
+    // stamp — EVERY inbound window request refreshes it, any kind, any verdict
+    // including the unknown/evicted rejects (session-6's rejects were exactly
+    // the evidence that the base was still working the burst while the
+    // drop-clock expired). Write-only timing data, never used for content
+    // decisions (T-01-21-01). While it is younger than
+    // IMG_FULL_REANNOUNCE_BUSY_MS the idle-slot re-announce is HELD (nothing
+    // consumed); reannounceHoldLogged is the one-shot latch printing one hold
+    // line per episode, cleared whenever a re-announce actually transmits.
+    uint32_t lastInboundWindowRequestMs;
+    bool reannounceHoldLogged;
 
     // Poll side
     void enqueueCapture(uint16_t imageId);

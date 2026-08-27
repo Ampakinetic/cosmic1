@@ -33,6 +33,8 @@ ImageTxManager::ImageTxManager()
     , firstBeaconLogged(false)
     , beaconsSent(0)
     , lastBeaconOk(false)
+    , lastInboundWindowRequestMs(0)
+    , reannounceHoldLogged(false)
 {
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
         entries[i] = ImageTxEntry{};
@@ -55,6 +57,13 @@ bool ImageTxManager::begin(E32LoRa* lora) {
 
     this->lora = lora;
     initialized = true;
+
+    // G-01-7 lever 1 (01-21): clean receipt-evidence state at boot — no
+    // inbound request has ever been seen and no hold episode is open. (The
+    // stamp starting at 0 gives the hold gate the same boot-epoch semantics
+    // as lastBeaconMs: a 15 s quiet floor after boot before any re-announce.)
+    lastInboundWindowRequestMs = 0;
+    reannounceHoldLogged = false;
 
     if (DEBUG_IMAGE_TX) {
         Serial.println("ImageTx: Initialized");
@@ -196,10 +205,18 @@ bool ImageTxManager::sendTelemetryBeacon() {
 // Overflow-eviction class (02-05 / CR-03 fix c) — LOWER class evicted sooner:
 //   1 THUMB_PUSHED            parked, nothing left to deliver
 //   2 SERVED                  full offered through its tail; heal-only
-//   3 ANNOUNCED (!everArmed)  queued, no window airtime invested
+//   3 ANNOUNCED (!everArmed && never requested)
+//                            queued, no receipt evidence — never armed, never
+//                            asked for (01-21: an inbound window request IS
+//                            receipt evidence — the base demonstrably holds a
+//                            manifest and is asking, per session-6 image 24,
+//                            evicted at balloon11.log:406 while the base held
+//                            its manifest, base6.log:3947)
 //   4 PUSH_THUMB_* / ANNOUNCE_FULL   push still in flight
-//   5 ANNOUNCED (everArmed)   the ACTIVE-PULL context, armed or between
-//                             windows — LAST resort (D-19)
+//   5 ANNOUNCED (everArmed or receipt-evidenced)
+//                            the ACTIVE-PULL context, armed or between
+//                            windows, or evidenced by an inbound request —
+//                            LAST resort (D-19)
 static uint8_t evictionClassOf(const ImageTxEntry& entry) {
     switch (entry.state) {
         case ImageTxEntryState::THUMB_PUSHED:
@@ -207,7 +224,7 @@ static uint8_t evictionClassOf(const ImageTxEntry& entry) {
         case ImageTxEntryState::SERVED:
             return 2;
         case ImageTxEntryState::ANNOUNCED:
-            return entry.windowEverArmed ? 5 : 3;
+            return (entry.windowEverArmed || entry.lastWindowRequestMs != 0) ? 5 : 3;
         case ImageTxEntryState::PUSH_THUMB_MANIFEST:
         case ImageTxEntryState::PUSH_THUMB_CHUNKS:
         case ImageTxEntryState::ANNOUNCE_FULL:
@@ -372,7 +389,7 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
             victimClass == 2 ? "SERVED (heal-only)" :
             victimClass == 3 ? "queued, no airtime invested" :
             victimClass == 4 ? "push in flight" :
-                               "ACTIVE-PULL context (last resort)";
+                               "ACTIVE-PULL context or receipt-evidenced (last resort)";
         if (midServiceFallback) {
             Serial.printf("ImageTx: queue overflow - all entries mid-service; evicting class %u (%s) entry image %u for image %u\n",
                          victimClass, className,
@@ -501,6 +518,24 @@ void ImageTxManager::pushPending() {
     if (serving != nullptr) {
         serviceWindowChunk(*serving);
         return; // one transmit per pass
+    }
+
+    // G-01-7 burst full-delivery, balloon lever 1 (01-21): known-busy hold on
+    // the re-announce drop-clock. An inbound window request younger than
+    // IMG_FULL_REANNOUNCE_BUSY_MS — any kind, any verdict, including the
+    // unknown/evicted rejects — means the base is still working this burst;
+    // the re-announce does not even look for a candidate this pass. The hold
+    // consumes NOTHING: no attempt, no idle-period advance, no drop (the
+    // 01-17 IMG_FULL_REANNOUNCE_IDLE_MS cadence and MAX bound resume
+    // unchanged 15 s after the last inbound request). One named log line per
+    // hold episode (reannounceHoldLogged latch, cleared whenever a re-announce
+    // actually transmits).
+    if ((millis() - lastInboundWindowRequestMs) < IMG_FULL_REANNOUNCE_BUSY_MS) {
+        if (!reannounceHoldLogged) {
+            reannounceHoldLogged = true;
+            Serial.println("ImageTx: re-announce held - inbound window traffic active");
+        }
+        return;
     }
 
     // G-01-9 defect C (01-17): the channel's natural idle slot — no push
@@ -767,6 +802,11 @@ ImageTxEntry* ImageTxManager::findReannounceCandidate() {
 // announceFullManifest (thumbBuffer kept so THUMBNAIL window heals keep
 // working on the parked entry).
 void ImageTxManager::reannounceFullManifest(ImageTxEntry& entry) {
+    // G-01-7 lever 1 (01-21): a re-announce actually running closes any open
+    // hold episode — the next busy-hold (if inbound window traffic resumes)
+    // prints its own named line.
+    reannounceHoldLogged = false;
+
     ImageManifestBody body = fillFullManifestBody(entry);
     ImageManifestPacket pkt = createManifestPacket(body); // factory owns the 0x12 type byte
 
@@ -816,6 +856,17 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     if (!initialized || payload == nullptr || len < 6) {
         return WindowRequestResult::INVALID_RANGE;
     }
+
+    // G-01-7 burst full-delivery, balloon lever 1 (01-21): channel-liveness
+    // stamp — EVERY inbound window request counts, any kind, any verdict,
+    // including frames later rejected as unknown/evicted. Session-6's
+    // post-drop rejects (balloon11.log:680/:702/:729/:751 — the base still
+    // asking for images 25/26 after the bound expired) were exactly the
+    // liveness evidence the 01-17 drop-clock ignored. Write-only timing data,
+    // never used for content decisions (T-01-21-01); the per-entry receipt
+    // stamp further below is reachable only after full untrusted-input
+    // validation (kind enum + entry match).
+    lastInboundWindowRequestMs = millis();
 
     // PayloadImageWindowRequest: imageId BE16, imageKind u8, startChunk BE16,
     // count u8 — 6 bytes (Pitfall 9: decode via the big-endian helpers, never
@@ -870,6 +921,23 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
             Serial.printf("ImageTx: window request for unknown/evicted image %u rejected\n", imageId);
         }
         return WindowRequestResult::UNKNOWN_IMAGE;
+    }
+
+    // G-01-7 burst full-delivery, balloon lever 1 (01-21): receipt evidence —
+    // this request MATCHED a queued entry, so the base demonstrably holds at
+    // least one of its manifests and is asking (reached only after the kind
+    // enum check and entry match above — a crafted frame cannot stamp an
+    // entry it did not fully address, T-01-21-01). Stamp it, and re-arm the
+    // bounded re-announce budget: a manifest the base is demonstrably still
+    // working must not age out at the IMG_FULL_REANNOUNCE_MAX bound while the
+    // base keeps asking for the entry (session-6 images 25/26 — base held
+    // their manifests 3x/4x while the bound expired, balloon11.log:553/:575).
+    target->lastWindowRequestMs = millis();
+    if (target->state == ImageTxEntryState::ANNOUNCED &&
+        !target->fullWindowEverArmed && target->reannounceAttempts > 0) {
+        target->reannounceAttempts = 0;
+        Serial.printf("ImageTx: re-announce budget re-armed - window request received for image %u\n",
+                     imageId);
     }
 
     // Per-kind range validation (T-02-11): startChunk/count are bounded by
@@ -1172,6 +1240,7 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     entry.windowChunkFailStreak = 0;
     entry.fullWindowEverArmed = false;   // G-01-9 defect C: a recycled slot re-opens the re-announce gate
     entry.reannounceAttempts = 0;
+    entry.lastWindowRequestMs = 0;   // G-01-7 lever 1 (01-21): a recycled slot starts with no receipt evidence
     entry.windowArmed = false;
     entry.windowKind = 0;
     entry.windowEverArmed = false;
