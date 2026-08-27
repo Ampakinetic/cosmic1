@@ -232,8 +232,33 @@ private:
     uint32_t lastInboundWindowRequestMs;
     bool reannounceHoldLogged;
 
+    // G-01-11 / WINDOWS 16 fix (01-25): receipt-ever flag — true only after a
+    // GENUINE inbound window request has been observed since boot. The zero
+    // stamp alone let the busy-hold gate fire once per boot window
+    // (millis() - 0 < IMG_FULL_REANNOUNCE_BUSY_MS, balloon.log:504), polluting
+    // the G-01-7 discriminator with a phantom "inbound window traffic active"
+    // episode before any traffic existed. The flag makes the zero stamp inert;
+    // the hold line itself is NOT muted — it keeps its evidentiary meaning.
+    bool inboundWindowRequestSeen;
+
+    // G-01-10 D1 debug instrumentation (01-25), lever 2 per
+    // .planning/debug/d1-crash-regression-push-start.md §3: bounded memory
+    // state. logMemDiagnostic() prints at each enqueueCapture (the exact
+    // session-7 crash phase — one line per capture) and, from process() on a
+    // 1 s throttle, only on a NEW monotone low of min-ever-internal-heap or
+    // loopTask stack high-water. REMOVAL CONDITION: strip both call sites and
+    // this block after the 01-27 bench closes G-01-10.
+    uint32_t memDiagLastMs;
+    uint32_t memDiagMinHeap;
+    UBaseType_t memDiagMinStackHw;
+
     // Poll side
     void enqueueCapture(uint16_t imageId);
+
+    // G-01-10 D1 instrumentation (01-25): one bounded [MEM] line — internal
+    // heap, lifetime-min internal heap, PSRAM free, loopTask stack high-water
+    // (words). Called per capture enqueue and on new monotone lows only.
+    void logMemDiagnostic(const char* phase);
 
     // Beacon side — at most ONE transmit per call; returns transmit success
     bool sendTelemetryBeacon();

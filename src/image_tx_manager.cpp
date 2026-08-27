@@ -4,6 +4,7 @@
 #include "power_manager.h"
 #include "sensor_pins.h"
 #include <esp_rom_crc.h>
+#include <esp_heap_caps.h>
 
 // Debug configuration
 #ifndef DEBUG_IMAGE_TX
@@ -35,6 +36,10 @@ ImageTxManager::ImageTxManager()
     , lastBeaconOk(false)
     , lastInboundWindowRequestMs(0)
     , reannounceHoldLogged(false)
+    , inboundWindowRequestSeen(false)
+    , memDiagLastMs(0)
+    , memDiagMinHeap(0)
+    , memDiagMinStackHw(0)
 {
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
         entries[i] = ImageTxEntry{};
@@ -59,11 +64,45 @@ bool ImageTxManager::begin(E32LoRa* lora) {
     initialized = true;
 
     // G-01-7 lever 1 (01-21): clean receipt-evidence state at boot — no
-    // inbound request has ever been seen and no hold episode is open. (The
-    // stamp starting at 0 gives the hold gate the same boot-epoch semantics
-    // as lastBeaconMs: a 15 s quiet floor after boot before any re-announce.)
+    // inbound request has ever been seen and no hold episode is open. Since
+    // the 01-25 receipt-ever flag the zero stamp is inert (the hold gate
+    // requires inboundWindowRequestSeen), so boot windows carry no phantom
+    // quiet floor from this gate; re-announce spacing at boot comes from the
+    // IMG_FULL_REANNOUNCE_IDLE_MS cadence alone.
     lastInboundWindowRequestMs = 0;
     reannounceHoldLogged = false;
+
+    // G-01-11 / WINDOWS 16 fix (01-25): the receipt-ever flag resets at
+    // begin() too, so the busy-hold gate cannot fire on the boot-epoch zero
+    // stamp after a re-begin. A hold episode requires genuine inbound window
+    // traffic first.
+    inboundWindowRequestSeen = false;
+
+    // G-01-10 D1 fix, lever 1 (01-25) per
+    // .planning/debug/d1-crash-regression-push-start.md §3: boot-time
+    // first-use PSRAM heap warm-up. Both session-7 crashes hit during the
+    // FIRST post-boot capture push — the session's first run-time ps_malloc,
+    // PSRAM memcpy and CRC. Allocating, touching (cache-line-filling) and
+    // freeing one IMG_MAX_IMAGE_SIZE-class block here, BEFORE the loop
+    // starts, moves that first-use frontier to boot where a fault is visible
+    // and harmless. Inert if first-use is not the trigger.
+    if (psramFound()) {
+        uint8_t* warm = (uint8_t*)ps_malloc(IMG_MAX_IMAGE_SIZE);
+        if (warm != nullptr) {
+            memset(warm, 0xA5, IMG_MAX_IMAGE_SIZE);
+            free(warm);
+            Serial.println("ImageTx: PSRAM first-use warm-up done (G-01-10)");
+        } else {
+            Serial.println("ImageTx: PSRAM warm-up alloc failed (G-01-10)");
+        }
+    }
+
+    // G-01-10 D1 instrumentation baselines (01-25): latch post-setup min-heap
+    // and loopTask stack high-water so the process() watch prints only NEW
+    // lows from this point on.
+    memDiagLastMs = millis();
+    memDiagMinHeap = esp_get_minimum_free_heap_size();
+    memDiagMinStackHw = uxTaskGetStackHighWaterMark(nullptr);
 
     if (DEBUG_IMAGE_TX) {
         Serial.println("ImageTx: Initialized");
@@ -86,6 +125,25 @@ void ImageTxManager::end() {
 void ImageTxManager::process() {
     if (!initialized || lora == nullptr) {
         return;
+    }
+
+    // G-01-10 D1 instrumentation watch (01-25): 1 s-throttled check that
+    // prints one [MEM] line ONLY when min-ever internal heap or the loopTask
+    // stack high-water hits a new low (monotone quantities — naturally
+    // bounded, a handful of lines per session at most). The enqueue-time
+    // [MEM] line is the primary bench discriminator; this watch catches
+    // degradation between captures. REMOVAL: with the enqueue site, after
+    // 01-27 closes G-01-10.
+    uint32_t now = millis();
+    if ((uint32_t)(now - memDiagLastMs) >= 1000) {
+        memDiagLastMs = now;
+        uint32_t minHeap = esp_get_minimum_free_heap_size();
+        UBaseType_t stackHw = uxTaskGetStackHighWaterMark(nullptr);
+        if (minHeap < memDiagMinHeap || stackHw < memDiagMinStackHw) {
+            memDiagMinHeap = minHeap;
+            memDiagMinStackHw = stackHw;
+            logMemDiagnostic("new-low");
+        }
     }
 
     // Eviction policy (c): entries idle longer than IMG_ENTRY_TTL_MS are
@@ -233,6 +291,21 @@ static uint8_t evictionClassOf(const ImageTxEntry& entry) {
     }
 }
 
+// G-01-10 D1 instrumentation (01-25): one bounded [MEM] diagnostic line.
+// Prints internal-heap free, lifetime-min internal heap, PSRAM free, and the
+// loopTask stack high-water mark (words; NULL = calling task = loopTask for
+// every call site in this file). Bounded: per-capture at enqueue plus
+// new-monotone-low events only. REMOVAL CONDITION: 01-27 bench closes
+// G-01-10 (.planning/debug/d1-crash-regression-push-start.md §3, lever 2).
+void ImageTxManager::logMemDiagnostic(const char* phase) {
+    Serial.printf("ImageTx: [MEM] %s heap=%u minHeap=%u psram=%u stackHW=%u\n",
+                  phase,
+                  (unsigned)esp_get_free_heap_size(),
+                  (unsigned)esp_get_minimum_free_heap_size(),
+                  (unsigned)ESP.getFreePsram(),
+                  (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+}
+
 void ImageTxManager::enqueueCapture(uint16_t imageId) {
     ImageData img = Camera().getCurrentImage();
     if (!img.valid || img.buffer == nullptr) {
@@ -241,6 +314,12 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
         }
         return;
     }
+
+    // G-01-10 D1 instrumentation (01-25): one [MEM] line per capture at the
+    // exact session-7 crash phase (enqueue → thumbnail → PSRAM copy →
+    // manifest). Bounded by capture count. REMOVAL: strip after the 01-27
+    // bench closes G-01-10 (debug doc §3, lever 2).
+    logMemDiagnostic("enqueue");
 
     // FIRST caller of the CR-04-fixed createThumbnail path — Task 1 made
     // this safe (no dangling thumbnail member on failure)
@@ -530,7 +609,12 @@ void ImageTxManager::pushPending() {
     // unchanged 15 s after the last inbound request). One named log line per
     // hold episode (reannounceHoldLogged latch, cleared whenever a re-announce
     // actually transmits).
-    if ((millis() - lastInboundWindowRequestMs) < IMG_FULL_REANNOUNCE_BUSY_MS) {
+    // G-01-11 / WINDOWS 16 fix (01-25): inboundWindowRequestSeen guards the
+    // boot-epoch zero stamp — the hold can engage only after a genuine
+    // inbound window request, so the :504-style phantom episode is impossible
+    // and the hold line below stays a truthful G-01-7 discriminator.
+    if (inboundWindowRequestSeen &&
+        (millis() - lastInboundWindowRequestMs) < IMG_FULL_REANNOUNCE_BUSY_MS) {
         if (!reannounceHoldLogged) {
             reannounceHoldLogged = true;
             Serial.println("ImageTx: re-announce held - inbound window traffic active");
@@ -867,6 +951,10 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     // stamp further below is reachable only after full untrusted-input
     // validation (kind enum + entry match).
     lastInboundWindowRequestMs = millis();
+    // G-01-11 / WINDOWS 16 (01-25): first genuine receipt arms the busy-hold
+    // gate — same trust-boundary position as the stamp (before kind
+    // validation, write-only liveness data, never a content decision).
+    inboundWindowRequestSeen = true;
 
     // PayloadImageWindowRequest: imageId BE16, imageKind u8, startChunk BE16,
     // count u8 — 6 bytes (Pitfall 9: decode via the big-endian helpers, never
