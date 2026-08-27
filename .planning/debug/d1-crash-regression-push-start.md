@@ -316,3 +316,132 @@ Task 1's evidence cannot uniquely confirm the mechanism, which §3 records
 explicitly). Concretely: lever items 1 + 2 of §3 (boot-time PSRAM warm-up +
 bounded `[MEM]` diagnostics with named removal condition) plus the unconditional
 D2 receipt-ever flag. No pacing, quiet-gate, or wire-format changes.
+
+---
+
+## 6. SESSION 8 RECURRENCE (01-27 bench, 2026-08-28) — the 01-25 lever DISCONFIRMED as sufficient
+
+Session 8 crashed again. The spaced smoke SURVIVED (the session-7 crash-1 pattern
+is dead at this boot); the fatal event moved deeper — mid-service of the second
+image's FULL window transfer — with healthy `[MEM]` values throughout and NONE of
+session 7's corruption corroboration. Evidence below; every line re-verified
+against the retained consoles by the 01-27 continuation executor.
+
+### 6.1 Provenance (cross-checked BEFORE any decoded frame was trusted)
+
+- Firmware: round #11 (01-25 fix + 01-26 companions), balloon build banner
+  `Build: Aug 28 2026 09:48:55` (balloon2.log:120, again post-reboot :1242),
+  repo HEAD `56f3db6`; pre-flight on record: `pio run` 2/2 SUCCESS, harness
+  exit 0.
+- Deployed-ELF provenance: `.pio/build/esp32-s3-balloon/firmware.elf`
+  SHA256 `c53635e1819a6ca5107b1437450dbc324e5848e685b50de73ea6a4387c8e0553`
+  — **MATCHES** the round's built artifact; the decode in §6.2 is against the
+  exact crashed build.
+- The 01-25 fix is provably IN the deployed image: the warm-up line ran at BOTH
+  boots — balloon2.log:102 and :1321 `ImageTx: PSRAM first-use warm-up done
+  (G-01-10)` — and the `[MEM]` instrumentation lines are present throughout.
+- Consoles: `balloon2.log` + `base2.log` (operator-retained names; the plan
+  requested balloon13.log/base8.log — provenance deviation recorded in
+  01-UAT.md, files never renamed, the 01-24 convention).
+
+### 6.2 The fatal event — first chunk of a re-armed FULL window, mid-service
+
+Context (verbatim, both consoles):
+
+> base2.log:524-525 `CommandSender: Queued command IMAGE_WINDOW_REQUEST (seq=21)` /
+> `ImageRx: window request queued for image 38 kind 1 (chunks 96..111, seq 21, pass 0)`
+> base2.log:526 `command seq=21 transmit held - inbound chunk stream active` (quiet gate, then sent/ACKED :530-531)
+> balloon2.log:1220 `ImageTx: FULL window armed for image 38 (chunks 96..109)`
+> balloon2.log:1221 `CommandHandler: IMAGE_WINDOW_REQUEST armed` → :1224 `- SUCCESS`
+> balloon2.log:1226-1227 `E32: Transmitted 217 bytes` / `ImageTx: window chunk(image 38 kind 1, 1/14, 200 B) sent`
+> balloon2.log:1228-1231 `ESP-ROM:esp32s3-20210327` / `rst:0x7 (TG0WDT_SYS_RST),boot:0x2b (SPI_FAST_FLASH_BOOT)` / `Saved PC:0x40376430`
+
+Decode (xtensa-esp32s3-elf-addr2line `-pfiaC`, ELF SHA `c53635e181…` verified
+first — see §6.1):
+
+| Addr | Symbol | Role |
+| --- | --- | --- |
+| 0x40376430 | `tick_hook` (esp-idf `components/esp_system/int_wdt.c:111`) | the interrupt/task-watchdog tick hook in the tick-ISR chain — where the WDT machinery lives |
+| 0x403c88b8 / 0x403c8700 / 0x403cb700 | unresolvable (`?? ??:0`) | second-stage-bootloader load regions — expected, not evidence |
+
+**Zero project frames** — again. The Saved PC sits in the same tick-ISR
+neighborhood as session-7 crash 1's Core-0 wedge signature (§1.4:
+`SysTickIsrHandler` → `xPortIncrementTick` → `spinlock_acquire`).
+
+What SURVIVED before the crash (the session-7 crash-1 pattern is dead this boot):
+
+- First post-boot CAPTURE_NOW (image 37, balloon2.log:207-213) ran the full
+  push phase — enqueue, thumb manifest :219, chunks :222-253, FULL manifest :258,
+  window service :261+ — with zero crash signatures; both kinds finalized
+  COMPLETE at the base (thumb 8/8 base2.log:74-75, full 36/36 :238-239).
+- The crash is NOT first-post-boot and NOT first-anything: it is the SECOND
+  image, roughly 3.5-4 minutes in (first i2c noise at t=178075 ms :885; [BCN]
+  seq=46 at :1213), during the SEVENTH FULL window of image 38 (windows 0..15
+  through 80..95 served clean, :660-:1216, before the fatal 96..109 arm).
+
+Downstream consequences (the honest record): image 38's buffers died in the
+reset (post-reboot NVS restores next ID 39, balloon2.log:1318); every post-reboot
+window request rejected (`window request for unknown/evicted image 38 rejected`
+balloon2.log:1385/:1398 et al.); the base exhausted its passes against a dead
+servicer — base2.log:651-652 `image 38 kind 1 finalized INCOMPLETE (retransmit
+passes exhausted): 109/137 chunks after 3 passes` / persisted complete=false.
+Zero command timeouts anywhere in base2.log (no forbidden CAPTURE_NOW
+terminals this session — unlike session 7).
+
+### 6.3 The [MEM] instrumentation verdict (01-25 discriminator, answered)
+
+- Enqueue line PRESENT and healthy: balloon2.log:611 `[MEM] enqueue
+  heap=8354328 minHeap=8352520 psram=8149436 stackHW=5744`.
+- Last `[MEM]` before the reset: :1175 `heap=8332460 minHeap=8323392
+  psram=8129116 stackHW=5552` — monotone-sane, no anomaly; the loopTask stack
+  high-water never dropped below 5552 B of its 8192 B.
+- Post-reboot baseline :1354 `heap=8553128 …` equally healthy.
+
+Per §4's own discriminator: recurrence WITH the `[MEM]` line present and NO
+anomaly means the fault is neither heap/PSRAM exhaustion nor a first-use PSRAM
+touch. **The 01-25 hypothesis — first-post-boot PSRAM arena/cache touch during
+the capture-push phase — is DISCONFIRMED as SUFFICIENT: the warm-up ran at both
+boots (:102/:1321) and the crash recurred mid-service on healthy memory.**
+
+### 6.4 Session-7 corruption corroboration: ABSENT
+
+- U+FFFD mojibake: **ZERO** occurrences in balloon2.log (session 7 had
+  `Transmitted 38 byte∩┐╜` :299 and `drain∩┐╜d` :513 preceding its crashes).
+  The `┬░` sequence on every BMP280 line is the constant console rendering of
+  the UTF-8 degree sign — present on healthy lines at both boots, not corruption.
+- `i2cWrite … ESP_ERR_INVALID_STATE`: 2 occurrences (:885 at t=178075 ms,
+  :1577 at t=88276 ms post-reboot) — in BOTH cases a successful `BMP280: P=…`
+  read follows immediately (:886, :1578); NEITHER is adjacent to the reset (the
+  fatal window is ~340 lines after :885). Recurring BMP280-path noise, recorded
+  as such, distinct from the fatal TG0WDT.
+- Guru Meditation / stack canary / watchpoint: ZERO. rst:0xc: ZERO. The only
+  reset signatures in the whole log are the fatal rst:0x7 (:1230) and the benign
+  initial POWERON rst:0x1 (:12).
+
+Reading: §3's ranked root cause (an internal-RAM corruption blast hitting the
+UART ring + I2C FSM + kernel spinlock simultaneously) has LOST its corroboration
+pattern — session 8 shows the same TG0WDT reset class with NONE of the three
+corrupted-subsystem signatures. The corruption seen at session 7 is now better
+read as a possible co-effect of a deeper common cause (a stall/wedge), not
+necessarily the mechanism itself.
+
+### 6.5 New root-cause question (the debug round #2 brief)
+
+The CONSTANT across session-7 crash 2 and session 8: **TG0WDT_SYS_RST during
+SUSTAINED FULL-window chunk service** (the TX-heavy service loop), with the
+sampled PC in interrupt/tick WDT machinery (session 8 decoded: `tick_hook`,
+int_wdt.c:111 — the tick-ISR chain where the task-watchdog check lives;
+session-7 crash 1's Core-0 dump was that same chain spinning on the kernel
+portMUX spinlock).
+
+Named axis for round #12: **task-watchdog starvation / loopTask (or kernel)
+block during FULL window service** — what in the `serviceWindowChunk` → E32
+transmit path (AUX polling, UART flush, a kernel lock held across a blocking
+wait, a cache-suspended stretch) can stop feeding TG0 for the WDT period; and
+whether session-7's spinlock wedge and this event are ONE mechanism (a
+lock-holder stall that sometimes corrupts state and sometimes only stalls) or
+two. NOT established: any memory-corruption mechanism (no visible signature
+this session); any application frame (zero in the only resolvable dump address).
+
+The `[MEM]` instrumentation STAYS IN — removal condition unchanged (strip only
+after G-01-10 closes on bench evidence).
