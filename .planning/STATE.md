@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: "Completed 01-22-PLAN.md (G-01-7 base RX half: full-arm deadline IMG_FULL_ARM_DEADLINE_MS 20 s bounds the thumbnail-heal serialization hold; builds 2/2, harness 52/52; G-01-7 closure judged at the 01-24 bench)"
-last_updated: "2026-08-27T15:53:07.143Z"
-state_head: 84f8aea77da55679887d5de77fd48d4a3a5fbbfa
+stopped_at: "Completed 01-23-PLAN.md (round-#9 findings WR-01..WR-05 routed WINDOWS 10-14 and all fixed per option-a; builds 2/2, harness 52/52; ready for the 01-24 bench reflash)"
+last_updated: "2026-08-27T16:09:48.709Z"
+state_head: 3d0aaea891ceaa88b4730231704fab3cb84d2f7d
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 34
-  completed_plans: 31
+  completed_plans: 32
 milestone_name: milestone
 current_phase: 2
 current_phase_name: Command Protocol & Control
@@ -28,7 +28,7 @@ current_phase_name: Command Protocol & Control
 
 ## Current Position
 
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 24
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -130,8 +130,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-27T15:53:06.494Z
-**Stopped at:** Completed 01-22-PLAN.md (G-01-7 base RX half: full-arm deadline IMG_FULL_ARM_DEADLINE_MS 20 s bounds the thumbnail-heal serialization hold; builds 2/2, harness 52/52; G-01-7 closure judged at the 01-24 bench)
+**Last session:** 2026-08-27T16:09:48.226Z
+**Stopped at:** Completed 01-23-PLAN.md (round-#9 findings WR-01..WR-05 routed WINDOWS 10-14 and all fixed per option-a; builds 2/2, harness 52/52; ready for the 01-24 bench reflash)
 **Resume file:** None
 
 ## Performance Metrics
@@ -168,6 +168,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P20 | ~2h across executor + operator bench session #6 (2026-08-27/28, bootloop debug saga included) | 2 tasks | 3 files |
 | Phase 01 P21 | 12min | 3 tasks | 3 files |
 | Phase 01 P22 | 10min | 2 tasks | 2 files |
+| Phase 01 P23 | 12min | 3 tasks | 9 files |
 
 ## Decisions
 
@@ -241,3 +242,7 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: 01-21: the re-announce drop-clock is receipt-informed on two levers — every inbound IMAGE_WINDOW_REQUEST (any kind, any verdict, including unknown/evicted rejects) stamps a channel-liveness clock that holds the idle-slot re-announce for IMG_FULL_REANNOUNCE_BUSY_MS 15 s consuming nothing, and a request MATCHING an ANNOUNCED never-FULL-armed entry re-arms its reannounceAttempts budget with a named log; the 01-17 IMG_FULL_REANNOUNCE_MAX 3 named-drop terminal path survives verbatim (receipt evidence holds the clock, it never deletes the bound)
 - [Phase 2]: 01-21: eviction ranking is by receipt evidence, not airtime — evictionClassOf's ANNOUNCED case returns protected last-resort class 5 when windowEverArmed OR lastWindowRequestMs != 0; class 3 stays 'queued, no airtime invested' for never-requested entries only, and the class-5 eviction label names receipt evidence (session-6 image-24 class dead)
 - [Phase 01]: 01-22: the 01-12 serialization hold is deadline-bounded, not deleted - IMG_FULL_ARM_DEADLINE_MS 20 s (10 s margin inside the balloon's unheld re-announce budget) judged on the FIFO-oldest queued full's manifestArrivedMs (scan hoisted before the hold branch, a pure read); outside the deadline the hold + one-shot log are byte-identical, past it the named deadline-release log falls through to the unchanged activation tail (no new D-21 trigger; the preempted heal defers via gate 1 and finalizes on its D-24 budget) — Session 6 proved the D-24 3-pass bound is looser than the balloon's re-announce clock under a 3-capture burst; arming a FULL window early is the single base-side action that stops the re-announce clock and protects the entry from class-3 eviction, composing with 01-21's balloon-side levers
+- [Phase 2]: 01-23: review round #9's five confirmed warnings routed as WINDOWS 10-14 and ALL FIXED (disposition option-a auto-selected at the Task 2 gate=blocking checkpoint under workflow.auto_advance=true — recorded for end-of-phase operator confirmation); each on the code + builds 2/2 + harness evidence class with the unstageable trigger recorded by name (slot-pressure eviction / two-commands-in-one-drain / truncated RF frame / control-byte SSID / critical battery) — None of the five requires a fabricated bench moment; the two command-path companions' discriminator lines ride the 01-24 reflash
+- [Phase 2]: 01-23: WR-02 is refuse-don't-NACK — the second complete frame in one drain is dropped with the named log 'CommandHandler: second command frame dropped - handler busy (sender will retry)' and the base's existing D-05/D-07 retry re-delivers it as a fresh command; no new protocol surface, 01-15 BUSY-deferral stays scoped to IMAGE_WINDOW_REQUEST — Review's own fix shape plus the plan's prohibition against a NACK_BUSY protocol addition
+- [Phase 2]: 01-23: framer inter-byte resync CMD_FRAME_INTERBYTE_MS 200 (wrap-safe millis subtraction, lastFrameByteMs stamped per byte, both framers) is independent of the 01-18 quiet gate — the gate latches on completed frame types at frame-completion time; diff-proven untouched — A truncated frame resets the parser in 200 ms instead of destroying subsequent frames until a forced CRC failure
+- [Phase 2]: 01-23: jsonEscape contract is strictly RFC-8259-valid output for any 1-32 byte SSID (control bytes as \u00XX, bytes >= 0x80 dropped rather than invalid UTF-8) so /api/state can never freeze the dashboard poll; password never appears in any response (T-03-12 unchanged) — WR-04 is a fabrication-class truth on the trust boundary from arbitrary SSID bytes into operator browsers

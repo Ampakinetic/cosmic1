@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 21/24 plans executed (01-01..01-20 done — round #8 closed G-01-9 + WINDOWS 5/8/9 at bench session #6 and left G-01-7 open-rescoped to burst full-delivery with levers named. Gap-closure round #10 planned 2026-08-28 as 01-21..01-24: balloon receipt-evidence re-announce + eviction ranking, base full-arm deadline, review round #9 WR-01..WR-05 routing + operator-dispositioned companion fixes, bench re-verification session #7 carrying the five-round-riding SC-3 pairs + WR-03 discriminator + CIF/QVGA-restore clauses. Then the security gate)
+**Plans:** 22/24 plans executed (01-01..01-20 done — round #8 closed G-01-9 + WINDOWS 5/8/9 at bench session #6 and left G-01-7 open-rescoped to burst full-delivery with levers named. Gap-closure round #10 planned 2026-08-28 as 01-21..01-24: balloon receipt-evidence re-announce + eviction ranking, base full-arm deadline, review round #9 WR-01..WR-05 routing + operator-dispositioned companion fixes, bench re-verification session #7 carrying the five-round-riding SC-3 pairs + WR-03 discriminator + CIF/QVGA-restore clauses. Then the security gate)
 
 Plans:
 **Wave 1**
@@ -114,7 +114,7 @@ Plans:
 
 - [x] 01-21-PLAN.md — G-01-7 burst full-delivery (balloon half): re-announce drop-clock known-busy hold on inbound window traffic + per-entry receipt re-arm, overflow eviction ranked by receipt evidence (IMG-03, IMG-04, PRI-03)
 - [x] 01-22-PLAN.md — G-01-7 burst full-delivery (base half): full-arm deadline bounds the thumbnail-heal serialization hold — a queued FULL activates within 20 s of manifest arrival (IMG-02, IMG-03, PRI-03)
-- [ ] 01-23-PLAN.md — Review round #9 routing: WR-01..WR-05 as WINDOWS entries 10-14 + operator disposition decision (fix-now vs waive-with-reason) + approved companion fixes (CTRL-06, PRI-02, IMG-05, IMG-06, WEB-05)
+- [x] 01-23-PLAN.md — Review round #9 routing: WR-01..WR-05 as WINDOWS entries 10-14 + operator disposition decision (fix-now vs waive-with-reason) + approved companion fixes (CTRL-06, PRI-02, IMG-05, IMG-06, WEB-05)
 
 **Wave 16** *(blocked on Wave 15)*
 
