@@ -43,6 +43,19 @@ enum class TransferDisplayState : uint8_t {
 
 const char* transferStateToString(TransferDisplayState state);
 
+// G-01-7 burst full-delivery (01-22, base RX half): bound on the 01-12
+// serialization hold. A queued FULL manifest must not wait behind burst
+// thumbnail serialization longer than this before it activates (arms a FULL
+// window on the balloon) — arming is the single base-side action that stops
+// the balloon's re-announce clock (IMG_FULL_REANNOUNCE_IDLE_MS 10000 x
+// IMG_FULL_REANNOUNCE_MAX 3 attempts, image_protocol.h) AND promotes the
+// entry to the protected eviction class (fullWindowEverArmed). 20 s fires
+// with 10 s margin on the unheld re-announce clock, more once 01-21's
+// balloon-side busy-hold extends the balloon's tolerance — the deadline
+// composes with those levers, it does not duplicate them. Outside this bound
+// the heal-before-pull ordering is unchanged (the 01-12 hold stands).
+static constexpr uint32_t IMG_FULL_ARM_DEADLINE_MS = 20000;
+
 // D-20 progress row — every field derives from real chunk-bitmap accounting
 struct TransferRow {
     uint16_t imageId;
@@ -59,6 +72,10 @@ struct TransferRow {
 struct ImageRxTransfer {
     bool used;
     uint32_t arrivalSeq;      // manifest arrival order — FIFO pull order (D-19)
+    uint32_t manifestArrivedMs;   // millis() at FULL-manifest acceptance — the
+                                  // arm-deadline clock (IMG_FULL_ARM_DEADLINE_MS,
+                                  // 01-22); zero on slot reset. Stamped for every
+                                  // manifest; consumed only on the FULL path.
     uint16_t imageId;
     uint8_t  imageKind;       // ImageKind value from the manifest
     uint8_t  captureSource;   // CaptureSource value from the manifest

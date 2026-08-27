@@ -566,6 +566,10 @@ void ImageRxManager::startTransfer(const ImageManifestBody& m) {
 
     t->used = true;
     t->arrivalSeq = nextArrivalSeq++;
+    t->manifestArrivedMs = millis();   // arm-deadline clock (01-22): stamped at
+                                       // manifest acceptance; every slot reset
+                                       // above is a full ImageRxTransfer{}
+                                       // value-init, so the field zeroes with it
     t->imageId = m.imageId;
     t->imageKind = m.imageKind;
     t->captureSource = m.captureSource;
@@ -885,27 +889,12 @@ void ImageRxManager::writeSidecarFor(const ImageRxTransfer& t, bool complete,
 // ===========================
 
 void ImageRxManager::activateNextPull() {
-    // G-01-7 lever 1 (01-12) — serialization hold: while a non-terminal holed
-    // thumbnail whose same-id FULL manifest already arrived exists, full-pull
-    // activation is HELD so the thumbnail completes (push + heal, D-22 single
-    // path) before its full pull starts. This covers the FIFO branch and both
-    // post-finalize advances. The hold reorders priority between two existing
-    // D-21 triggers — the heal loop below needs no change: with activation
-    // held there is no active pull, its gate 1 passes, and the existing
-    // stall-driven heal fires on its own clock. Bounded: the D-24 3-pass
-    // finalization makes a stuck thumbnail terminal, releasing the hold.
-    ImageRxTransfer* held = pendingHealThumbnail();
-    if (held != nullptr) {
-        if (held->imageId != healHoldLoggedId) {
-            Serial.printf("ImageRx: full-pull activation held - thumbnail heal pending for image %u\n",
-                          held->imageId);
-            healHoldLoggedId = held->imageId;
-        }
-        return;   // hold — no full pull activates while the heal is pending
-    }
-
     // FIFO by manifest arrival order (D-19 base side): the earliest queued
-    // full becomes the active pull and issues its first window request
+    // full becomes the active pull and issues its first window request.
+    // G-01-7 burst full-delivery (01-22): the scan runs BEFORE the hold
+    // branch because the hold's arm deadline is judged on the FIFO-oldest
+    // queued full's arrival clock (manifestArrivedMs) — a pure read, so
+    // hoisting it above the hold changes nothing outside the deadline path.
     ImageRxTransfer* best = nullptr;
     for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
         ImageRxTransfer& t = transfers[i];
@@ -915,6 +904,45 @@ void ImageRxManager::activateNextPull() {
             best = &t;
         }
     }
+
+    // G-01-7 lever 1 (01-12) — serialization hold: while a non-terminal holed
+    // thumbnail whose same-id FULL manifest already arrived exists, full-pull
+    // activation is HELD so the thumbnail completes (push + heal, D-22 single
+    // path) before its full pull starts. This covers the FIFO branch and both
+    // post-finalize advances. The hold reorders priority between two existing
+    // D-21 triggers — the heal loop below needs no change: with activation
+    // held there is no active pull, its gate 1 passes, and the existing
+    // stall-driven heal fires on its own clock.
+    // G-01-7 burst full-delivery (01-22) — the hold is now DEADLINE-BOUNDED,
+    // not merely D-24-bounded: session 6 proved the 3-pass bound is looser
+    // than the balloon's re-announce clock under a 3-capture burst (images
+    // 25/26 manifests in hand, activation held behind image 24's failing
+    // thumb heal, every request post-drop). Once the FIFO-oldest queued full
+    // has waited IMG_FULL_ARM_DEADLINE_MS past its manifest arrival, the
+    // deadline releases the hold and the activation tail runs — arming a
+    // FULL window stops the balloon's re-announce clock and protects the
+    // entry from class-3 eviction. The preempted heal then defers via the
+    // heal loop's gate 1 and finalizes honestly on its D-24 3-pass budget
+    // (never an infinite stall). Outside the deadline the hold — including
+    // its one-shot log — is byte-identical to the 01-12 behavior.
+    ImageRxTransfer* held = pendingHealThumbnail();
+    if (held != nullptr) {
+        bool deadlineReached = best != nullptr &&
+            (millis() - best->manifestArrivedMs >= IMG_FULL_ARM_DEADLINE_MS);   // wrap-safe (D-26)
+        if (!deadlineReached) {
+            if (held->imageId != healHoldLoggedId) {
+                Serial.printf("ImageRx: full-pull activation held - thumbnail heal pending for image %u\n",
+                              held->imageId);
+                healHoldLoggedId = held->imageId;
+            }
+            return;   // hold — nothing queued to arm, or the arm deadline
+                      // has not fired; the 01-12 heal-first ordering stands
+        }
+        Serial.printf("ImageRx: full-pull activation deadline reached - activating image %u despite thumbnail heal pending for image %u\n",
+                      best->imageId, held->imageId);
+        // fall through to the activation tail below
+    }
+
     if (best == nullptr) {
         return;
     }
