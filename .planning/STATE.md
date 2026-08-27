@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 1
+current_plan: 2
 status: executing
-stopped_at: Completed 01-19-PLAN.md (CR-04 scoped camera gate + WR-03 manual-capture baseline; WINDOWS entry 8 flips at the 01-20 bench)
-last_updated: "2026-08-27T12:16:28.846Z"
-state_head: 898fcc6c9d237824a420fe2e5b3792f4431c4b40
+stopped_at: "Completed 01-20-PLAN.md (bench session #6 ledger flips: G-01-9 resolved, WINDOWS 5/8/9 fixed; G-01-7 open rescoped to burst full-delivery; SC-3/WR-03 clauses ride the next bench moment; /gsd-secure-phase 1 is the remaining phase-close gate)"
+last_updated: "2026-08-27T13:02:29.976Z"
+state_head: df76ff40731077b6adbee79b60de1297f0164ff1
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 30
   completed_plans: 28
 milestone_name: milestone
-current_phase_name: Command Protocol & Control
 current_phase: 2
+current_phase_name: Command Protocol & Control
 ---
 
 # Project State
@@ -28,9 +28,9 @@ current_phase: 2
 
 ## Current Position
 
-**Current Plan:** 1
+**Current Plan:** 2
 **Total Plans in Phase:** 20
-**Status:** Executing Phase 01
+**Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
 
 ## Progress
@@ -130,8 +130,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-25T11:39:11.158Z
-**Stopped at:** Completed 01-19-PLAN.md (CR-04 scoped camera gate + WR-03 manual-capture baseline; WINDOWS entry 8 flips at the 01-20 bench)
+**Last session:** 2026-08-27T13:02:29.583Z
+**Stopped at:** Completed 01-20-PLAN.md (bench session #6 ledger flips: G-01-9 resolved, WINDOWS 5/8/9 fixed; G-01-7 open rescoped to burst full-delivery; SC-3/WR-03 clauses ride the next bench moment; /gsd-secure-phase 1 is the remaining phase-close gate)
 **Resume file:** None
 
 ## Performance Metrics
@@ -165,6 +165,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P17 | 15min | 3 tasks | 4 files |
 | Phase 01 P18 | 7min | 2 tasks | 2 files |
 | Phase 01 P19 | 7min | 2 tasks | 3 files |
+| Phase 01 P20 | ~2h across executor + operator bench session #6 (2026-08-27/28, bootloop debug saga included) | 2 tasks | 3 files |
 
 ## Decisions
 
@@ -232,3 +233,6 @@ See: `.planning/PROJECT.md`
 - [Phase 01]: 01-18: wrap-don't-rewrite — the quiet gate composes with 01-15 (a held PENDING IMAGE_WINDOW_REQUEST stays non-terminal so windowRequestInFlight extends the D-24 stall clock, no pass charged) and leaves the D-07 backoff block, BUSY-deferral branch, terminal-state guard, ackTimeoutFor, and frame dispatch byte-identical to pre-plan HEAD (diff-hunk-proven)
 - [Phase 01]: 01-19: CR-04 gate scoping, not removal - commandRequiresCamera() classifies exactly CAPTURE_NOW + the seven SET_* sensor classes as camera-touching (NACK_BUSY refusal byte-identical in message/counter/shape); AUTO_CAPTURE_ENABLE/DISABLE, GET_STATUS, IMAGE_WINDOW_REQUEST, SET_EVENT_THRESHOLDS and unknown commands dispatch ungated so a camera-down window never strands announced fulls or blinds the status poll
 - [Phase 01]: 01-19: WR-03 - public AutoCapture::markCaptureBaseline() (lastCaptureTime = millis(), the same field fire() advances) called exactly once in handleCaptureNow success; a failed manual capture leaves the baseline untouched (a failed attempt must not defer the schedule); safe while disabled since the interval branch is gated on enabled and enable() resets the baseline
+- [Phase 2]: 01-20: session-6 verdict honesty — command survivability (quiet gate) and defect-C silent-loss both SOLVED at bench, but series-A verdicts failed 2/6 on a NEW named axis (burst full-delivery: re-announce bound expires during burst thumb serialization; depth-3 queue eviction), so G-01-7 stays open rescoped rather than closing on the solved sub-truths
+- [Phase 2]: 01-20: evidence-class flips held — CR-04 (WINDOWS 8) flipped on code fix + builds + harness with the unstageable camera-down scenario recorded by name (never fabricated); WR-08 (WINDOWS 9) flipped WIRED-but-unexercised (zero chunk TX failures at bench); the log-provenance deviation (balloon11.log carries the session's balloon console after the GPS-pin-35 bootloop saga, fixed 3f2c2c6) is recorded in the ledgers themselves
+- [Phase 2]: 01-20: SC-3 visible-effect pairs left unjudged a FIFTH round (zero settings commands at bench) and the WR-03 cadence discriminator + CIF/QVGA-restore clauses unexercised — all ride the next bench moment rather than being fabricated; Test 3 stays issue
