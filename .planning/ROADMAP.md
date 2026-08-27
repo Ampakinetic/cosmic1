@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 25/27 plans executed through round #10 (01-24 bench session #7 FAILED on the D1 crash regression — balloon hard-crashed twice in series A, nothing flipped; G-01-7 unjudgeable, SC-3/WR-03/CIF/QVGA clauses riding, review 7d96a98 WR-01..03 unrouted). Gap-closure round #11 planned 2026-08-28 as 01-25..01-27: D1 debug round (addr2line root cause + fix + D2 stamp fix), review 7d96a98 routing + dispositioned fixes, bench re-verification session #8 (D1/D2/G-01-7 acceptance + the six-round-riding clauses). Then the security gate
+**Plans:** 26/27 plans executed through round #10 (01-24 bench session #7 FAILED on the D1 crash regression — balloon hard-crashed twice in series A, nothing flipped; G-01-7 unjudgeable, SC-3/WR-03/CIF/QVGA clauses riding, review 7d96a98 WR-01..03 unrouted). Gap-closure round #11 planned 2026-08-28 as 01-25..01-27: D1 debug round (addr2line root cause + fix + D2 stamp fix), review 7d96a98 routing + dispositioned fixes, bench re-verification session #8 (D1/D2/G-01-7 acceptance + the six-round-riding clauses). Then the security gate
 
 Plans:
 **Wave 1**
@@ -130,7 +130,7 @@ Plans:
 
 **Wave 19** *(blocked on Waves 17-18; bench re-verification trailing wave)*
 
-- [ ] 01-27-PLAN.md — Bench re-verification session #8: flash both boards, D1 spaced smoke + series A (zero crash signatures), D2 boot-window discriminator, G-01-7 series-A acceptance, WR-03 cadence discriminator, SC-3 visible-effect pairs (sixth round riding), CIF cycle + QVGA restore, dashboard LOOK glance; G-01-10/G-01-11/G-01-7 + WINDOWS 3/15/16/17-19 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
+- [x] 01-27-PLAN.md — Bench re-verification session #8: flash both boards, D1 spaced smoke + series A (zero crash signatures), D2 boot-window discriminator, G-01-7 series-A acceptance, WR-03 cadence discriminator, SC-3 visible-effect pairs (sixth round riding), CIF cycle + QVGA restore, dashboard LOOK glance; G-01-10/G-01-11/G-01-7 + WINDOWS 3/15/16/17-19 flipped on evidence (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 

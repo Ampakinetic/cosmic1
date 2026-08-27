@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 3
+current_plan: 4
 status: executing
-stopped_at: Completed 01-26-PLAN.md (review 7d96a98 routing + companion fixes; WINDOWS 17-19 fixed; ready for 01-27 bench)
-last_updated: "2026-08-27T21:55:00.507Z"
-state_head: 8041b276b1fbf9ddfa493cb3bfc68dc779d0a8dd
+stopped_at: "Completed 01-27-PLAN.md (bench session #8 FAILED at image 38 FULL TX: D1 re-opened — 01-25 fix disconfirmed, new WDT-starvation axis; D2/G-01-11 closed; debug round #2 next)"
+last_updated: "2026-08-27T22:24:54.472Z"
+state_head: a2a14a7c42eb855f0d6681f17264254c32170223
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 37
-  completed_plans: 35
+  completed_plans: 36
 milestone_name: milestone
 current_phase: 2
 current_phase_name: Command Protocol & Control
@@ -28,7 +28,7 @@ current_phase_name: Command Protocol & Control
 
 ## Current Position
 
-**Current Plan:** 3
+**Current Plan:** 4
 **Total Plans in Phase:** 27
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -134,8 +134,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-27T21:55:00.007Z
-**Stopped at:** Completed 01-26-PLAN.md (review 7d96a98 routing + companion fixes; WINDOWS 17-19 fixed; ready for 01-27 bench)
+**Last session:** 2026-08-27T22:24:54.064Z
+**Stopped at:** Completed 01-27-PLAN.md (bench session #8 FAILED at image 38 FULL TX: D1 re-opened — 01-25 fix disconfirmed, new WDT-starvation axis; D2/G-01-11 closed; debug round #2 next)
 **Resume file:** None
 
 ## Performance Metrics
@@ -176,6 +176,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P24 | 15303s | 2 tasks | 3 files |
 | Phase 01 P25 | 1170 | 3 tasks | 4 files |
 | Phase 01 P26 | 546s | 3 tasks | 5 files |
+| Phase 01 P27 | ~3h across executor pre-flight + operator bench session #8 + continuation closeout | 2 tasks | 4 files |
 
 ## Decisions
 
@@ -259,3 +260,4 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: 01-25 Task 2 auto-selected under auto_advance (01-23 convention): option-a lever + option-b instrumentation ride-along, recorded in debug doc §5 for end-of-phase operator confirmation
 - [Phase 2]: 01-26: review 7d96a98's three confirmed warnings routed (WINDOWS 17-19) and ALL FIXED per option-a auto-selected at the Task 2 gate=blocking checkpoint under auto_advance (01-23 convention) — ps_malloc fall-through keeps the thumbnail under PSRAM exhaustion, the camera health check warns only on a genuinely absent sensor handle (stageable at every 01-27 healthy boot), ackedAtLastPoll uint32 end-to-end; builds 2/2 + harness exit 0; WR-01/WR-03 unstageable triggers recorded by name (entries 8-14 convention)
 - [Phase 2]: 01-26: routing-before-disposition — confirmed findings enter the ledger open-first regardless of the checkpoint outcome, so the unrouted-findings gap's minimum bar never depends on the disposition decision; end-of-phase operator confirmations pending: 01-23 fix-all (entries 10-14) + this round's option-a (entries 17-19)
+- [Phase 2]: 01-25 PSRAM warm-up disconfirmed as the D1 fix — crash recurred at session 8 with healthy [MEM] values (enqueue :611, last sample :1175); new root-cause axis: task-watchdog starvation / loopTask-or-kernel block during SUSTAINED FULL window service (Saved PC 0x40376430 = esp-idf tick_hook vs ELF c53635e181); D2 closed clean at both boots — G-01-11/WINDOWS 16 resolved on the receipt-ever flag's boot-window evidence
