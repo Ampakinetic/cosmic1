@@ -184,6 +184,12 @@ None - documentation-only plan; no code stubs created.
 - WINDOWS ledger: 1 open entry (G-01-7, entry 3) — /gsd-ship stays blocked until the residual round closes it or it is waived with a reason
 - Phase 3 backlog todos captured at 898fcc6 (thumb-first image delivery, antenna-pointing overlay)
 
+## Self-Check: PASSED
+
+- Files exist: 01-20-SUMMARY.md, 01-UAT.md, WINDOWS.md, STATE.md (all FOUND)
+- Commits exist: df76ff4 (Task 2 ledger flips), 4aad921 (plan metadata) (both FOUND)
+- Task 2 automated verify: 6/6 checks exit 0 (UAT/WINDOWS contain session-log citations; STATE contains 01-20; WINDOWS id 8/9 present; open_count 1 == actual open rows)
+
 ---
 *Phase: 01-command-protocol-control*
 *Completed: 2026-08-28*
