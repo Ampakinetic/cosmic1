@@ -704,3 +704,20 @@ Options this feeds Task 2: (a) Lever A only; (b) instrument-only (B1+B2);
 (a)+(b) combined — the 01-25 shape. The evidence supports (a)+(b): a named
 lever exists (the sole non-yielding stretch, in the fatal path) AND the
 mechanism confirmation needs the discriminators (§7.5's limit).
+
+### FIX SHAPE SELECTED (round #12 Task 2 checkpoint record)
+
+Checkpoint Task 2 (fix-shape selection, gate `blocking`) auto-resolved under
+`auto_advance: true` (config.json) per the 01-23/01-25/01-26 convention —
+selection recorded as PENDING end-of-phase operator confirmation (joins the
+three existing pending confirmations). Selected: **option (a)+(b) combined —
+the 01-25 shape.** The evidence that selected it: §7.5 ranks a mechanism whose
+inner structure cannot be observed pre-bench (elimination + blast radius
+only), while §7.3 names exactly one hazard-shaped construct in the fatal path
+(the unbounded no-yield `serial->flush()` drain at e32_lora.cpp:224 — §7.6
+Lever A), and the mechanism confirmation needs the discriminators (§7.6 B1
+boot reset-cause + B2 [LOOP] slow-pass latch) for 01-29 to classify any
+recurrence. Concretely: Lever A (yielding bounded TX-drain, defaulted UART
+port parameter) + discriminators B1/B2, each carrying its named removal
+condition. NO pacing, quiet-gate, wire-format, or WDT-config changes (the
+rejected candidates of §7.6 stand).
