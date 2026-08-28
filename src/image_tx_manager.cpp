@@ -597,6 +597,19 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
             entry.thumbTotalChunks = 0;
             entry.state = fullTransferArmable(entry) ? ImageTxEntryState::ANNOUNCE_FULL
                                                      : ImageTxEntryState::THUMB_PUSHED;
+            // 02.5-02 Task 1: the record carries NO thumbnail (thumbLength 0),
+            // so the thumbnail delivery obligation is vacuous — retire it now,
+            // at persist time with the flags otherwise zero. The boot rescan
+            // then judges such a record purely on the full's bit, and a fully
+            // delivered thumbless capture is never re-announced. A thumbnail
+            // DROPPED at the manifest bound keeps its bit clear: its record
+            // carries a real thumbLength, and a later boot must re-announce it
+            // (the crash-resume value).
+            if (!BalloonSdStoreTx().markDelivered(imageId, ImageKind::THUMBNAIL)) {
+                Serial.printf("SdStore: delivery flag update failed for image %u kind %u\n",
+                              static_cast<unsigned>(imageId),
+                              static_cast<unsigned>(ImageKind::THUMBNAIL));
+            }
         } else {
             entry.state = ImageTxEntryState::PUSH_THUMB_MANIFEST;
         }
@@ -981,6 +994,27 @@ bool ImageTxManager::pushThumbChunk(ImageTxEntry& entry) {
     if (ok) {
         entry.thumbChunkFailStreak = 0;
         entry.nextThumbChunk++;
+        // 02.5-02 Task 1 (STORE-02): the thumbnail DELIVERY moment for a
+        // file-backed entry — this successful transmit was the push's final
+        // chunk (nextThumbChunk just reached thumbTotalChunks), the same
+        // success-gated moment completedThumbState is consulted below. The
+        // META delivery bit persists it, so a later boot's rescan does not
+        // re-announce a delivered thumbnail. Volatile-fallback entries have
+        // no record — they never touch the store. WR-08 symmetry: a final
+        // chunk skipped after the bound takes the else branch and never marks
+        // delivered — bytes never offered are never delivered.
+        if (!entry.volatileFallback &&
+            entry.nextThumbChunk >= entry.thumbTotalChunks) {
+            if (!BalloonSdStoreTx().markDelivered(entry.imageId, ImageKind::THUMBNAIL)) {
+                // Named, non-fatal (T-02.5-07): the wire work finishes; the
+                // consequence — a later boot may re-announce this already-
+                // delivered thumbnail — is benign, the base re-pulls
+                // idempotently.
+                Serial.printf("SdStore: delivery flag update failed for image %u kind %u\n",
+                              static_cast<unsigned>(entry.imageId),
+                              static_cast<unsigned>(ImageKind::THUMBNAIL));
+            }
+        }
     } else {
         entry.thumbChunkFailStreak++;
         if (entry.thumbChunkFailStreak >= IMG_CHUNK_TX_RETRY_MAX) {
@@ -1537,6 +1571,32 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
             entry.windowKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) &&
             static_cast<uint32_t>(entry.windowStart) + entry.windowCount >= entry.fullTotalChunks) {
             entry.state = ImageTxEntryState::SERVED;
+            // 02.5-02 Task 1 (STORE-02): the full-image DELIVERY moment — the
+            // WR-08 guard above precedes it, so a final chunk skipped after
+            // the bound never marks delivered (bytes never offered are never
+            // delivered; finalChunkSkipped keeps the entry at ANNOUNCED).
+            // Persisting the bit here is what lets a later boot's rescan
+            // retire the re-announce obligation for delivered history.
+            // Volatile-fallback entries have no record — they never touch the
+            // store; their bookkeeping stays TTL-only.
+            if (!entry.volatileFallback) {
+                if (BalloonSdStoreTx().markDelivered(entry.imageId, ImageKind::FULL_IMAGE)) {
+                    // RAM-slot release: with the full delivery moment provably
+                    // persisted (the thumbnail moment ran at push completion,
+                    // which precedes full service by construction), the
+                    // entry's index duty ends — the RAM index holds only
+                    // undelivered work. The card files remain (keep-everything
+                    // archive). A failed flag write above keeps the entry for
+                    // the TTL sweep instead.
+                    Serial.printf("SdStore: image %u fully delivered - RAM index slot released (files kept on card)\n",
+                                  static_cast<unsigned>(entry.imageId));
+                    freeEntry(entry);
+                } else {
+                    Serial.printf("SdStore: delivery flag update failed for image %u kind %u\n",
+                                  static_cast<unsigned>(entry.imageId),
+                                  static_cast<unsigned>(ImageKind::FULL_IMAGE));
+                }
+            }
         }
     }
     return ok;

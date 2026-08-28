@@ -72,8 +72,11 @@ static constexpr uint32_t SD_STORE_MIN_FREE_BYTES = 65536;
 
 // Per-image delivery bits in BalloonCaptureRecord::flags (written in place
 // by markDelivered — plan 02.5-02's boot rescan consumes them). Zero at
-// capture time.
-static constexpr uint8_t SD_ST_DELIV_THUMB = 0x01;   // thumbnail push provably completed
+// capture time. SD_ST_DELIV_THUMB is set either by a completed thumbnail
+// push OR at persist time when the record carries no thumbnail at all
+// (thumbLength 0 — the delivery obligation is vacuous, retired immediately),
+// so the boot rescan judges such a record purely on the full's bit.
+static constexpr uint8_t SD_ST_DELIV_THUMB = 0x01;   // thumbnail push provably completed (or no thumbnail owed)
 static constexpr uint8_t SD_ST_DELIV_FULL  = 0x02;   // full window service provably completed
 
 // Outcome of persistCapture — branched on by ImageTxManager::enqueueCapture:
