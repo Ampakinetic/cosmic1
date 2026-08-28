@@ -10,6 +10,7 @@
 |---|-------|------|--------------|--------|
 | 1 | Command Protocol & Control | Establish bidirectional LoRa communication for camera control | CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02 | Pending |
 | 2 | Image Transmission | Transfer images from balloon to base station over LoRa with thumbnails | IMG-01, IMG-02, IMG-03, IMG-04, IMG-05, CTRL-05, PRI-01, PRI-03 | Pending |
+| 2.5 | Balloon SD-Card File-Based Image Store | File-backed balloon image pipeline on FAT32 SD (SDMMC 1-bit, mirroring the base) | IMG-01, IMG-03, IMG-04, PRI-03, STORE-01, STORE-02, STORE-03, STORE-04 | Pending |
 | 3 | Enhanced Web Interface | Full base station control panel with telemetry, maps, and gallery | WEB-01, WEB-02, WEB-03, WEB-04, WEB-05, IMG-06, ALRT-01, ALRT-02, ALRT-03, ALRT-04, ALRT-05, ALRT-06 | Pending |
 
 ## Phase Details
@@ -205,6 +206,41 @@ Plans:
 **Wave 4** *(blocked on Wave 3 completion)*
 
 - [x] 02-05-PLAN.md — Gap closure (02-VERIFICATION.md): kind-addressable window requests + thumbnail heal (Gap 2/D-22), bounded push/window interleaving + completion-aware eviction (Gap 1/D-19/D-24), passCount reset on progress + slot-pressure full reset (Gaps 1/3/D-20), kind-suffixed sidecars IMG_{id}_T.JSON (Gap 4/D-30) (IMG-02, IMG-03, IMG-04, IMG-05, PRI-01, PRI-03)
+
+### Phase 2.5: Balloon SD-Card File-Based Image Store
+
+**Goal:** Re-architect the balloon image pipeline around a FAT32 SD-card file store (SDMMC 1-bit, mirroring the base station's sd_storage pattern) — capture persists to file before manifest, window service reads chunks from the file, undelivered images survive reboot
+
+**Mode:** mvp
+
+**Requirements:**
+
+- IMG-01: Captured images transmitted from balloon to base station over LoRa (file-backed)
+- IMG-03: Full resolution images transfer in background after thumbnail (file-backed)
+- IMG-04: Images chunked into packets for reliable LoRa transmission (chunk reads from file)
+- PRI-03: System gracefully handles LoRa bandwidth limitations
+- STORE-01: Captured images persisted to the balloon's FAT32 SD card before any transfer manifest is sent
+- STORE-02: Undelivered images survive reboot/power-loss — boot-time index rescan re-announces and resumes transfer of files already on the card
+- STORE-03: Chunk data is served from the SD file; the volatile PSRAM queue exists only as an honestly-labeled fallback when the SD write fails
+- STORE-04: A full card refuses new captures with an honest error while telemetry and commands continue unaffected
+
+**Success Criteria:**
+
+1. CAPTURE_NOW writes thumbnail + full JPEG to /images (FAT32, SDMMC 1-bit CLK=39/CMD=38/D0=40 @ SDMMC_FREQ_DEFAULT) before the manifest goes out
+2. Window service reads chunk bytes from the file on card; no image payload held in RAM (volatile fallback only on SD-write failure, honestly labeled)
+3. Reboot mid-transfer resumes: boot rescan re-announces the undelivered file and the base completes it — no re-capture needed
+4. Card-full refuses capture with an honest error; beacons/telemetry continue
+5. LoRa wire protocol and base station firmware unchanged (base gallery/sd_storage untouched)
+6. Bench session #12: series A end-to-end on the file-backed path, crash-resume demonstrated, riding clauses (SC-3 pairs, WR-03 cadence, QVGA restore)
+
+**Deliverables:**
+
+- Balloon SD store module (mirrors src/sd_storage.cpp: SD_MMC.setPins + begin("/sdcard", true, false, SDMMC_FREQ_DEFAULT))
+- File-backed image TX service (boot-time index rebuild, chunk reads from file, keep-everything retention, manual clear command)
+- SD-write-failure volatile fallback with honest labeling
+- Bench re-verification session #12
+
+**Plans:** (none yet — planned 2026-08-29)
 
 ### Phase 3: Enhanced Web Interface
 

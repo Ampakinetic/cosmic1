@@ -49,6 +49,13 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 - [x] **ALRT-05**: System provides ascent rate warnings
 - [x] **ALRT-06**: System provides signal quality monitoring
 
+### Image Storage (Phase 2.5)
+
+- [ ] **STORE-01**: Captured images are persisted to the balloon's FAT32 SD card (SDMMC 1-bit) as files before any transfer manifest is sent
+- [ ] **STORE-02**: Undelivered images survive reboot/power-loss — boot-time index rescan re-announces and resumes transfer of files already on the card
+- [ ] **STORE-03**: Image transfer serves chunk data from the SD file; the volatile PSRAM queue exists only as an honestly-labeled fallback when the SD write fails
+- [ ] **STORE-04**: A full card refuses new captures with an honest error while telemetry and commands continue unaffected
+
 ## v2 Requirements
 
 Deferred to future release. Tracked but not in current roadmap.
@@ -105,6 +112,10 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ALRT-04 | Phase 3 | Complete |
 | ALRT-05 | Phase 3 | Complete |
 | ALRT-06 | Phase 3 | Complete |
+| STORE-01 | Phase 2.5 | Pending |
+| STORE-02 | Phase 2.5 | Pending |
+| STORE-03 | Phase 2.5 | Pending |
+| STORE-04 | Phase 2.5 | Pending |
 
 **Coverage:**
 
