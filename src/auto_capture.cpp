@@ -2,6 +2,7 @@
 #include "sensor_manager.h"   // Sensors() — GPS feed for the delta triggers
 #include "system_state.h"     // SysState() — flight-phase machine
 #include "image_protocol.h"   // CaptureSource values for source stamping
+#include "sd_store_balloon.h" // BalloonSdStoreTx() — the STORE-04 card-full capture gate (plan 02.5-03)
 #include <TinyGPSPlus.h>      // distanceBetween static helper (research A2)
 #include <Preferences.h>      // NVS — durable image-ID sequence (01-11, G-01-6)
 
@@ -278,13 +279,28 @@ bool AutoCapture::fire(uint8_t captureSource) {
         return false;
     }
 
+    // Baseline updates BEFORE the attempt (T-01-09): a failed capture does
+    // not reset the baseline early, preventing a tight failure loop. The
+    // advance sits ahead of the card-full gate below so a full card inherits
+    // the SAME pacing — the next interval tick is the retry; no retry/backoff
+    // machinery exists or is needed.
+    lastCaptureTime = millis();
+
+    // STORE-04 card-full gate (plan 02.5-03): skip BEFORE any camera work
+    // when the flight archive lacks headroom. Worst-case reservation — a
+    // refusal on estimate is honest (persistCapture's identical gate remains
+    // the binding one). No image id is allocated, no source is stamped, no
+    // camera/air resources are spent on a capture that cannot persist.
+    if (!BalloonSdStoreTx().hasHeadroomFor(SD_STORE_CAPTURE_ESTIMATE_FULL,
+                                           SD_STORE_CAPTURE_ESTIMATE_THUMB)) {
+        Serial.printf("AutoCapture: capture skipped - card full (image id %u not taken)\n",
+                      static_cast<unsigned>(static_cast<uint16_t>(lastImageId + 1)));
+        return false;
+    }
+
     // D-30: stamp the true trigger BEFORE capturing so the manifest and
     // sidecar carry it (ImageTx reads getLastCaptureSource at enqueue)
     camera->setLastCaptureSource(captureSource);
-
-    // Baseline updates BEFORE the attempt (T-01-09): a failed capture does
-    // not reset the baseline early, preventing a tight failure loop
-    lastCaptureTime = millis();
 
     if (camera->captureImage()) {
         lastImageId = allocateImageId();

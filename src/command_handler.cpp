@@ -1,6 +1,7 @@
 #include "command_handler.h"
 #include "auto_capture.h"
 #include "image_tx_manager.h"
+#include "sd_store_balloon.h"   // BalloonSdStoreTx() — the STORE-04 card-full capture gate (plan 02.5-03)
 
 // Debug configuration
 #ifndef DEBUG_COMMAND_HANDLER
@@ -239,6 +240,28 @@ CommandResult CommandHandler::handleCaptureNow(const CommandPacket& cmd) {
 
     if (DEBUG_COMMAND_HANDLER) {
         Serial.println("CommandHandler: CAPTURE_NOW");
+    }
+
+    // STORE-04 card-full gate (plan 02.5-03): refuse BEFORE any camera work
+    // when the flight archive lacks headroom — spend no camera/air resources
+    // on a capture that cannot persist. The store is a CommandHandler-adjacent
+    // dependency the same way Camera() is (the BalloonSdStoreTx accessor).
+    // The EXISTING NACK_BUSY class answers — the wire is frozen and
+    // NACK_BUSY already means "cannot now" (no new response type); the base's
+    // D-05/D-07 machinery books the failure, and this named line is the
+    // balloon-side truth. Worst-case reservation: a refusal on estimate is
+    // honest (persistCapture's identical gate remains the binding check).
+    // Ordering: the camera-ready gate in executeCommand runs first (unknown/
+    // cancelled commands behave identically); this is a sibling precondition,
+    // not a replacement.
+    if (!BalloonSdStoreTx().hasHeadroomFor(SD_STORE_CAPTURE_ESTIMATE_FULL,
+                                           SD_STORE_CAPTURE_ESTIMATE_THUMB)) {
+        result.success = false;
+        result.responseType = ResponseType::NACK_BUSY;
+        strncpy(result.message, "Capture refused - card full", sizeof(result.message) - 1);
+        commandsFailed++;
+        Serial.println("CommandHandler: capture refused - card full (keep-everything archive; manual clear via SDCLEAR CONFIRM)");
+        return result;
     }
 
     // Stamp the manual capture source BEFORE capturing so the enqueued image

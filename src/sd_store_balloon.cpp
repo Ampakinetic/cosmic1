@@ -104,6 +104,39 @@ void BalloonSdStore::metaPath(char* out, size_t cap, uint16_t imageId) {
 }
 
 // ===========================
+// Free-Space Gate (plan 02.5-03, STORE-04)
+// ===========================
+
+// The SHARED free-space arithmetic — one implementation for the pre-capture
+// gates (CommandHandler/AutoCapture via hasHeadroomFor) and persistCapture's
+// Step-1 pre-check, so the two layers can never drift. Required = the
+// capture's own bytes + both commit records + SD_STORE_MIN_FREE_BYTES
+// headroom (the headroom keeps card-full a stable verdict instead of a
+// one-byte-from-the-edge flapper).
+static uint64_t requiredSpaceFor(uint32_t fullLen, uint32_t thumbLen) {
+    return static_cast<uint64_t>(fullLen) + static_cast<uint64_t>(thumbLen)
+           + (2ULL * sizeof(BalloonCaptureRecord))
+           + static_cast<uint64_t>(SD_STORE_MIN_FREE_BYTES);
+}
+
+// One volume query per capture attempt (T-02.5-09): totalBytes/usedBytes are
+// 64-bit; the comparison stays 64-bit. Never called inside the per-chunk
+// loop (PRI-03 pacing untouched).
+static uint64_t cardFreeBytes() {
+    return SD_MMC.totalBytes() - SD_MMC.usedBytes();
+}
+
+bool BalloonSdStore::hasHeadroomFor(uint32_t fullLen, uint32_t thumbLen) const {
+    // Not mounted = the honest card-full-adjacent refusal for the gates
+    // (the true cause stays visible in the boot log's mount verdict and
+    // getStatus()); the gate never mutates state — it is a pure query.
+    if (!available || status.initFailed) {
+        return false;
+    }
+    return cardFreeBytes() >= requiredSpaceFor(fullLen, thumbLen);
+}
+
+// ===========================
 // Persist (commit-ordered capture write)
 // ===========================
 
@@ -139,20 +172,19 @@ PersistOutcome BalloonSdStore::persistCapture(uint16_t imageId,
         return PersistOutcome::IO_ERROR;
     }
 
-    // Step 1 — free-space pre-check BEFORE any write (T-02.5-03): a CARD_FULL
-    // refusal leaves zero partial files. Required = the capture's own bytes
-    // + both commit records + SD_STORE_MIN_FREE_BYTES headroom (the headroom
-    // keeps card-full a stable verdict instead of a one-byte-from-the-edge
-    // flapper). totalBytes/usedBytes are 64-bit — the comparison stays 64-bit.
-    const uint64_t required = static_cast<uint64_t>(fullLen) + static_cast<uint64_t>(thumbLen)
-                              + (2ULL * sizeof(BalloonCaptureRecord))
-                              + static_cast<uint64_t>(SD_STORE_MIN_FREE_BYTES);
-    const uint64_t freeBytes = SD_MMC.totalBytes() - SD_MMC.usedBytes();
-    if (freeBytes < required) {
+    // Step 1 — free-space pre-check BEFORE any write (T-02.5-03), via the
+    // SHARED gate: hasHeadroomFor is the SAME implementation the
+    // CommandHandler and AutoCapture pre-capture gates call, so the gate
+    // layer and this persist-time race backstop cannot drift. A CARD_FULL
+    // refusal leaves zero partial files. (Reaching here implies mounted —
+    // the !available IO_ERROR branch above already returned — so a gate
+    // false is genuinely the space verdict.)
+    if (!hasHeadroomFor(fullLen, thumbLen)) {
         status.cardFull = true;
         Serial.printf("SdStore: card full - image %u persist refused (%llu B free < %llu B required)\n",
                       static_cast<unsigned>(imageId),
-                      (unsigned long long)freeBytes, (unsigned long long)required);
+                      (unsigned long long)cardFreeBytes(),
+                      (unsigned long long)requiredSpaceFor(fullLen, thumbLen));
         return PersistOutcome::CARD_FULL;
     }
 

@@ -70,6 +70,18 @@ static constexpr uint16_t SD_STORE_META_MAGIC = 0x4D31;
 // stable, honest state, not a one-byte-from-the-edge flapper).
 static constexpr uint32_t SD_STORE_MIN_FREE_BYTES = 65536;
 
+// Worst-case capture reservation for the pre-capture card-full gates
+// (plan 02.5-03, STORE-04): the full image's wire cap (IMG_MAX_IMAGE_SIZE,
+// image_protocol.h) plus the thumbnail cap (camera_manager.cpp
+// THUMB_MAX_BYTES 8192 — the createThumbnail bound, mirrored here so both
+// gate call sites share one value; this header is the only shared surface
+// the balloon env's gate callers need). A refusal on estimate is honest —
+// the gate spends no camera/air resources on a capture that cannot persist;
+// persistCapture's identical gate remains the binding check.
+static constexpr uint32_t SD_STORE_CAPTURE_ESTIMATE_FULL =
+    IMG_MAX_IMAGE_SIZE;
+static constexpr uint32_t SD_STORE_CAPTURE_ESTIMATE_THUMB = 8192;
+
 // Per-image delivery bits in BalloonCaptureRecord::flags (written in place
 // by markDelivered — plan 02.5-02's boot rescan consumes them). Zero at
 // capture time. SD_ST_DELIV_THUMB is set either by a completed thumbnail
@@ -188,6 +200,27 @@ public:
     // is independent of write health, mirroring the base's WR-05 lesson.
     bool isAvailable() const { return available; }
     BalloonSdStoreStatus getStatus() const { return status; }
+
+    // Pre-capture free-space gate (plan 02.5-03, STORE-04): true when the
+    // card can hold a capture of the given full/thumb byte sizes PLUS both
+    // META commit records PLUS the SD_STORE_MIN_FREE_BYTES headroom — the
+    // same arithmetic persistCapture's Step-1 pre-check uses (one shared
+    // implementation, so the pre-capture gates and the persist-time race
+    // backstop can never drift). A pure volume query — ONE totalBytes/
+    // usedBytes read per capture attempt (T-02.5-09), never inside the
+    // per-chunk loop (PRI-03 pacing untouched), and the loop never blocks
+    // on the card.
+    // Returns FALSE also when the store is not mounted: an absent card is
+    // the honest card-full-adjacent refusal for the capture gates (the true
+    // cause stays visible in the boot log's mount verdict and status).
+    // Consumers: CommandHandler::handleCaptureNow (refuses CAPTURE_NOW via
+    // the EXISTING NACK_BUSY class, before any camera work) and
+    // AutoCapture::fire (skips with a named log; the baseline-before-
+    // attempt idiom paces the retry). GET_STATUS, IMAGE_WINDOW_REQUEST,
+    // SET_* and the beacon path never call this — window service of
+    // already-stored images continues on a full card (that is the point of
+    // the archive).
+    bool hasHeadroomFor(uint32_t fullLen, uint32_t thumbLen) const;
 
     // Persist one capture to the flight archive, in commit order:
     //   1. free-space pre-check (BEFORE any write — a CARD_FULL refusal
