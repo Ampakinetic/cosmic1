@@ -169,7 +169,20 @@ bool ImageTxManager::begin(E32LoRa* lora) {
     // evidence.
     Serial.printf("ImageTx: [TWDT] idle0 wdt status=%s (G-01-10)\n",
                   esp_err_to_name(
-                      esp_task_wdt_status(xTaskGetIdleTaskHandle())));
+                      esp_task_wdt_status(xTaskGetIdleTaskHandleForCPU(0))));
+    // ROUND-#14 HANDLE FIX (01-32) per .planning/debug/
+    // d1-crash-regression-push-start.md §10.5 item 2: the round-#13 call
+    // used the core-ambiguous xTaskGetIdleTaskHandle() from CPU1 setup()
+    // context — it returned IDLE1's handle at the session-10 boots, whose
+    // ESP_ERR_NOT_FOUND is exactly what config predicts for the UNsubscribed
+    // CPU1 idle task (sdkconfig CHECK_IDLE_TASK_CPU1 not set) — the
+    // wrong-handle instrument bug reading (a). The explicit ForCPU(0) call
+    // samples IDLE0, whose configured subscription makes ESP_OK the
+    // expected 01-34 reading. Declaration site on the pinned framework
+    // (pioarduino arduino-esp32 3.3.9): freertos/idf_additions.h:645 — a
+    // deprecated inline forwarding to xTaskGetIdleTaskHandleForCore(:144);
+    // not in task.h. Log format, esp_err_to_name rendering, the comment
+    // above, and the instrument's removal condition above all unchanged.
 
     if (DEBUG_IMAGE_TX) {
         Serial.println("ImageTx: Initialized");

@@ -46,6 +46,7 @@
 #include <esp_freertos_hooks.h>  // [IDLE0] idle-hook registration
 #include <esp32-hal-i2c.h>       // [I2C] i2cBusHandle(0)
 #include <driver/i2c_master.h>   // [I2C] i2c_master_probe
+#include <freertos/task.h>       // [STACK] uxTaskGetStackHighWaterMark
 
 // Forward declarations for missing types
 struct PowerData {
@@ -135,8 +136,31 @@ static AppState appState;
 // freezing. G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2
 // instrumentation after G-01-10 closes on bench evidence.
 static volatile uint32_t s_idle0TickCount = 0;
+
+// G-01-10 round #14 instrument [STACK] (01-32) per
+// .planning/debug/d1-crash-regression-push-start.md §10.5 item 1: IDLE0
+// stack-margin watch — the round's designed one-session discriminator for
+// the labeled stack-capacity hypothesis (§10.5: IDLE-stack breach under IRQ
+// pressure during heavy TX vs the scheduler/tick wedge). The hook executes
+// in IDLE0's context, so uxTaskGetStackHighWaterMark(NULL) samples IDLE0 —
+// the stack [MEM] does not monitor (loopTask stackHW stayed 5772 through
+// the session-10 canary). Throttled INSIDE the hook to every 1024 idle
+// ticks ((count & 0x3FF) == 0, ~1 s of IDLE0-run time at the 1000 Hz tick)
+// into a running minimum; 0 = no sample yet (the first sample sets it).
+// The print is new-low-latched from the loopTask 1 Hz block below — NEVER
+// from the hook and never per-sample: the [MEM] convention that keeps the
+// instrument from perturbing the timing it measures. G-01-10;
+// REMOVAL CONDITION: strips WITH the [MEM]/B1/B2 instrumentation after
+// G-01-10 closes on bench evidence.
+static volatile UBaseType_t s_idle0StackMinWords = 0;
 static bool idle0TickHook(void) {
     s_idle0TickCount++;
+    if ((s_idle0TickCount & 0x3FF) == 0) {
+        UBaseType_t idle0Watermark = uxTaskGetStackHighWaterMark(NULL);
+        if ((s_idle0StackMinWords == 0) || (idle0Watermark < s_idle0StackMinWords)) {
+            s_idle0StackMinWords = idle0Watermark;
+        }
+    }
     return true;
 }
 
@@ -233,8 +257,28 @@ void setup() {
     // CPU0 idle hook BEFORE subsystem init so boot-time starvation is
     // observable too. Prints its own registration line so the 01-31 log
     // proves the instrument was live in the session it is read from.
-    bool idle0HookOk = esp_register_freertos_idle_hook_for_cpu(idle0TickHook, 0);
-    Serial0.printf("[IDLE0] hook cpu0 registered=%d (G-01-10)\n", idle0HookOk ? 1 : 0);
+    // ROUND-#14 PRINTF FIX (01-32) per .planning/debug/
+    // d1-crash-regression-push-start.md §10.5 item 2: the round-#13 line
+    // assigned the esp_err_t return to bool — esp_freertos_hooks.h:44
+    // returns ESP_OK(=0) on SUCCESS, so a SUCCESSFUL registration printed
+    // registered=0 at both session-10 boots. The result is now captured as
+    // esp_err_t and compared against ESP_OK: success reads registered=1, a
+    // genuine failure reads registered=0 — distinguishable on the console.
+    // G01_D1_IDLE_HOOK_DISABLED (§10.5 item 4, the A/B guard): building the
+    // esp32-s3-balloon env with -DG01_D1_IDLE_HOOK_DISABLED=1 produces the
+    // A/B image with the hook UNREGISTERED (the hook body stays compiled
+    // either way) to rule the round-#13 hook dispatch in or out of the
+    // fault family; the DISABLED image prints its own marker line so the
+    // two arms are distinguishable on the console. Default build (macro
+    // undefined) is behavior-identical to round #13. G-01-10;
+    // REMOVAL CONDITION: strips WITH the [MEM]/B1/B2 instrumentation after
+    // G-01-10 closes on bench evidence.
+#ifndef G01_D1_IDLE_HOOK_DISABLED
+    esp_err_t idle0HookErr = esp_register_freertos_idle_hook_for_cpu(idle0TickHook, 0);
+    Serial0.printf("[IDLE0] hook cpu0 registered=%d (G-01-10)\n", idle0HookErr == ESP_OK ? 1 : 0);
+#else
+    Serial0.printf("[IDLE0] hook cpu0 DISABLED for A/B (G-01-10)\n");
+#endif
     
     // Initialize hardware
     Serial.println("Initializing hardware...");
@@ -366,6 +410,26 @@ void loop() {
                 idle0FrozenLogged = false;
             }
             lastIdle0SampleMs = millis();
+        }
+
+        // G-01-10 round #14 instrument [STACK] (01-32) per
+        // .planning/debug/d1-crash-regression-push-start.md §10.5 item 1:
+        // the watermark's new-low print (loopTask side — the sample lives
+        // in the hook, throttled into s_idle0StackMinWords above). Prints
+        // ONLY when the running minimum improves; the first print is the
+        // boot baseline. Predicted signatures (§10.5, recorded in §11
+        // before the bench reads them): stack-capacity hypothesis → new
+        // lows accelerating toward 0 words under heavy TX ahead of a canary
+        // panic; wedge hypothesis → a healthy constant margin at the crash
+        // instant. G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2
+        // instrumentation after G-01-10 closes on bench evidence.
+        static UBaseType_t idle0StackLastPrintedWords = 0;
+        if (s_idle0StackMinWords != 0 &&
+            (idle0StackLastPrintedWords == 0 ||
+             s_idle0StackMinWords < idle0StackLastPrintedWords)) {
+            idle0StackLastPrintedWords = s_idle0StackMinWords;
+            Serial0.printf("[IDLE0] stack watermark %u words free (new low, t=%lu ms) (G-01-10)\n",
+                           (unsigned)s_idle0StackMinWords, (unsigned long)millis());
         }
         BalloonOledStatus oled{};
         oled.e32Ready = E32LoRaModule().isReady();
