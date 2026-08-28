@@ -176,6 +176,68 @@ static bool idle0TickHook(void) {
 }
 
 // ===========================
+// Serial Console (plan 02.5-03 — SDCLEAR manual archive clear)
+// ===========================
+
+// The operator channel for the keep-everything archive's ONLY deletion
+// surface: the serial console (Serial0, the UART0 bridge alias under the
+// CDC-off bench build). The LoRa wire carries no delete command — protocol
+// frozen, locked decision 5; consoles are already monitored at bench.
+
+static char s_serialLine[32];   // bounded line buffer (plan: 32 bytes)
+static uint8_t s_serialLen = 0;
+static bool s_serialOverflow = false;
+
+// Exact vocabulary (plan 02.5-03): "SDCLEAR CONFIRM" clears the flight
+// archive; "SDCLEAR" alone (or any other argument after it) prints the
+// usage line; ANYTHING ELSE falls through untouched — the console also
+// carries boot diagnostics and instrument lines, and unknown typed lines
+// are operator noise the firmware stays silent about.
+static void handleSerialLine(const char* line) {
+    if (strcmp(line, "SDCLEAR CONFIRM") == 0) {
+        // Runs synchronously in this loop pass — a card with thousands of
+        // files takes a few hundred ms of deletes (acceptable at bench
+        // cadence; the usage note tells the operator to clear BEFORE a
+        // long session, not mid-transfer). The token IS the confirmation:
+        // no timeout machinery, no NVS state.
+        const uint16_t removed = BalloonSdStoreTx().clearAllImages(SD_STORE_CONFIRM_TOKEN);
+        (void)removed;   // per-file lines + summary already logged by the module
+    } else if (strncmp(line, "SDCLEAR", 7) == 0 &&
+               (line[7] == '\0' || line[7] == ' ')) {
+        Serial0.println("SdStore: manual clear requires: SDCLEAR CONFIRM");
+        Serial0.println("SdStore: note - the clear runs synchronously (a few hundred ms on a full card); clear BEFORE a long session, not mid-transfer");
+    }
+    // anything else: falls through untouched
+}
+
+// Non-blocking per-pass console poll: Serial0.available() drained one char
+// at a time into the bounded line buffer, processed on newline. NEVER
+// Serial.readString* — those block the single-threaded loop (WR-09
+// no-blocking discipline). An over-long line is discarded whole with one
+// named line (never truncated into a bogus command).
+static void processSerialConsole() {
+    while (Serial0.available() > 0) {
+        const char c = static_cast<char>(Serial0.read());
+        if (c == '\n' || c == '\r') {
+            if (s_serialOverflow) {
+                Serial0.println("SdStore: console line too long - discarded");
+                s_serialOverflow = false;
+            } else if (s_serialLen > 0) {
+                s_serialLine[s_serialLen] = '\0';
+                handleSerialLine(s_serialLine);
+            }
+            s_serialLen = 0;
+            continue;
+        }
+        if (s_serialLen < sizeof(s_serialLine) - 1) {
+            s_serialLine[s_serialLen++] = c;
+        } else {
+            s_serialOverflow = true;
+        }
+    }
+}
+
+// ===========================
 // Function Declarations
 // ===========================
 
@@ -367,6 +429,11 @@ void loop() {
     processCommunications();
     processPowerManagement();
     processPacketHandling();
+
+    // Operator serial console (plan 02.5-03): non-blocking poll for the
+    // SDCLEAR manual archive clear — slots beside processPacketHandling()
+    // in the loop pass
+    processSerialConsole();
 
     // Send periodic data
     if (shouldSendTelemetry()) {

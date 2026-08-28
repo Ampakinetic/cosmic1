@@ -575,3 +575,72 @@ uint8_t BalloonSdStore::bootRescan(BalloonResumedRecord* out, uint8_t cap) {
     }
     return count;
 }
+
+// ===========================
+// Manual Archive Clear (plan 02.5-03, T-02.5-08)
+// ===========================
+
+// The T-02.5-08 confirmation vocabulary as a named predicate — the single
+// point where the manual-clear token is judged: any argument other than the
+// literal SD_STORE_CONFIRM_TOKEN deletes nothing (a stray line or typo is
+// inert; the token IS the confirmation — no timeout machinery, no NVS
+// state).
+static bool clearAllImagesTokenMatches(const char* confirmToken) {
+    return confirmToken != nullptr && strcmp(confirmToken, SD_STORE_CONFIRM_TOKEN) == 0;
+}
+
+uint16_t BalloonSdStore::clearAllImages(const char* confirmToken) {
+    if (!clearAllImagesTokenMatches(confirmToken)) {
+        Serial.println("SdStore: manual clear requires: SDCLEAR CONFIRM");
+        return 0;
+    }
+    if (!available || status.initFailed) {
+        Serial.println("SdStore: manual clear skipped - no card mounted");
+        return 0;
+    }
+
+    File dir = SD_MMC.open(SD_STORE_DIR);
+    if (!dir || !dir.isDirectory()) {
+        Serial.println("SdStore: manual clear - /images open failed; nothing removed");
+        return 0;
+    }
+
+    // The ONLY card-deletion call in the balloon firmware (keep-everything
+    // retention invariant, pinned by the plan's counted grep): every file
+    // inside /images is removed, the directory itself is KEPT. Names are
+    // copied out before close (f.name() is valid only while open); a name
+    // that cannot fit the bounded path buffer is skipped with a named line
+    // rather than silently truncated into a wrong-path remove.
+    uint16_t removed = 0;
+    File f;
+    while ((f = dir.openNextFile())) {
+        if (f.isDirectory()) {
+            f.close();
+            continue;
+        }
+        const char* base = f.name();
+        const char* slash = strrchr(base, '/');
+        if (slash) {
+            base = slash + 1;
+        }
+        char path[48];
+        if (strlen(base) + strlen(SD_STORE_DIR) + 2 > sizeof(path)) {
+            Serial.printf("SdStore: clear skipped for over-long name (kept on card)\n");
+            f.close();
+            continue;
+        }
+        snprintf(path, sizeof(path), "%s/%s", SD_STORE_DIR, base);
+        f.close();
+        if (SD_MMC.remove(path)) {
+            removed++;
+            Serial.printf("SdStore: cleared %s\n", path);
+        } else {
+            Serial.printf("SdStore: clear FAILED for %s (kept on card)\n", path);
+        }
+    }
+    dir.close();
+
+    Serial.printf("SdStore: manual clear removed %u file(s)\n",
+                  static_cast<unsigned>(removed));
+    return removed;
+}

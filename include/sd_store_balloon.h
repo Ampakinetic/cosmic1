@@ -59,6 +59,12 @@ static constexpr uint8_t SD_STORE_DATA_PIN = 40;
 // convention; mkdir is idempotent on FAT)
 static constexpr const char* SD_STORE_DIR = "/images";
 
+// The literal confirmation token the manual serial clear requires (plan
+// 02.5-03, T-02.5-08): two-token vocabulary (SDCLEAR + CONFIRM) — a stray
+// line or typo deletes nothing; the token IS the confirmation (no timeout
+// machinery, no NVS state).
+static constexpr const char* SD_STORE_CONFIRM_TOKEN = "CONFIRM";
+
 // META commit-record magic ("M1"). Validated on EVERY record read — a
 // torn/hostile record is skipped, never zero-filled into a trusted entry
 // (T-02.5-01).
@@ -280,6 +286,24 @@ public:
     // never transferable state. Boot-time only — never called per loop pass.
     // Returns the number of records written to out[].
     uint8_t bootRescan(BalloonResumedRecord* out, uint8_t cap);
+
+    // Manual archive clear (plan 02.5-03) — the keep-everything flight
+    // archive's ONLY deletion surface (operator decision D-02: nothing
+    // auto-deletes). Deletes every file inside SD_STORE_DIR (JPG, _T.JPG,
+    // META) via SD_MMC.remove on each walked entry, KEEPING the directory
+    // itself, and returns the count removed.
+    // Deletion executes ONLY when confirmToken matches the literal
+    // SD_STORE_CONFIRM_TOKEN ("CONFIRM", strcmp — the caller passes what the
+    // operator typed); any other token yields ZERO deletions and prints the
+    // usage line. Every removed file is logged and a summary line reports
+    // the count. A card that is not mounted returns 0 with the honest
+    // not-mounted line.
+    // Invoked ONLY by the SDCLEAR serial command in main_balloon.cpp — the
+    // LoRa wire carries no delete command (protocol frozen, locked decision
+    // 5). Runs synchronously at bench cadence (a card with thousands of
+    // files takes a few hundred ms of deletes — clear BEFORE a long
+    // session, not mid-transfer).
+    uint16_t clearAllImages(const char* confirmToken);
 
 private:
     bool available;
