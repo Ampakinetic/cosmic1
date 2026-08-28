@@ -1311,3 +1311,155 @@ at it. Concretely: the three instruments above, each with its named log line,
 G-01-10 citation, and removal condition; NO lever, NO pacing/quiet-gate/
 wire-format/WDT-config change (the rejected candidates of §7.6 and §9.6 stand);
 Lever A, B1/B2, [MEM], and the round-#10 discriminator lines untouched.
+
+## 10 — SESSION-10 RECURRENCE (01-31 bench, 2026-08-28): the FOURTH expression — an IDLE0 STACK-CANARY PANIC mid-window-service, with a full dump, and the round-#13 instruments ANSWERING: starvation NEGATIVE, [TWDT] NOT_FOUND (the §7 WDT chain under re-examination), [I2C] coverage gap
+
+### 10.1 Provenance
+
+- Consoles: balloon4.log (1,768 lines) / base4.log (740 lines), repo root — LOG
+  NAMING DEVIATION per the 01-24 convention (plan requested balloon15.log /
+  base10.log; operator names retained, never renamed).
+- Firmware: round #13 (01-30 instrument package), build banner Aug 28 2026,
+  balloon console `ELF file SHA256: acce78241` (balloon4.log:1478) matching the
+  pre-flight recorded round-#13 build SHA — verified before interpretation.
+- Both boards flashed with the same image (pre-flight both-boards rule).
+- Boots: `ImageTx: [BOOT] reset-cause: POWERON (G-01-10)` :104 (boot 1) and
+  `ImageTx: [BOOT] reset-cause: PANIC (G-01-10)` :1576 (boot 2) — B1's first
+  PANIC reading of the campaign, independently naming the crash class.
+
+### 10.2 Event map
+
+1. D1 CLASS 1 (first-post-boot push) SURVIVED a third consecutive session:
+   CAPTURE_NOW seq=2 (base4.log:46) ACKed (:52) → image 40 thumb COMPLETE 8/8
+   (base4.log:67-68) and full COMPLETE 31/31 (:156-157). The session-7 killer
+   pattern is dead at this boot on round-#13 firmware.
+2. Series A ran (seq 7/8/9, base4.log:170-:192): seq=7 ACKed (:176); seq=8
+   ACKed after two retries (:199/:207/:208); seq=9 held ONCE by the 01-18 quiet
+   gate (:225 `command seq=9 transmit held - inbound chunk stream active`),
+   retries 1/3-3/3 at :203/:213/:228 (two burned BEFORE the hold — the retry
+   counter advances while the chunk stream is busy), then the FORBIDDEN
+   terminal `Command seq=9 timeout after 3 retries` (:250). Series-A primary
+   clause FAILED on the third capture's command (third session with this
+   terminal: sessions 5, 7, 10).
+3. Verdicts 6 of 8 finalize lines COMPLETE — the best series-A partial ever:
+   image 40 2/2 COMPLETE; image 42 2/2 COMPLETE (base4.log:269-:270, :425-:426);
+   image 41 0/2 INCOMPLETE — thumb `6/8 chunks after 3 passes` (thumbnail push
+   stalled :539-540), full `0/31 chunks after 3 passes` (:484-485) after the
+   balloon-side depth-3 eviction (§10.4); image 43 thumb COMPLETE 7/7
+   (:588-589), full INCOMPLETE 14/119 (:712-713) CRASH-CAUSED.
+4. CIF step: SET_RESOLUTION seq=26 ACKed (:558-560) → image 43 captured at
+   CIF-class sizing (full 23800 B / 119 chunks vs the QVGA 6136 B / 31 chunks;
+   balloon4.log:1291) with thumb COMPLETE. Zero FB-OVF lines in EITHER console.
+   QVGA restore (wire 6) NOT reached.
+5. CRASH: image 43's FULL window armed (balloon4.log:1296 chunks 0..15),
+   base received chunks 0..1, retransmit pass re-armed chunks 2..15 (:1380) —
+   14-chunk window — served 12/14 (`window chunk(image 43 kind 1, 12/14, 200 B)
+   sent` :1427), then :1428 `Guru Meditation Error: Core  0 panic'ed (Unhandled
+   debug exception)` → :1429 `Debug exception reason: Stack canary watchpoint
+   triggered (IDLE0)` — FULL panic dump this time (register dump, EXCVADDR
+   0x00000000, EXCCAUSE 0x1; faulting PC ROM `memset` writing 36 bytes at
+   SP+0x1c inside IDLE0's stack region; backtrace CORRUPTED `|<-CORRUPTED`, no
+   project frames decodable) → :1478 ELF SHA banner → :1483
+   `rst:0xc (RTC_SW_CPU_RST)` → boot 2 clean (System ready :1606; NVS restored
+   next capture ID 44), session continued (beacons accepted seq 0..11), no
+   second crash, operator ended the capture.
+6. Crash context: the TX-HEAVIEST stretch of the five-session campaign —
+   `E32: AUX-low missed after complete write` ×81 whole-console, 217 B chunks
+   back-to-back, the largest image of the phase (119 chunks) mid-window.
+
+### 10.3 The round-#13 instruments ANSWER (session discriminator readings)
+
+- **[IDLE0] tick counter — ARMED and NEGATIVE for starvation.**
+  `[IDLE0] hook cpu0 registered=0 (G-01-10)` at :33 and :1505 is a PRINTF BUG,
+  not a registration failure: `esp_register_freertos_idle_hook_for_cpu` returns
+  `esp_err_t` (ESP_OK = 0); assigning it to `bool` prints 0 on SUCCESS
+  (esp_system/include/esp_freertos_hooks.h:44 verified on-disk). The hook WAS
+  armed at both boots and the counter ran. ZERO `[IDLE0] frozen` lines across
+  the WHOLE console, both boots, through every phase including the fatal
+  window: IDLE0 executed at least one tick in every 1 s sample from boot to the
+  crash instant. STARVATION IS DISCONFIRMED as the session-10 crash mechanism —
+  the instrument's designed purpose, delivered. The §7 'IDLE0 starved ≥10 s'
+  chain CANNOT describe this crash: the canary fired while IDLE0 was being
+  scheduled and run.
+- **[TWDT] — ESP_ERR_NOT_FOUND, the §7 WDT chain is UNDER RE-EXAMINATION.**
+  `ImageTx: [TWDT] idle0 wdt status=ESP_ERR_NOT_FOUND (G-01-10)` at BOTH boots
+  (:105, :1577). The instrument calls `esp_task_wdt_status(
+  xTaskGetIdleTaskHandle())` (image_tx_manager.cpp:172) from setup() context,
+  which runs on CPU1 (loopTask pinned). Two readings, NOT discriminated by this
+  console: (a) `xTaskGetIdleTaskHandle()` returned the CALLING core's idle
+  handle (IDLE1 — genuinely unsubscribed; config subscribes CPU0 only) — an
+  instrument HANDLE bug and the §7 premise merely untested; (b) it returned the
+  CPU0 handle and IDLE0 is genuinely NOT subscribed to the TWDT in the deployed
+  image — falsifying §7's load-bearing 'only IDLE0 feeds the TWDT' premise and
+  RE-OPENING the sessions-8/9 TG0WDT_SYS_RST attribution (the 'TWDT stage-1
+  backstop of IDLE0 starvation' reading would need a new reset source). The
+  §7 artifact-side sdkconfig reading is not re-verifiable from the retained
+  build dir (no sdkconfig artifact in .pio/build/esp32-s3-balloon/). Round #14
+  MUST fix the instrument to `xTaskGetIdleTaskHandleForCPU(0)` explicitly and
+  re-verify the deployed config before any further WDT-chain reasoning rides on
+  it. NOTE: session 10's verdict does NOT depend on this question — the canary
+  panic is direct evidence, not a silent-reset inference.
+- **[I2C] — did NOT fire at its session trigger opportunity (coverage gap).**
+  The console's single i2cWrite error (:1093, §10.4) produced ZERO `[I2C]`
+  lines. The instrument is wired to the project-side invalid-READING transition
+  (main_balloon.cpp:836-866, i2c_master_probe on the BMP280-invalid path);
+  the failure occurred on the HAL WRITE path (esp32-hal-i2c-ng.c:275
+  i2cWrite) whose error return evidently never surfaced as an invalid-reading
+  event. Instrument-coverage gap for round #14: wire the probe to the
+  write-failure return too, or verify the HAL swallows write errors.
+- **B1 [BOOT] — worked** (POWERON :104 / PANIC :1576 — quoted above).
+- **B2 [LOOP] — zero fires** whole console; loopTask healthy throughout
+  ([MEM] `stackHW=5772` constant both boots; new-low lines throughout with
+  trivial heap drift 8552964→8.55 M-class, psram constant). The breached stack
+  is IDLE0's — a DIFFERENT task than any [MEM] monitors.
+- **[MEM] — healthy** at every sample; exhaustion ruled out a fourth session.
+
+### 10.4 i2cWrite/mojibake occurrence — the non-fatal class RESTORED
+
+ONE i2cWrite ESP_ERR_INVALID_STATE whole-console: :1093
+`[259068][E][esp32-∩┐╜al-i2c-ng.c:275] i2cWrite(): i2c_master_transmit failed:
+[259] ESP_ERR_INVALID_STATE` — carrying the session-7/9 corruption-class
+mojibake bytes ON the line (the corrected raw-byte grep
+`grep -c $'\xe2\x88\xa9\xe2\x94\x90\xe2\x95\x9c'` = 1; the UTF-8-replacement-
+char grep = 0 — the twice-documented trap; the corrupted span replaces the `h`
+of `hal`). Classification: the KNOWN NON-FATAL class is restored — successful
+BMP280 reads follow immediately (:1095-:1096) and the crash is 335 lines later.
+Session 9's adjacent-to-reset pattern did NOT recur. t=259068 ms is also the
+console's only t-stamp (IDF E/W log format); the crash time is bounded only by
+[BCN] seq=49 (:1094, t≈259 s) and the last pre-crash beacon seq=65 (:1416).
+
+### 10.5 What the FOURTH expression discriminates
+
+- Expression census: session 7 crash 1 = canary on **IDLE1** (balloon.log:314)
+  with full dump; session 7 crash 2 + session 8 = rst:0x7 TG0WDT silent (Saved
+  PC tick_hook int_wdt.c:111 in session 8); session 9 = rst:0x7 TG0WDT silent
+  (Saved PC esp_vApplicationTickHook freertos_hooks.c:34) adjacent to
+  I2C+mojibake; **session 10 = canary on IDLE0 with full dump** — and the tick
+  instrument proves IDLE0 was ALIVE (no ≥1 s starvation) up to the instant.
+- The [IDLE0] negative splits the family: sessions 8/9's TWDT expression
+  implied starvation; session 10's canary fires with IDLE0 alive and scheduled.
+  The unifying candidate (LABELED HYPOTHESIS, not established): a CPU0-side
+  fault family whose visible signature depends on where the damage lands —
+  a stack-capacity breach of an IDLE task when IRQ frames land during heavy
+  TX (session 10: canary; on Xtensa, level-1 interrupt frames push onto the
+  INTERRUPTED task's stack, and CPU0 hosts the WiFi/system ISRs; the crash
+  landed in the campaign's TX-heaviest stretch), versus a scheduler/tick-chain
+  wedge surfacing as the watchdog (sessions 8/9) and session 7's IDLE1 canary
+  as the same family touching CPU1's idle context. H-lull stays REJECTED
+  (session 10 crashed in the service phase, TX-heavy). H-phase-independent
+  maturation (§9.3) is WEAKENED but not dead: session 10 correlates crash time
+  with LOAD (heaviest burst) rather than a fixed maturation clock.
+- Round #14 routing (named, cheapest-first): (1) **[STACK] instrument** —
+  `uxTaskGetStackHighWaterMark(NULL)` logged from the existing [IDLE0] idle
+  hook at 1 Hz with a new-low latch (the [MEM] pattern applied to IDLE0) —
+  one session CONFIRMS or REFUTES the stack-marginality hypothesis; (2) fix
+  the [TWDT] handle (ForCPU(0)) and the [IDLE0] registered printf (print
+  `err == ESP_OK`); (3) extend the [I2C] probe to the write-failure path;
+  (4) optional A/B: a build with the idle hook unregistered to rule the
+  round-#13 hook dispatch in or out (the hook body is a single increment, but
+  the question is cheap to kill); (5) NO lever until [STACK] answers — three
+  consecutive elimination-only rounds plus a disconfirmed-lever history make
+  lever-speculation ahead of the watermark evidence dishonest by the standing
+  guard.
+- No bench claims ride this section beyond the quoted lines; the D1 gap stays
+  OPEN with the FOURTH expression recorded (01-UAT.md G-01-10, WINDOWS 15).
