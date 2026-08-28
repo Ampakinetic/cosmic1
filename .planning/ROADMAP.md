@@ -146,7 +146,7 @@ Plans:
 
 **Wave 23** *(blocked on Wave 22 — bench re-verification trailing wave)*
 
-- [ ] 01-31-PLAN.md — Bench re-verification session #10: flash both boards, D1 acceptance on ALL THREE crash expressions (spaced smoke + sustained multi-window FULL service + the NEW >=3-min inter-window-lull dwell — the session-9 killer), G-01-7 series-A acceptance (ninth attempt), WR-03 cadence discriminator, SC-3 visible-effect pairs (eighth round riding), CIF cycle (wire 8) + QVGA restore, dashboard LOOK glance; G-01-10/G-01-7 + WINDOWS 15/3 flipped on evidence; STATE names /gsd-secure-phase 1 as the remaining gate (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
+- [x] 01-31-PLAN.md — Bench re-verification session #10 (balloon4.log/base4.log, round-#13 firmware, ELF SHA acce78241): session FAILED at the D1 FOURTH expression — an IDLE0 stack-canary panic with a full dump at chunk 12/14 of image 43's re-armed FULL window (balloon4.log:1428-:1429); the round-#13 instruments ANSWERED ([IDLE0] armed with ZERO frozen lines = starvation DISCONFIRMED; [TWDT]=ESP_ERR_NOT_FOUND — §7 WDT premise under re-examination; [I2C] write-path coverage gap); series A finally ran with ALL round-#10 discriminators engaged for the first time (6/8 verdicts, seq=9 forbidden terminal, G-01-7 residual NAMED: depth-3 queue cycling); CIF wire-8 half-executed, zero FB-OVF; NOTHING FLIPPED (WINDOWS 2/17/19), requirements-completed: [], riding clauses ninth round; round #14 routed: [STACK] watermark instrument (debug doc §10); ledgers updated, STATE carries the round-#4 brief (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 
