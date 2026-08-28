@@ -1,10 +1,13 @@
 ---
 phase: 01-command-protocol-control
-reviewed: 2026-08-28T00:00:00Z
+reviewed: 2026-08-28T14:05:24Z
 depth: standard
-files_reviewed: 23
+files_reviewed: 38
 files_reviewed_list:
   - include/auto_capture.h
+  - include/balloon_config.h
+  - include/base_station_config.h
+  - include/camera_pins.h
   - include/command_handler.h
   - include/command_protocol.h
   - include/command_sender.h
@@ -13,8 +16,12 @@ files_reviewed_list:
   - include/image_protocol.h
   - include/image_rx_manager.h
   - include/image_tx_manager.h
+  - include/sd_storage.h
   - platformio.ini
+  - scripts/embed_web_assets.mjs
   - scripts/verify_protocol_roundtrip.mjs
+  - src/alert_engine.cpp
+  - src/alert_engine.h
   - src/auto_capture.cpp
   - src/camera_manager.cpp
   - src/camera_manager.h
@@ -27,97 +34,134 @@ files_reviewed_list:
   - src/main_balloon.cpp
   - src/main_basestation.cpp
   - src/sd_storage.cpp
+  - src/sensor_manager.cpp
+  - src/status_display.cpp
+  - src/test_lora_balloon.cpp
+  - src/trajectory_buffer.cpp
+  - src/trajectory_buffer.h
+  - src/web_assets.h
+  - src/wifi_manager.cpp
+  - src/wifi_manager.h
 findings:
   critical: 0
-  warning: 2
+  warning: 3
   info: 7
-  total: 9
+  total: 10
 status: issues_found
 ---
 
 # Phase 01: Code Review Report
 
-**Reviewed:** 2026-08-28
+**Reviewed:** 2026-08-28T14:05:24Z
 **Depth:** standard
-**Files Reviewed:** 23
+**Files Reviewed:** 38
 **Status:** issues_found
 
 ## Summary
 
-Full standard-depth review of the Phase 1 command-protocol surface across both firmware targets: the LoRa E32 driver, command/response protocol codec, balloon-side command handler, base-side command sender, image TX/RX managers, auto-capture, camera manager, SD storage, and both main loops, plus the web handlers and embedded dashboard JS.
+Adversarial standard-depth review of the Phase 01 command-protocol surface plus the balloon/base managers it now spans: wire protocol (command_protocol, image_protocol), both firmwares (main_balloon, main_basestation), the TX/RX image pipeline (image_tx_manager, image_rx_manager), command send/handle, E32 driver, camera/SD/sensor/trajectory/alert/wifi/status modules, and both Node tooling scripts.
 
-The protocol core is in strong shape. Verified-sound behaviors this review confirmed and does not re-flag: wrap-safe millis() subtraction everywhere; length-driven framing with CRC16 and interbyte resync on both TX and RX framer paths (handler and sender); type dispatch before body arithmetic; chunk kind-byte validation; duplicate/terminal-response guard with NACK_BUSY window deferral; bounded manifest/chunk retry ladders with reset-on-success; PSRAM buffer ownership (enqueue-time copies, dangling-pointer fixes in thumbnails); eviction class accounting with freeEntry resets; the static_assert pairing of MAX_IMAGE_SIZE/IMG_MAX_IMAGE_SIZE; strict WR-07 range-before-narrow in every web handler; strictly numeric id parsing before any SD path construction (T-03-10) with a per-character gallery-name parser; the bounded hostile-sidecar reader (clamp, never wrap); password never echoed in any response, log, or DOM; all DOM writes via textContent/createElement (no innerHTML anywhere); all boot-degradation paths guarded (`E32LoRa::transmit` checks `!initialized`, `CommandSender` guards at :122/:189, `CommandHandler::process` guards `!initialized || !lora`); and the documented G-01-10 instrumentation ([MEM]/[IDLE0]/[I2C]/B2) carrying explicit REMOVAL CONDITIONs — treated as deliberate instrumentation, not debug leftovers.
+The core protocol machinery holds up under adversarial reading: CRC16 and all framing arithmetic match the JS harness; the WR-03 duplicate-response guard prevents the pending-count underflow; `handleWindowRequest`'s tail clamp, `acceptChunk`'s bounds, `serviceWindowChunk`'s span math, and `startTransfer`'s manifest validation all hold by construction; the SD sidecar parser clamps every untrusted field into range before use; `verifyStoredCrc32` is correctly preceded by the CR-02 flush; and the D-24/D-21 stall/settle/deadline machinery is internally consistent.
 
-No Critical issues were found. Two Warnings: a latent framing-corruption gap in `serializeResponse` and a fault-containment comment in the balloon loop that documents call sites which do not exist. The remaining seven findings are dead code, concentrated in the legacy scaffolding regions of main_balloon.cpp and two unreferenced driver/sender functions (one of which, `findOldestCommand`, is a recurrence of 02-REVIEW.md IN-01).
+Findings: no critical issues. Three warnings — a real logic defect in the [STACK] instrument's zero sentinel, a validation-order defect in `handleWindowRequest`'s receipt stamp (an *additional* defect in the known supersede path, not the already-routed capacity-rejection issue), and a fail-open gap in the web-asset supply-chain lock. Seven info findings, mostly dead code with embedded hazards and stale wire-size comments.
+
+**Out of scope here:** the known open defect where `evictEntriesOlderThan`'s honest-rejection fires regardless of capacity need (rejections at 2/5 occupancy) is already routed to debug round #15 and is not re-litigated. Known-benign conventions ([MEM]/[IDLE0] print conventions, E32 AUX-low tolerance, mojibake serial output, CMD_TX_CHANNEL_QUIET_MS / uart_ll_is_tx_idle) were respected.
+
+## Narrative Findings (AI reviewer)
 
 ## Warnings
 
-### WR-01: serializeResponse silently emits a corrupt frame for dataLength above CMD_MAX_RESPONSE_DATA
+### WR-01: [STACK] instrument's zero sentinel hides the exact overflow signature it exists to catch
 
-**File:** `src/command_protocol.cpp:154-179`
-**Issue:** `serializeResponse` bounds only `CMD_MAX_PACKET_SIZE` (:156). The payload copy is gated by `if (resp.dataLength > 0 && resp.dataLength <= CMD_MAX_RESPONSE_DATA)` (:176), but there is no early rejection for `dataLength > CMD_MAX_RESPONSE_DATA`. A caller that passes, say, `dataLength = 100` gets `return true` with a frame whose header length field (:165) and body length byte (:173) both advertise 100 data bytes while zero data bytes are actually written (:176 guard skips the memcpy). Every receiver will fail deserialization/CRC on this frame, and the sender reports success. `serializeCommand` (:57 region) rejects out-of-range data up front — the two serializers are asymmetric. Not reachable with today's factories (all of them clamp data), which is why this is a Warning and not Critical, but the function's contract ("return true = a well-formed frame was produced") is broken for any future response type with a larger payload.
-**Fix:**
+**File:** `src/main_balloon.cpp:155-165` (hook), `src/main_balloon.cpp:427-432` (loop print)
+**Issue:** `s_idle0StackMinWords` uses `0` as both "no sample yet" sentinel and a legitimate measurement. `uxTaskGetStackHighWaterMark` returns 0 precisely when the IDLE0 stack has overflowed into its guard — the §10.5 signature the round-#14 instrument was designed to surface ("new lows accelerating toward 0"). The hook's latch `if ((s_idle0StackMinWords == 0) || (idle0Watermark < s_idle0StackMinWords))` does record a genuine 0, but the loop-side print guard `s_idle0StackMinWords != 0 && ...` (line 427) can never print it: once the minimum reaches 0 the condition is permanently false, so the single most diagnostic sample the instrument can produce is the one sample it can never report. This is a logic defect in the instrument itself, beyond the (benign, respected) new-low print convention.
+**Fix:** Separate the has-sample latch from the value:
+
 ```cpp
-size_t packetLength = CMD_HEADER_SIZE + 4 + resp.dataLength + 4;
-
-if (resp.dataLength > CMD_MAX_RESPONSE_DATA || packetLength > CMD_MAX_PACKET_SIZE) {
-    return false;   // reject before writing anything — mirrors serializeCommand
+static volatile bool s_idle0HasSample = false;
+static volatile UBaseType_t s_idle0StackMinWords = 0;
+// hook:
+if (!s_idle0HasSample || (idle0Watermark < s_idle0StackMinWords)) {
+    s_idle0StackMinWords = idle0Watermark;
+    s_idle0HasSample = true;
 }
+// loop print:
+if (s_idle0HasSample &&
+    (idle0StackLastPrintedWords == 0 ||
+     s_idle0StackMinWords < idle0StackLastPrintedWords)) { ... }
 ```
-and then drop the `resp.dataLength <= CMD_MAX_RESPONSE_DATA` term from the guard at :176 (keeping `> 0`).
 
-### WR-02: loop() comment cites handleSystemError() call sites that do not exist; the documented error-escalation path is dead
+(Or print on `<=` transitions including 0.) Remember to reset both in the same places the old sentinel was reset.
 
-**File:** `src/main_balloon.cpp:296-301` (comment), `src/main_balloon.cpp:1158-1170` (function)
-**Issue:** The WR-09 rationale in loop() states fault containment is "the watchdog plus the handleSystemError() call sites at real error paths." A project-wide search finds zero call sites for `handleSystemError` — it is declared (:179) and defined (:1158) but never invoked. Its escalation logic (`errorCount > 10` -> `SysState().triggerEmergency("Too many system errors")`, :1167-1169) therefore does not exist in practice. During the active G-01-10 crash investigation this is more than dead code: the comment leads a maintainer to believe an error-counting emergency brake is armed when it is not, and SYS_ERROR() calls across the subsystems never feed it.
-**Fix:** Either (a) wire `handleSystemError()` into the real failure paths (e.g. where SYS_ERROR is emitted for recoverable subsystem faults) so the documented containment exists, or (b) delete the function and correct the loop() comment to name only the watchdog as the containment mechanism. Option (b) is acceptable if the emergency brake is intentionally deferred; option (a) matches what the comment promises.
+### WR-02: Per-entry receipt stamp fires before range validation — malformed window requests promote entries to the protected eviction class
+
+**File:** `src/image_tx_manager.cpp:1137` (stamp), `:1149` (range validation), `:1128-1136` (contract comment)
+**Issue:** In `handleWindowRequest`, `target->lastWindowRequestMs = millis()` executes before the per-kind range validation at line 1149. A CRC-valid request that matches `imageId` + kind but fails range checks (`count == 0`, `count > IMG_WINDOW_MAX_CHUNKS`, `startChunk >= totalChunks`) still stamps the entry nonzero — which `evictionClassOf` reads as receipt evidence (`lastWindowRequestMs != 0` → protected class 5) and which re-arms the bounded re-announce budget (lines 1138-1143). A hostile or buggy base can therefore keep an otherwise-evictable stale entry pinned against supersede indefinitely by repeatedly sending it invalid-range requests, and can indefinitely re-arm its re-announce budget. This contradicts the site's own trust-boundary comment ("reached only after the kind enum check and entry match above — a crafted frame cannot stamp an entry it did not fully address, T-01-21-01"): T-01-21-01's full-validation clause names the per-kind range bounds too, and they have not run yet at the stamp site. The channel-liveness stamp (`lastInboundWindowRequestMs`, pre-kind-validation) is intentionally early and is *not* the problem — the per-entry stamp is. Note this is an additional defect in the supersede path; the known capacity-rejection issue routed to round #15 is unchanged.
+**Fix:** Move the per-entry stamp block (lines 1128-1143) to after the range validation and tail clamp (after line 1160), so only a fully validated, armed request counts as receipt evidence. The comment above it then matches the code.
+
+### WR-03: Supply-chain hash lock fails open when a vendored file has no recorded provenance
+
+**File:** `scripts/embed_web_assets.mjs:105`
+**Issue:** The generator verifies embedded assets with `if (provenance.files[name] && provenance.files[name].sha256 !== h)`. When `provenance.json` has no entry for a file present in `vendor/` (renamed file, new vendored asset, deleted/corrupt provenance for that entry), the mismatch check is skipped and the bytes are embedded unverified — silently defeating the "supply-chain lock (T-03-SC)" the generated header and file header document. A lock that fails open on exactly the "unknown content" case protects only against tampering with files it already knows about.
+**Fix:** Fail closed for unknown entries:
+
+```js
+const recorded = provenance.files[name];
+if (!recorded) {
+    console.error(`sha256 provenance missing for vendor/${name} — refusing to embed`);
+    process.exit(1);
+}
+if (recorded.sha256 !== h) { /* existing mismatch path */ }
+```
+
+(If a genuinely new vendor asset is intended, the provenance update becomes an explicit, reviewable step.) Both current files are recorded, so today's output is unaffected — this is hardening the invariant.
 
 ## Info
 
-### IN-01: transmitToAddress is dead code containing latent hazards
+### IN-01: Stale "17-byte" telemetry-beacon comments (body is 19 bytes)
 
-**File:** `src/e32_lora.cpp:304-322` (declaration `include/e32_lora.h:138`)
-**Issue:** Zero call sites (verified by project-wide search). The body allocates a VLA `uint8_t buffer[length + 4]` (:308) before any validation, `memcpy`s from `data` without a null check (:319), and never checks `initialized` itself (the guard lives inside `transmit()`). If ever called with a large or attacker-chosen `length`, this is a stack overflow; with `data == nullptr`, a null deref.
-**Fix:** Delete the function (the protocol uses `transmit()` exclusively), or if it is retained for future directed-address use, validate `data`/`length`, add the `initialized` guard, and replace the VLA with a bounded static or heap path.
+**File:** `include/command_protocol.h:263`, `src/command_sender.cpp:364`, `scripts/verify_protocol_roundtrip.mjs:778`
+**Issue:** Three comments still describe the 0x14 beacon body as 17 bytes; `IMG_TELEMETRY_BEACON_BODY_SIZE` has been 19 since the D-41 `batteryMilliV` extension. Behavior is correct everywhere (the constant is used, not the comment); the legacy-17 references in `verify_protocol_roundtrip.mjs:973/994/996` are legitimate (they deliberately build a rejected legacy frame). Note: the `command_protocol.h:263` half is a repeat of an INFO from the phase-03 review that was never fixed.
+**Fix:** Update the three comments to "19".
 
-### IN-02: enterConfigMode saves previousMode but never restores it; exitConfigMode hardcodes MODE_NORMAL
+### IN-02: Dead `transmitToAddress` carries an unbounded VLA
 
-**File:** `src/e32_lora.cpp:642-660`
-**Issue:** `enterConfigMode` declares `E32Mode previousMode = currentMode;` (:644) which is never read — a dead variable with misleading "save current mode" intent. `exitConfigMode` (:657-660) hardcodes `MODE_NORMAL` instead of restoring. Benign today because configuration only runs during `begin()` while in normal mode, but the code implies a restore semantics it does not have.
-**Fix:** Remove the unused `previousMode` local (and its comment), or make `exitConfigMode` restore the saved member if config mode is ever entered at runtime.
+**File:** `src/e32_lora.cpp:304-322` (VLA at `:308`), declared `include/e32_lora.h:138`
+**Issue:** `transmitToAddress` has no callers (grep-verified across cpp/h). Its `uint8_t buffer[length + 4]` is a runtime-sized stack allocation with no bound — if ever called with a large frame it overflows the calling task's stack with no diagnostic. Dead code that is also a trap.
+**Fix:** Delete the function and its declaration; if it is ever revived, bound `length` or allocate from the heap.
 
-### IN-03: findOldestCommand is dead code — recurrence of 02-REVIEW.md IN-01
+### IN-03: `enterConfigMode` saves `previousMode` and never uses it; exit always restores MODE_NORMAL
 
-**File:** `src/command_sender.cpp:534` (declaration `include/command_sender.h:161`)
-**Issue:** Zero call sites (verified by project-wide search). This same dead function was flagged as IN-01 in the Phase 2 review and still survives. Dead code in a safety-relevant manager invites drift: future edits to queue-eviction logic may assume it is load-bearing.
-**Fix:** Delete both the definition and the header declaration.
+**File:** `src/e32_lora.cpp:642-655` (`:644`), `:657-660`
+**Issue:** `E32Mode previousMode = currentMode;` is dead, and `exitConfigMode` unconditionally restores `MODE_NORMAL` rather than the saved mode. Latent wrong-restore if the pair is ever called around a config sequence from a non-NORMAL mode; today it is harmless.
+**Fix:** Either restore the saved mode in `exitConfigMode` (and pass/return it), or delete the dead local and note the NORMAL-only contract.
 
-### IN-04: Dead event/error-handler family in main_balloon.cpp
+### IN-04: Dead `CommandSender::findOldestCommand`
 
-**File:** `src/main_balloon.cpp:1209-1292`, `1185-1203`
-**Issue:** `onSystemEvent` (:1209, body entirely commented out), `onEmergencyTriggered` (:1228), `onModeChanged` (:1244), `onFlightPhaseChanged` (:1270), and `checkSystemHealth` (:1185) are all declared and defined but never called (the dispatcher in onSystemEvent is documented dead in WINDOWS entry 14, and the camera-disable concern it once covered is handled inline per WR-05 at :971-980). `checkSystemHealth`'s low-memory/loop-time checks likewise never run. The emergency camera-disable itself is correctly implemented inline in `processPowerManagement`, so nothing behavioral is missing — but five dead handlers plus a never-called health check obscure which safety logic is actually armed.
-**Fix:** Delete the handler family and `checkSystemHealth`, or register `onModeChanged`/`onFlightPhaseChanged` with SysState if the phase-based behavior adjustments are still planned. (The `handleSystemError` piece is tracked separately as WR-02.)
+**File:** `src/command_sender.cpp:534`, declared `include/command_sender.h:161`
+**Issue:** No callers anywhere (grep-verified); supersession logic now uses the ranked `evictionClassOf` path instead.
+**Fix:** Delete both the definition and the declaration.
 
-### IN-05: processCommunications is an empty shell; legacy packet path enqueues packets nobody drains
+### IN-05: Dead camera adaptive-control cluster, including operator-setting overrides-in-waiting
 
-**File:** `src/main_balloon.cpp:895-925` (shell), `1069-1140` (producers)
-**Issue:** `processCommunications()` is called every loop pass but its entire body is commented out. Meanwhile `sendTelemetryData`/`sendHeartbeatPacket`/`sendStatusReport` still run on their 5 s/30 s/60 s timers and enqueue packets into PacketMgr's ring buffer (bounded — queue head/tail in `src/packet_handler.h:168-170`, so no memory growth), and nothing ever dequeues or transmits them. The result is pure dead-end work plus SYS_WARNING spam once the ring fills. Pre-existing legacy scaffolding outside the Phase 1 protocol, so Info — but it should not survive into flight firmware.
-**Fix:** Gate the three `send*` producers (or the whole legacy PacketMgr path) behind a build flag / remove them, or implement the drain side.
+**File:** `src/camera_manager.cpp:655-722` (`enterLowPowerMode` :655, `exitLowPowerMode` :665, `updateForConditions` :679, `optimizeForBandwidth` :700, `optimizeForQuality` :712), `:863` (`getOptimalFrameSize`); dead members `src/camera_manager.h:74-75`
+**Issue:** `updateForConditions`, `optimizeForBandwidth`, `optimizeForQuality`, and `getOptimalFrameSize` have no callers (grep-verified); `enter/exitLowPowerMode` are reachable only from the dead `updateForConditions`. `imageBuffer`/`imageBufferSize` are declared, zeroed, freed, and accounted in `getMemoryUsage` but never allocated. Two traps if ever wired up: `updateForConditions` unconditionally calls `setBrightness`/`setContrast`/`setQuality`/`setFrameSize` on every invocation, silently fighting operator SET_* commands; and `optimizeForQuality`'s `FRAMESIZE_VGA`/`optimizeForBandwidth`'s `FRAMESIZE_QVGA` ignore the G-01-8 `allocatedFrameSize` capacity discipline.
+**Fix:** Delete the cluster and the unused members; if adaptive behavior is planned, design it to respect operator-override state and the G-01-8 bound first.
 
-### IN-06: processCommands declared but never defined
+### IN-06: Hardcoded AP credentials, plus a dead duplicate credential set in a config header
 
-**File:** `src/main_basestation.cpp:143`
-**Issue:** `void processCommands();` is declared in the function-declarations block but has no definition and no call site (the loop calls `CmdSender().process()` / `ImageRx().process()` directly). Harmless dead declaration that misstates the file's structure.
-**Fix:** Delete the declaration.
+**File:** `src/wifi_manager.cpp:16-17` (live: `Cosmic1-BaseStation` / `balloontrack`), `include/base_station_config.h:49-50` (dead: `BalloonBaseStation` / `balloon123`)
+**Issue:** The base's fallback AP credentials are compile-time constants in source — a documented, deliberate D-40 design (lockout-proof fallback, never persisted, never UI-editable), so this is informational, not a violation. Two notes for the record: (1) the entire web server is unauthenticated, so anyone in radio range who joins the AP can drive the camera and read the balloon's live GPS position — the AP password is the only gate on location data; (2) `base_station_config.h:49-50` still defines an older, divergent AP SSID/password pair that nothing references (grep-verified) — a maintainer "rotating" the password there would change nothing and silently believe they had.
+**Fix:** Delete the dead `WIFI_AP_SSID`/`WIFI_AP_PASSWORD` macros from `base_station_config.h`. For the live pair, at minimum document the exposure (unauthenticated control + location) beside the constants; an optional build-time credential override (e.g. `-DWIFI_AP_PASSWORD=...`) would let deployments differ without code edits.
 
-### IN-07: validateImageBuffer has a redundant second length check
+### IN-07: Same-(id,kind) re-manifest drops the tracked window request without cancel
 
-**File:** `src/camera_manager.cpp:856`
-**Issue:** The JPEG-footer check re-tests `length < 2`, already guaranteed false by the header check at :851 (any `length < 2` returned there). No behavior difference — pure redundancy in a validation helper readers rely on for exactness.
-**Fix:** Drop the redundant `length < 2 ||` term at :856.
+**File:** `src/image_rx_manager.cpp:555-565` (seq cleared at `:563`), contrast `:136-138`, `:812-814`, `:843-845`
+**Issue:** Every other teardown path cancels a transfer's outstanding window request before discarding `windowRequestSeq` (the WR-04 discipline: process() advance, `finalizeTransfer`, `finalizeIncomplete`, both allocateSlot eviction paths). The same-(id,kind) re-manifest branch does `*t = ImageRxTransfer{}` — zeroing `windowRequestSeq` — without `CmdSender().cancelCommand(...)`. An orphaned tracked command can keep retrying a span against the restarted (bitmap-cleared) reassembly until its own retry/timeout budget expires: idempotent duplicate chunk traffic on the half-duplex link plus one command-table slot held for the leftover budget. Impact is churn, not corruption — the balloon re-arms windows idempotently and the bitmap drops duplicates — but it is an inconsistency in an otherwise uniform invariant.
+**Fix:** Capture `t->windowRequestSeq` before the reset and `CmdSender().cancelCommand(seq)` when nonzero, matching the finalize paths.
 
 ---
 
-_Reviewed: 2026-08-28T00:00:00Z_
+_Reviewed: 2026-08-28T14:05:24Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
