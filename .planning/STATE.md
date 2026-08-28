@@ -1,16 +1,16 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: "Completed 01-28-PLAN.md (D1 debug round #2: audit + fix + discriminators; G-01-10/WINDOWS 15 stay open for 01-29 bench)"
-last_updated: "2026-08-28T00:12:58.762Z"
-state_head: 6ca9a368f42faf234ba4d6a964b78b5276ea93e7
+stopped_at: Completed 01-29-PLAN.md
+last_updated: "2026-08-28T00:52:07.451Z"
+state_head: f25b41bae686d72d692028960ae41814d16f6da0
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 39
-  completed_plans: 37
+  completed_plans: 38
 milestone_name: milestone
 current_phase: 2
 current_phase_name: Command Protocol & Control
@@ -28,7 +28,7 @@ current_phase_name: Command Protocol & Control
 
 ## Current Position
 
-**Current Plan:** 2
+**Current Plan:** 3
 **Total Plans in Phase:** 29
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -135,8 +135,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-28T00:12:58.346Z
-**Stopped at:** Completed 01-28-PLAN.md (D1 debug round #2: audit + fix + discriminators; G-01-10/WINDOWS 15 stay open for 01-29 bench)
+**Last session:** 2026-08-28T00:51:42.254Z
+**Stopped at:** Completed 01-29-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -179,6 +179,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P26 | 546s | 3 tasks | 5 files |
 | Phase 01 P27 | ~3h across executor pre-flight + operator bench session #8 + continuation closeout | 2 tasks | 4 files |
 | Phase 01-28 P28 | ~46 min | 3 tasks | 9 files |
+| Phase 01 P29 | ~2.5h across executor pre-flight + operator bench session #9 + continuation closeout | 2 tasks | 4 files |
 
 ## Decisions
 
@@ -266,3 +267,7 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: D1 round #12: TG0WDT_SYS_RST pinned as the TASK watchdog stage-1 silent 10 s backstop; only IDLE0 feeds the TWDT in this build, so session 8 proves IDLE0 starved >=10 s on CPU0 while ticks stayed alive — the stall is below project-code visibility
 - [Phase 2]: Verdict: ONE mechanism family, two expressions — session-7's kernel-portMUX spin and session-8's tick_hook PC sample the same tick-ISR chain; all eight project-code candidates eliminated (flush = sole non-yielding stretch, no kernel lock, on CPU1)
 - [Phase 2]: Fix shape (a)+(b) auto-advanced per 01-23/01-25/01-26 convention: yielding bounded TX-drain (hazard removal, not a claimed cure) + [BOOT] reset-cause and [LOOP] slow-pass discriminators for 01-29; WINDOWS 15 / G-01-10 stay open pending hardware
+- [Phase 2]: Session 9 recorded FAILED with D1's third expression: the 01-28 yielding TX-drain fix disconfirmed as sufficient - the TG0WDT reset recurred at the sustained full-service step (session-8's killer), in the inter-window lull after a clean window
+- [Phase 2]: Session-9 Saved PC decoded against the verified deployed ELF: 0x4037c7fa = esp_vApplicationTickHook (freertos_hooks.c:34), one frame above session-8's tick_hook - the same WDT tick-ISR chain, zero project frames
+- [Phase 2]: Crash-adjacent i2cWrite (balloon3.log:520) carries the mojibake ON the line itself (hex-dump verified) - the packet's mojibake=0 was the twice-documented 7.4 grep trap; corrected to 1 and carried as discriminating evidence of the session-7 corruption class returning at the crash moment
+- [Phase 2]: D2 and WR-02 regression watches green on the round-#12 firmware (2 genuine hold-line fires, zero health-check-failed) - both entries stay fixed; zero ledger flips, G-01-7 unjudgeable, image 39 INCOMPLETE attributed to the crash

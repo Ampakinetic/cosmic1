@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 27/29 plans executed through round #11 (01-27 bench session #8 FAILED at image 38's FULL TX — D1 RECURRED and re-opened on the new task-watchdog-starvation axis, 01-25 warm-up disconfirmed as sufficient; D2/G-01-11 closed; G-01-7 unjudgeable seventh round; SC-3/WR-03/CIF-as-specified/QVGA clauses riding). Gap-closure round #12 planned 2026-08-28 as 01-28..01-29: D1 debug round #2 (WDT-starvation audit of the serviceWindowChunk -> E32 transmit path per debug doc §6.5, dispositioned fix, discriminators) then bench re-verification session #9 (both D1 crash classes + G-01-7 series A + every riding clause). Then the security gate
+**Plans:** 28/29 plans executed through round #11 (01-27 bench session #8 FAILED at image 38's FULL TX — D1 RECURRED and re-opened on the new task-watchdog-starvation axis, 01-25 warm-up disconfirmed as sufficient; D2/G-01-11 closed; G-01-7 unjudgeable seventh round; SC-3/WR-03/CIF-as-specified/QVGA clauses riding). Gap-closure round #12 planned 2026-08-28 as 01-28..01-29: D1 debug round #2 (WDT-starvation audit of the serviceWindowChunk -> E32 transmit path per debug doc §6.5, dispositioned fix, discriminators) then bench re-verification session #9 (both D1 crash classes + G-01-7 series A + every riding clause). Then the security gate
 
 Plans:
 **Wave 1**
@@ -138,7 +138,7 @@ Plans:
 
 **Wave 21** *(blocked on Wave 20 — bench re-verification trailing wave)*
 
-- [ ] 01-29-PLAN.md — Bench re-verification session #9: flash both boards, D1 re-acceptance on BOTH crash classes (spaced smoke + SUSTAINED multi-window FULL service — the session-8 killer pattern — + series A, with the 01-28 fix's §7 discriminators engaged), G-01-7 series-A acceptance, WR-03 cadence discriminator, SC-3 visible-effect pairs (seventh round riding), CIF cycle (wire 8 as specified) + QVGA restore, dashboard LOOK glance; G-01-10/G-01-7 + WINDOWS 15/3 flipped on evidence; STATE names /gsd-secure-phase 1 as the remaining gate (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
+- [x] 01-29-PLAN.md — Bench re-verification session #9: flash both boards, D1 re-acceptance on BOTH crash classes (spaced smoke + SUSTAINED multi-window FULL service — the session-8 killer pattern — + series A, with the 01-28 fix's §7 discriminators engaged), G-01-7 series-A acceptance, WR-03 cadence discriminator, SC-3 visible-effect pairs (seventh round riding), CIF cycle (wire 8 as specified) + QVGA restore, dashboard LOOK glance; G-01-10/G-01-7 + WINDOWS 15/3 flipped on evidence; STATE names /gsd-secure-phase 1 as the remaining gate (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 
