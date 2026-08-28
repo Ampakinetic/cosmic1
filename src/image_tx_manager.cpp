@@ -1169,7 +1169,19 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
         // an entry whose window is mid-service — an in-flight heal/pull is
         // not "moved past" until its armed window completes (the deferred
         // entry then hits the BUSY check below and the base retries).
-        evictEntriesOlderThan(*target);
+        // G-01-7 round #14 (01-33, 01-G01-7-LEVER.md section 4 option a):
+        // the supersede victim selection is ranked through evictionClassOf.
+        // A false return means every eligible older candidate is receipt-
+        // evidenced (class 5) — admission would evict an entry the base
+        // demonstrably holds a manifest for and is actively pulling. Reject
+        // honestly through the EXISTING unknown/evicted NACK_INVALID class
+        // (no new protocol surface): the base's D-24 pass machinery retries
+        // within its existing bound. The receipt stamp + budget re-arm above
+        // stay — the request genuinely matched this entry.
+        if (!evictEntriesOlderThan(*target)) {
+            Serial.printf("ImageTx: window request for image %u rejected - queue holds only receipt-evidenced entries (G-01-7)\n", imageId);
+            return WindowRequestResult::UNKNOWN_IMAGE;
+        }
     }
 
     // One entry actively services at a time: any OTHER entry with an armed,
@@ -1335,28 +1347,112 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
 // Eviction Policy (bounded memory, T-02-05)
 // ===========================
 
-void ImageTxManager::evictEntriesOlderThan(const ImageTxEntry& reference) {
-    // G-01-7 lever 2 (01-12): the supersede path never evicts an entry whose
-    // window is armed and mid-service — that entry's heal/pull chunks are in
-    // flight on the link, and evicting it mid-stream is exactly the 01-11
-    // session-2 failure (balloon2.log:656: image 2's pending thumbnail heal
-    // evicted when image 3's window request arrived). Deferred entries age
-    // into normal eviction once their window completes; the guard lives ONLY
-    // here — evictionClassOf's overflow ranking and sweepExpiredEntries' TTL
-    // path keep their full eviction rights (three pinned slots must never
-    // wedge the IMG_TX_QUEUE_DEPTH 3 queue).
+// G-01-7 round #14 (plan 01-33, 01-G01-7-LEVER.md section 4 option a): the
+// supersede victim selection is ranked through evictionClassOf — the SAME
+// ranking the enqueue-overflow scan uses, closing the two-standards gap the
+// session-10 census proved structural: the supersede path consulted no
+// class-5 protection at all and flushed every older non-mid-service entry in
+// slot order, so image 42's window request evicted the base-activated,
+// receipt-evidenced image 41 entry (balloon4.log:816-817) -> the seven
+// honest rejections (:1003-:1162) burned the base's D-24 budget to 0/31.
+// Mechanics:
+//   - candidates stay "used AND strictly older" (enqueueSeq < reference),
+//     exactly as before;
+//   - the 01-12 mid-service deferral keeps its guard verbatim (predicate and
+//     line) — an in-flight heal/pull is never a victim, and the guard stays
+//     unconditional here (the overflow scan's pass-2 drop-the-skip does not
+//     apply to supersede);
+//   - lower-class candidates are evicted in ascending evictionClassOf order
+//     (ties: oldest enqueueSeq — the overflow scan's tie-break), and the
+//     existing "supersedes older entry ... evicted" line is preserved;
+//   - a receipt-evidenced entry (class 5: windowEverArmed ||
+//     lastWindowRequestMs != 0) is NEVER the victim while any lower-class
+//     candidate exists — each spared entry prints the engagement
+//     discriminator line (latch-free by design: an event line, bounded by
+//     queue events);
+//   - when ONLY class-5 candidates exist, nothing is evicted and this call
+//     returns false: the caller rejects the incoming request honestly
+//     through the EXISTING unknown/evicted NACK class extended with its own
+//     named line — no new protocol surface — and the base's D-24 pass
+//     machinery retries within its existing bound (01-G01-7-LEVER.md
+//     section 2: prevent the eviction, not soften the rejection).
+// evictionClassOf is reused VERBATIM — no forked ranking (T-01-33-02);
+// sweepExpiredEntries' TTL path keeps its full eviction rights.
+bool ImageTxManager::evictEntriesOlderThan(const ImageTxEntry& reference) {
+    // Pass 1 — the 01-12 mid-service deferral (verbatim): an entry whose
+    // window is armed and incomplete is not a candidate this call (its
+    // heal/pull chunks are in flight on the link — evicting it mid-stream is
+    // exactly the 01-11 session-2 failure, balloon2.log:656). The BUSY check
+    // after the supersede still gates the request on these entries.
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
-        if (entries[i].used && entries[i].enqueueSeq < reference.enqueueSeq) {
-            if (entries[i].windowArmed &&
-                entries[i].windowNextIndex < entries[i].windowStart + entries[i].windowCount) {
-                Serial.printf("ImageTx: supersede of image %u deferred - window mid-service\n",
-                             entries[i].imageId);
-                continue;   // never free an in-flight heal/pull window
-            }
-            Serial.printf("ImageTx: window request for image %u supersedes older entry image %u; evicted\n",
-                         reference.imageId, entries[i].imageId);
-            freeEntry(entries[i]);
+        if (entries[i].used && entries[i].enqueueSeq < reference.enqueueSeq &&
+            entries[i].windowArmed &&
+            entries[i].windowNextIndex < entries[i].windowStart + entries[i].windowCount) {
+            Serial.printf("ImageTx: supersede of image %u deferred - window mid-service\n",
+                         entries[i].imageId);
         }
+    }
+    // Pass 2 — ranked eviction: evict the lowest-class (oldest-first within
+    // a class) non-mid-service candidate until only receipt-evidenced
+    // candidates remain.
+    bool evictedLower = false;
+    uint8_t lastEvictedClass = 0;
+    uint16_t lastEvictedImageId = 0;
+    for (;;) {
+        ImageTxEntry* victim = nullptr;
+        uint8_t victimClass = 0;
+        for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+            ImageTxEntry& e = entries[i];
+            if (!e.used || e.enqueueSeq >= reference.enqueueSeq) {
+                continue;
+            }
+            if (e.windowArmed &&
+                e.windowNextIndex < e.windowStart + e.windowCount) {
+                continue;   // deferred in pass 1 — never a supersede victim
+            }
+            uint8_t cls = evictionClassOf(e);
+            if (victim == nullptr || cls < victimClass ||
+                (cls == victimClass && e.enqueueSeq < victim->enqueueSeq)) {
+                victim = &e;
+                victimClass = cls;
+            }
+        }
+        if (victim == nullptr) {
+            return true;   // nothing older remains — request may proceed
+        }
+        if (victimClass >= 5) {
+            // The scan picks the LOWEST class, so class 5 here means every
+            // remaining candidate is receipt-evidenced.
+            if (!evictedLower) {
+                // Admission would sacrifice an actively-pulled entry for the
+                // incoming request — refuse: the caller rejects honestly and
+                // the base's bounded budget retries.
+                return false;
+            }
+            // Lower-class entries were evicted instead — spare each
+            // receipt-evidenced remainder with the engagement line.
+            for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+                ImageTxEntry& e = entries[i];
+                if (!e.used || e.enqueueSeq >= reference.enqueueSeq) {
+                    continue;
+                }
+                if (e.windowArmed &&
+                    e.windowNextIndex < e.windowStart + e.windowCount) {
+                    continue;
+                }
+                if (evictionClassOf(e) >= 5) {
+                    Serial.printf("ImageTx: supersede of receipt-evidenced image %u avoided - evicting class %u entry image %u instead (G-01-7)\n",
+                                 e.imageId, lastEvictedClass, lastEvictedImageId);
+                }
+            }
+            return true;
+        }
+        Serial.printf("ImageTx: window request for image %u supersedes older entry image %u; evicted\n",
+                     reference.imageId, victim->imageId);
+        lastEvictedClass = victimClass;
+        lastEvictedImageId = victim->imageId;
+        freeEntry(*victim);
+        evictedLower = true;
     }
 }
 

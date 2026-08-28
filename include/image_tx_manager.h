@@ -283,7 +283,12 @@ private:
     ImageTxEntry* findReannounceCandidate();
 
     // Eviction policy (bounded memory)
-    void evictEntriesOlderThan(const ImageTxEntry& reference); // newer-ID window request (D-19)
+    // G-01-7 round #14 (01-33, 01-G01-7-LEVER.md section 4 option a): the
+    // supersede victim selection is ranked through evictionClassOf. Returns
+    // false when admission would require evicting ONLY receipt-evidenced
+    // (class 5) candidates — the caller rejects the incoming request
+    // honestly through the existing unknown/evicted NACK class.
+    bool evictEntriesOlderThan(const ImageTxEntry& reference); // newer-ID window request (D-19)
     void sweepExpiredEntries();                                // IMG_ENTRY_TTL_MS idle timeout
 
     // Helpers

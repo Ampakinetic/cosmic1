@@ -56,9 +56,22 @@ static constexpr uint8_t  IMG_CHUNK_PAYLOAD_SIZE     = 200;
 // D-21 suggested window (chunks requested per pull round)
 static constexpr uint8_t  IMG_WINDOW_MAX_CHUNKS      = 16;
 
-// Balloon transfer-queue depth (PSRAM budget ~57 KB of 8 MB); overflow drops
-// the OLDEST entry with a Serial warning — never silently
-static constexpr uint8_t  IMG_TX_QUEUE_DEPTH         = 3;
+// Balloon transfer-queue depth. G-01-7 round #14 (01-33): raised 3 -> 5 per
+// 01-G01-7-LEVER.md section 3 — the session-10 discriminator census named the
+// depth-3 queue itself as the burst mismatch (a 3-capture burst fills every
+// slot, so image 42's window request evicted the base-activated, receipt-
+// evidenced image 41 entry via the supersede path, balloon4.log:816-817 ->
+// seven honest rejections -> full 0/31). Arithmetic bound: worst-case
+// residency 5 entries x (IMG_MAX_IMAGE_SIZE 50000 B full + THUMB_MAX_BYTES
+// 8192 B thumb) = 290,960 B (~284 KB) = 3.5% of the bench-observed free
+// PSRAM (8.35 MB, balloon4.log:138 [MEM]); internal RAM +2 x 88 B
+// (sizeof(ImageTxEntry)) = +176 B static. sweepExpiredEntries' 15-min TTL
+// and freeEntry's buffer lifetime are unchanged — depth raises the count of
+// SIMULTANEOUSLY resident entries, never any single entry's lifetime.
+// Overflow drops the class-ranked lowest candidate (never silently); the
+// overflow label prints this constant verbatim, so the depth is
+// self-evidencing in future logs.
+static constexpr uint8_t  IMG_TX_QUEUE_DEPTH         = 5;
 
 // D-24: bounded retransmit passes over missing chunks before finalizing
 // an image incomplete
