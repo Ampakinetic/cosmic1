@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 28/29 plans executed through round #11 (01-27 bench session #8 FAILED at image 38's FULL TX — D1 RECURRED and re-opened on the new task-watchdog-starvation axis, 01-25 warm-up disconfirmed as sufficient; D2/G-01-11 closed; G-01-7 unjudgeable seventh round; SC-3/WR-03/CIF-as-specified/QVGA clauses riding). Gap-closure round #12 planned 2026-08-28 as 01-28..01-29: D1 debug round #2 (WDT-starvation audit of the serviceWindowChunk -> E32 transmit path per debug doc §6.5, dispositioned fix, discriminators) then bench re-verification session #9 (both D1 crash classes + G-01-7 series A + every riding clause). Then the security gate
+**Plans:** 29/31 plans executed through round #12 (01-29 bench session #9 FAILED at protocol step 3 — D1's THIRD expression: TG0WDT in the inter-window lull after a clean first window, Saved PC 0x4037c7fa = esp_vApplicationTickHook, crash-adjacent i2cWrite carrying session-7-class mojibake on its own line, [LOOP] zero fires with loopTask healthy; the 01-28 Lever-A fix disconfirmed as sufficient a second time; G-01-7 unjudgeable a third time; SC-3/WR-03/CIF-as-specified/QVGA clauses riding an eighth round). Gap-closure round #13 planned 2026-08-28 as 01-30..01-31: D1 debug round #3 (the lull-phase candidate audit + crash-context determinism + the I2C/mojibake convergence per debug doc §8.6, evidence-selected fix/instrumentation, discriminators) then bench re-verification session #10 (all three D1 crash expressions + G-01-7 series A + every riding clause). Then the security gate
 
 Plans:
 **Wave 1**
@@ -139,6 +139,14 @@ Plans:
 **Wave 21** *(blocked on Wave 20 — bench re-verification trailing wave)*
 
 - [x] 01-29-PLAN.md — Bench re-verification session #9: flash both boards, D1 re-acceptance on BOTH crash classes (spaced smoke + SUSTAINED multi-window FULL service — the session-8 killer pattern — + series A, with the 01-28 fix's §7 discriminators engaged), G-01-7 series-A acceptance, WR-03 cadence discriminator, SC-3 visible-effect pairs (seventh round riding), CIF cycle (wire 8 as specified) + QVGA restore, dashboard LOOK glance; G-01-10/G-01-7 + WINDOWS 15/3 flipped on evidence; STATE names /gsd-secure-phase 1 as the remaining gate (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
+
+**Wave 22** *(gap-closure round #13, 2026-08-28; round-local wave 1 — the re-opened D1 blocker first, before any bench re-run)*
+
+- [ ] 01-30-PLAN.md — D1 debug round #3 (BLOCKER, G-01-10/WINDOWS 15, third expression): the §8.6 brief — inter-window-lull candidate audit (Wire-0 BMP280/OLED transactions incl. the deployed ESP_ERR_INVALID_STATE semantics, GPS UART1 reads, NVS/flash ops) with the §7.3 four-property arithmetic, crash-context determinism across the three expressions (lull-vs-service-vs-phase-independent hypothesis table), the I2C+mojibake+WDT convergence verdict, the discriminator-menu disposition (CPU0 idle observability, I2C health instrumentation, TWDT stage-0 check), evidence-selected fix/instrumentation + named bench discriminators; builds + harness, no bench claims (CTRL-01, CTRL-06, PRI-02, IMG-03)
+
+**Wave 23** *(blocked on Wave 22 — bench re-verification trailing wave)*
+
+- [ ] 01-31-PLAN.md — Bench re-verification session #10: flash both boards, D1 acceptance on ALL THREE crash expressions (spaced smoke + sustained multi-window FULL service + the NEW >=3-min inter-window-lull dwell — the session-9 killer), G-01-7 series-A acceptance (ninth attempt), WR-03 cadence discriminator, SC-3 visible-effect pairs (eighth round riding), CIF cycle (wire 8) + QVGA restore, dashboard LOOK glance; G-01-10/G-01-7 + WINDOWS 15/3 flipped on evidence; STATE names /gsd-secure-phase 1 as the remaining gate (CTRL-01, CTRL-02, CTRL-03, CTRL-04, CTRL-06, PRI-02, IMG-02, IMG-03)
 
 ### Phase 2: Image Transmission
 
