@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 4
+current_plan: 2
 status: executing
-stopped_at: Completed 01-34-PLAN.md
-last_updated: "2026-08-28T14:46:22.507Z"
-state_head: 0419f9db390f1b59b3d870cd0915aad1f37945b3
+stopped_at: Completed 02.5-01-PLAN.md
+last_updated: "2026-08-28T15:38:00.973Z"
+state_head: 4a684c93017d288ebe157e787d94bfb37160389d
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 48
-  completed_plans: 43
+  completed_plans: 44
 milestone_name: milestone
-current_phase_name: Balloon SD-Card File-Based Image Store
 current_phase: 2
+current_phase_name: Balloon SD-Card File-Based Image Store
 ---
 
 # Project State
@@ -28,7 +28,7 @@ current_phase: 2
 
 ## Current Position
 
-**Current Plan:** 4
+**Current Plan:** 2
 **Total Plans in Phase:** 4
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -107,7 +107,7 @@ See: `.planning/PROJECT.md`
 
 **Core value:** Users can remotely control the balloon camera and view captured images through the base station web interface, with real-time telemetry and map tracking always available.
 
-**Current focus:** Phase 01 — Command Protocol & Control
+**Current focus:** Phase 2.5 — Balloon SD-Card File-Based Image Store
 
 ## Next Steps
 
@@ -136,8 +136,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-28T13:41:17.481Z
-**Stopped at:** Completed 01-34-PLAN.md
+**Last session:** 2026-08-28T15:38:00.509Z
+**Stopped at:** Completed 02.5-01-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -185,6 +185,7 @@ See: `.planning/PROJECT.md`
 | Phase 01-32 P32 | 33min | 2 tasks | 6 files |
 | Phase 01-33 P33 | 14min (continuation; Tasks 1-2 prior session) | 3 tasks | 7 files |
 | Phase 01-34 P34 | ~4h across continuation executor sessions + operator bench session #11 (2026-08-29 ~01:05) | 2 tasks | 5 files |
+| Phase 02.5 P01 | 1956s | 3 tasks | 7 files |
 
 ## Decisions
 
@@ -282,3 +283,6 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: 01-32 round #14: the pinned-sdkconfig re-derivation (framework-arduinoespressif32-libs/esp32s3/sdkconfig:2175-2180 — INIT=y/CHECK_IDLE_TASK_CPU0=y/CPU1 not set/TIMEOUT_S=5/PANIC=y) predicts the wrong-handle reading for session-10's ESP_ERR_NOT_FOUND (it sampled IDLE1, the unsubscribed idle task); ESP_OK expected at 01-34 with the fixed ForCPU(0) handle, a repeated NOT_FOUND would re-open the sessions-8/9 TG0WDT attribution — the live boot line stays the deciding evidence
 - [Phase 2]: 01-32 round #14: NO D1 lever shipped per §10.5 item 5's standing guard — the [STACK] watermark instrument (throttled in-hook uxTaskGetStackHighWaterMark(NULL) + running-minimum latch + 1 Hz new-low print, the [MEM] convention) is the round's only designed discriminator; the D1 fix decision is deferred until the watermark answers at 01-34; the A/B guard G01_D1_IDLE_HOOK_DISABLED + §11.4 recipe make the hook-dispatch question cheap to kill
 - [Phase 2]: 01-33 round #14: G-01-7 lever shipped per 01-G01-7-LEVER.md option (a) — IMG_TX_QUEUE_DEPTH 3->5 (arithmetic-bounded: 290,960 B worst case = 3.5% of free PSRAM) + supersede-path victim selection ranked through evictionClassOf (reused verbatim, unforked); class-5 receipt-evidenced entries never the supersede victim while a lower-class candidate exists; only-receipt-evidenced -> honest rejection through the existing NACK_INVALID class; two discriminator lines for 01-34 (avoided-line + only-receipt-evidenced reject line); builds 2/2 + harness exit 0 + PRI-01 green; NO bench claims — G-01-7 flips only on 01-34's series-A verdicts; sixth pending end-of-phase operator confirmation
+- [Phase 2]: 02.5-01: META record pinned 36 bytes (plan's 32 arithmetically impossible; 33 field bytes + 3 pad), card-local format
+- [Phase 2]: 02.5-01: CARD_FULL refuses honestly with NO volatile fallback; IO_ERROR is the only route into the legacy PSRAM queue (D-03)
+- [Phase 2]: 02.5-01: separate lean BalloonSdStore module, not shared base sd_storage.cpp; base env excludes it (locked decision 5)

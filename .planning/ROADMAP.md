@@ -240,12 +240,12 @@ Plans:
 - SD-write-failure volatile fallback with honest labeling
 - Bench re-verification session #12
 
-**Plans:** 4 plans
+**Plans:** 1/4 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 02.5-01-PLAN.md — File-backed pipeline tracer: BalloonSdStore module, persist-before-manifest, chunk serving from file, honest volatile fallback, WR-01/WR-02 folds (wave 1)
+- [x] 02.5-01-PLAN.md — File-backed pipeline tracer: BalloonSdStore module, persist-before-manifest, chunk serving from file, honest volatile fallback, WR-01/WR-02 folds (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
