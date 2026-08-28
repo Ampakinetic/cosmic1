@@ -81,7 +81,9 @@ struct ImageTxSettings {
 
 // Transfer-queue entry. Full + thumbnail buffers are PSRAM-owned COPIES taken
 // at enqueue (Pitfall 7: the next capture's freeCurrentImage() must not pull
-// bytes out from under a transfer).
+// bytes out from under a transfer) — but ONLY on the volatile-fallback path
+// (STORE-03, Phase 2.5): a normal (file-backed) entry carries null buffers
+// and reads its chunk bytes from the card file via BalloonSdStoreTx().readChunk.
 struct ImageTxEntry {
     bool used;
     uint32_t enqueueSeq;      // monotonically increasing enqueue order (drop-oldest)
@@ -89,6 +91,15 @@ struct ImageTxEntry {
     uint8_t captureSource;    // CaptureSource value
     uint32_t captureTimeMs;   // balloon millis at capture (from ImageData timestamp)
     ImageTxSettings settings;
+
+    // D-03 (Phase 2.5): false (the default, from the {} zero-init) = FILE-
+    // BACKED — the capture was persisted to the card before any manifest
+    // (STORE-01), fullBuffer/thumbBuffer are null, and every chunk byte is
+    // read from the card at transmit time; the entry fields are the
+    // persist-derived values. true ONLY after an SD write failure routed
+    // the capture into the legacy volatile PSRAM queue below — an honestly-
+    // labeled degradation whose image is lost on reboot.
+    bool volatileFallback;
 
     uint8_t* fullBuffer;      // PSRAM-owned copy of the full image (null when oversize/not armable)
     size_t fullLength;

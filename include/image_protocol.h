@@ -141,13 +141,15 @@ static constexpr uint32_t IMG_FULL_REANNOUNCE_BUSY_MS  = 15000;
 // caught the loop too (a different, loop-visible class).
 static constexpr uint32_t IMG_LOOP_SLOW_PASS_MS = 2500;
 
-// Full-image transfer cap (research Q4 resolution): fulls larger than this
-// never arm a pull — the balloon logs a warning naming the image ID and size
+// Full-image transfer cap (research Q4 resolution; reason re-named at Phase
+// 2.5): the wire is FROZEN and the base's startTransfer validates totalSize
+// against its own MAX_IMAGE_SIZE (50000) in include/base_station_config.h —
+// a larger manifest would be rejected base-side, so fulls at or above this
+// never arm a pull (the balloon logs a warning naming the image ID and size
 // while the thumbnail still pushes, and the base never sees a FULL_IMAGE
-// manifest for them (no airtime is wasted on a doomed transfer). PAIRED with
-// MAX_IMAGE_SIZE (50000) in include/base_station_config.h — the base-side
-// manifest-validation bound; the two must stay equal or the balloon would
-// announce manifests the base rejects.
+// manifest for them). It is NOT a balloon RAM limit anymore — the Phase 2.5
+// file-backed pipeline holds no PSRAM image copy on the normal path; the cap
+// governs wire armability only, never what the card archive keeps.
 static constexpr uint32_t IMG_MAX_IMAGE_SIZE         = 50000;
 
 static constexpr uint32_t IMG_WINDOW_STALL_MS        = 8000;

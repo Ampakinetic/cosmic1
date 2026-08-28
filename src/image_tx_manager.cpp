@@ -1,4 +1,5 @@
 #include "image_tx_manager.h"
+#include "sd_store_balloon.h"
 #include "auto_capture.h"
 #include "sensor_manager.h"
 #include "power_manager.h"
@@ -442,11 +443,14 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
     entry.settings = snapshotSettings();
 
     // Enqueue gate (research Q4 resolution / PRI-03): a full image larger
-    // than IMG_MAX_IMAGE_SIZE never arms a full transfer — log a warning
-    // naming the image ID and size, skip the doomed copy entirely, and let
-    // the thumbnail still push. The base never sees a FULL_IMAGE manifest
-    // for it, so no pull is attempted (no airtime wasted on a transfer the
-    // base would reject at its own MAX_IMAGE_SIZE validation).
+    // than IMG_MAX_IMAGE_SIZE never ARMS a full transfer — the wire is
+    // frozen and the base's startTransfer validates totalSize against its
+    // own MAX_IMAGE_SIZE, so a larger manifest would be rejected base-side
+    // (the cap is a wire-contract bound, NOT a balloon RAM limit anymore —
+    // the Phase 2.5 file-backed path holds no PSRAM image copy). KEEP-
+    // EVERYTHING note: the capture is still persisted to the card archive
+    // below; the cap governs wire armability only, never what the archive
+    // keeps.
     bool fullArmable = (img.length <= IMG_MAX_IMAGE_SIZE);
     if (!fullArmable) {
         Serial.printf("ImageTx: image %u full size %u B exceeds cap %u B; skipping full transfer (thumbnail still pushes)\n",
@@ -455,49 +459,105 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
                      static_cast<unsigned>(IMG_MAX_IMAGE_SIZE));
     }
 
-    if (fullArmable) {
-        // Take PSRAM ownership of the full image BEFORE returning from this
-        // branch (Pitfall 7): the next capture's freeCurrentImage() must not
-        // pull bytes out from under a transfer
-        entry.fullBuffer = (uint8_t*)ps_malloc(img.length);
-        if (!entry.fullBuffer) {
-            // WR-01 (review 7d96a98): PSRAM exhaustion is exactly when the
-            // cheapest payload must survive — mark the full unavailable and
-            // fall through to the thumbnail branch (mirrors the oversize
-            // skip above and the thumb-alloc-failure path below); the
-            // both-empty guard after the thumbnail branch keeps a
-            // nothing-transferable capture from occupying a queue slot.
-            Serial.printf("ImageTx: PSRAM allocation failed for image %u full buffer (%u bytes); full dropped, thumbnail still pushes\n",
-                         imageId, static_cast<unsigned>(img.length));
+    // Thumbnail-bytes truth, shared by both admission branches below.
+    const bool haveThumbBytes =
+        (haveThumb && thumb.valid && thumb.buffer != nullptr && thumb.length > 0);
+
+    // STORE-01 / D-02: persist BEFORE any manifest state exists — the card
+    // write is the admission gate, so the 0x12 manifest can never precede
+    // the file. CRCs are computed HERE over the Camera() buffers (the
+    // caller owns them; the module only stores what it is given).
+    const uint32_t fullCrc = esp_rom_crc32_le(0, img.buffer, img.length);
+    const uint32_t thumbCrc = haveThumbBytes
+        ? esp_rom_crc32_le(0, thumb.buffer, thumb.length)
+        : 0;
+    const PersistOutcome outcome = BalloonSdStoreTx().persistCapture(
+        imageId,
+        entry.captureSource,
+        entry.captureTimeMs,
+        entry.settings,
+        img.buffer, img.length, fullCrc,
+        haveThumbBytes ? thumb.buffer : nullptr,
+        haveThumbBytes ? thumb.length : 0,
+        thumbCrc);
+
+    if (outcome == PersistOutcome::CARD_FULL) {
+        // Locked keep-everything decision: a card-full verdict at persist
+        // time refuses the capture honestly and NEVER routes to the volatile
+        // fallback (the fallback must not become the normal path for a full
+        // card). This is the race backstop for plan 02.5-03's pre-capture
+        // gate — the card filled between that gate and this persist. No
+        // queue entry, no manifest; the Camera() buffers are freed by the
+        // existing capture path (the next captureImage()).
+        Serial.printf("ImageTx: card full - image %u capture refused\n", imageId);
+        return;
+    }
+
+    if (outcome == PersistOutcome::IO_ERROR) {
+        // D-03: the volatile PSRAM queue survives ONLY as this honestly-
+        // labeled SD-write-failure fallback — the admission names the
+        // degradation and its loss-on-reboot consequence (prohibition 3:
+        // never entered, logged, or labeled as the normal path).
+        entry.volatileFallback = true;
+        Serial.printf("ImageTx: SD write failed for image %u - VOLATILE fallback engaged (image lost on reboot)\n",
+                     imageId);
+        logMemDiagnostic("volatile-fallback");
+
+        if (fullArmable) {
+            // Take PSRAM ownership of the full image BEFORE returning from
+            // this branch (Pitfall 7): the next capture's freeCurrentImage()
+            // must not pull bytes out from under a transfer
+            entry.fullBuffer = (uint8_t*)ps_malloc(img.length);
+            if (!entry.fullBuffer) {
+                // WR-01 (review 7d96a98): PSRAM exhaustion is exactly when the
+                // cheapest payload must survive — mark the full unavailable and
+                // fall through to the thumbnail branch (mirrors the oversize
+                // skip above and the thumb-alloc-failure path below); the
+                // both-empty guard after the thumbnail branch keeps a
+                // nothing-transferable capture from occupying a queue slot.
+                Serial.printf("ImageTx: PSRAM allocation failed for image %u full buffer (%u bytes); full dropped, thumbnail still pushes\n",
+                             imageId, static_cast<unsigned>(img.length));
+                entry.fullBuffer = nullptr;
+                entry.fullLength = 0;
+                entry.fullTotalChunks = 0;
+            } else {
+                memcpy(entry.fullBuffer, img.buffer, img.length);
+                entry.fullLength = img.length;
+                entry.fullCrc32 = esp_rom_crc32_le(0, entry.fullBuffer, entry.fullLength);
+                entry.fullTotalChunks = chunksForSize(entry.fullLength);
+            }
+        } else {
             entry.fullBuffer = nullptr;
             entry.fullLength = 0;
             entry.fullTotalChunks = 0;
-        } else {
-            memcpy(entry.fullBuffer, img.buffer, img.length);
-            entry.fullLength = img.length;
-            entry.fullCrc32 = esp_rom_crc32_le(0, entry.fullBuffer, entry.fullLength);
-            entry.fullTotalChunks = chunksForSize(entry.fullLength);
         }
-    } else {
-        entry.fullBuffer = nullptr;
-        entry.fullLength = 0;
-        entry.fullTotalChunks = 0;
-    }
 
-    if (haveThumb && thumb.valid && thumb.buffer != nullptr) {
-        entry.thumbBuffer = (uint8_t*)ps_malloc(thumb.length);
-        if (entry.thumbBuffer != nullptr) {
-            memcpy(entry.thumbBuffer, thumb.buffer, thumb.length);
-            entry.thumbLength = thumb.length;
-            entry.thumbCrc32 = esp_rom_crc32_le(0, entry.thumbBuffer, entry.thumbLength);
-            entry.thumbTotalChunks = chunksForSize(thumb.length);
-            entry.state = ImageTxEntryState::PUSH_THUMB_MANIFEST;
+        if (haveThumb && thumb.valid && thumb.buffer != nullptr) {
+            entry.thumbBuffer = (uint8_t*)ps_malloc(thumb.length);
+            if (entry.thumbBuffer != nullptr) {
+                memcpy(entry.thumbBuffer, thumb.buffer, thumb.length);
+                entry.thumbLength = thumb.length;
+                entry.thumbCrc32 = esp_rom_crc32_le(0, entry.thumbBuffer, entry.thumbLength);
+                entry.thumbTotalChunks = chunksForSize(thumb.length);
+                entry.state = ImageTxEntryState::PUSH_THUMB_MANIFEST;
+            } else {
+                // Thumbnail copy failed — still enqueue the full image; skip the
+                // thumbnail pushes (logged, never silent)
+                if (DEBUG_IMAGE_TX) {
+                    Serial.printf("ImageTx: PSRAM allocation failed for image %u thumbnail (%u bytes); pushing full image only\n",
+                                 imageId, static_cast<unsigned>(thumb.length));
+                }
+                entry.thumbBuffer = nullptr;
+                entry.thumbLength = 0;
+                entry.thumbTotalChunks = 0;
+                entry.state = fullTransferArmable(entry) ? ImageTxEntryState::ANNOUNCE_FULL
+                                                         : ImageTxEntryState::THUMB_PUSHED;
+            }
         } else {
-            // Thumbnail copy failed — still enqueue the full image; skip the
-            // thumbnail pushes (logged, never silent)
+            // captureThumbnail failed — still enqueue the full image and skip
+            // the thumbnail pushes (logged, never silent)
             if (DEBUG_IMAGE_TX) {
-                Serial.printf("ImageTx: PSRAM allocation failed for image %u thumbnail (%u bytes); pushing full image only\n",
-                             imageId, static_cast<unsigned>(thumb.length));
+                Serial.printf("ImageTx: thumbnail capture failed for image %u; pushing full image only\n", imageId);
             }
             entry.thumbBuffer = nullptr;
             entry.thumbLength = 0;
@@ -506,23 +566,51 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
                                                      : ImageTxEntryState::THUMB_PUSHED;
         }
     } else {
-        // captureThumbnail failed — still enqueue the full image and skip
-        // the thumbnail pushes (logged, never silent)
-        if (DEBUG_IMAGE_TX) {
-            Serial.printf("ImageTx: thumbnail capture failed for image %u; pushing full image only\n", imageId);
+        // PERSISTED (STORE-01/STORE-03 normal path): the card now holds
+        // IMG_{id}.JPG + IMG_{id}_T.JPG + the META commit record, written
+        // BEFORE this entry exists. The entry is a small RAM index over
+        // those card bytes — fullBuffer/thumbBuffer stay null ({}-init) and
+        // chunk bytes are read from the card at transmit time. NO ps_malloc
+        // copy happens on this branch.
+        entry.fullLength = img.length;
+        entry.fullCrc32 = fullCrc;
+        entry.fullTotalChunks = chunksForSize(img.length);
+        if (haveThumbBytes) {
+            entry.thumbLength = thumb.length;
+            entry.thumbCrc32 = thumbCrc;
+            entry.thumbTotalChunks = chunksForSize(thumb.length);
         }
-        entry.thumbBuffer = nullptr;
-        entry.thumbLength = 0;
-        entry.thumbTotalChunks = 0;
-        entry.state = fullTransferArmable(entry) ? ImageTxEntryState::ANNOUNCE_FULL
-                                                 : ImageTxEntryState::THUMB_PUSHED;
+        Serial.printf("ImageTx: image %u persisted to SD (full %u B / %u chunks, thumb %u B / %u chunks)\n",
+                     imageId,
+                     static_cast<unsigned>(entry.fullLength),
+                     static_cast<unsigned>(entry.fullTotalChunks),
+                     static_cast<unsigned>(entry.thumbLength),
+                     static_cast<unsigned>(entry.thumbTotalChunks));
+        if (!haveThumbBytes) {
+            // captureThumbnail failed — the persist carried the full only;
+            // skip the thumbnail pushes exactly as the volatile branch does
+            // (logged, never silent)
+            if (DEBUG_IMAGE_TX) {
+                Serial.printf("ImageTx: thumbnail capture failed for image %u; pushing full image only\n", imageId);
+            }
+            entry.thumbLength = 0;
+            entry.thumbTotalChunks = 0;
+            entry.state = fullTransferArmable(entry) ? ImageTxEntryState::ANNOUNCE_FULL
+                                                     : ImageTxEntryState::THUMB_PUSHED;
+        } else {
+            entry.state = ImageTxEntryState::PUSH_THUMB_MANIFEST;
+        }
     }
     entry.lastActivityMs = millis();
 
     // Nothing transferable (no thumbnail AND no armable full) — do not
-    // occupy a queue slot
-    if (entry.state == ImageTxEntryState::THUMB_PUSHED &&
-        entry.thumbBuffer == nullptr && entry.fullBuffer == nullptr) {
+    // occupy a queue slot. Byte truth is path-dependent: a volatile entry
+    // owns PSRAM buffers; a file-backed entry's buffers are null by
+    // construction and its truth is the persist-derived lengths.
+    const bool noBytes = entry.volatileFallback
+        ? (entry.thumbBuffer == nullptr && entry.fullBuffer == nullptr)
+        : (entry.thumbLength == 0 && entry.fullLength == 0);
+    if (entry.state == ImageTxEntryState::THUMB_PUSHED && noBytes) {
         return;
     }
 
@@ -820,49 +908,97 @@ bool ImageTxManager::pushThumbChunk(ImageTxEntry& entry) {
         return true;
     }
 
-    size_t offset = static_cast<size_t>(entry.nextThumbChunk) * IMG_CHUNK_PAYLOAD_SIZE;
-    size_t remaining = entry.thumbLength - offset;
-    uint8_t chunkLen = static_cast<uint8_t>(
-        (remaining > IMG_CHUNK_PAYLOAD_SIZE) ? IMG_CHUNK_PAYLOAD_SIZE : remaining);
+    // Byte source (STORE-03 / D-03): a file-backed entry (the default, no
+    // PSRAM image copy exists) reads its thumbnail chunk from the card file
+    // at chunkIndex * IMG_CHUNK_PAYLOAD_SIZE into a stack buffer; a
+    // volatile-fallback entry slices its PSRAM thumbBuffer exactly as before.
+    // Only the byte SOURCE changes — framing, pacing, and WR-08 semantics
+    // below are untouched.
+    uint8_t chunkBuf[IMG_CHUNK_PAYLOAD_SIZE];
+    const uint8_t* source = nullptr;
+    uint8_t chunkLen = 0;
+    bool sdReadFailed = false;
+    if (!entry.volatileFallback) {
+        size_t got = 0;
+        if (BalloonSdStoreTx().readChunk(entry.imageId, ImageKind::THUMBNAIL,
+                                         entry.nextThumbChunk,
+                                         chunkBuf, sizeof(chunkBuf), &got)) {
+            chunkLen = static_cast<uint8_t>(got);
+            source = chunkBuf;
+        } else {
+            // A readChunk false return takes the EXACT failure semantics of
+            // a transmit failure (same-index fail streak, IMG_CHUNK_TX_RETRY_MAX
+            // bound, the named skip log below extended with "SD read failed") —
+            // never a fabricated chunk, never cursor advance on unread bytes.
+            sdReadFailed = true;
+        }
+    } else {
+        size_t offset = static_cast<size_t>(entry.nextThumbChunk) * IMG_CHUNK_PAYLOAD_SIZE;
+        size_t remaining = entry.thumbLength - offset;
+        chunkLen = static_cast<uint8_t>(
+            (remaining > IMG_CHUNK_PAYLOAD_SIZE) ? IMG_CHUNK_PAYLOAD_SIZE : remaining);
+        source = entry.thumbBuffer + offset;
+    }
 
-    ImageChunkPacket pkt = createChunkPacket(entry.imageId, static_cast<uint8_t>(ImageKind::THUMBNAIL),
-                                             entry.nextThumbChunk,
-                                             entry.thumbBuffer + offset, chunkLen);
+    bool ok = false;
+    if (!sdReadFailed) {
+        ImageChunkPacket pkt = createChunkPacket(entry.imageId, static_cast<uint8_t>(ImageKind::THUMBNAIL),
+                                                 entry.nextThumbChunk,
+                                                 source, chunkLen);
 
-    uint8_t buffer[CMD_MAX_PACKET_SIZE];
-    size_t length = 0;
-    bool ok = CommandProtocol::serializeChunk(pkt, buffer, length) && lora->transmit(buffer, length);
+        uint8_t buffer[CMD_MAX_PACKET_SIZE];
+        size_t length = 0;
+        ok = CommandProtocol::serializeChunk(pkt, buffer, length) && lora->transmit(buffer, length);
+    }
 
     if (DEBUG_IMAGE_TX) {
         // Kind discriminator (CR-01, 01-13): the push is always THUMBNAIL —
         // printing it keeps push and window lines symmetric so bench logs can
         // tell which kind's bytes left the balloon at every index
-        Serial.printf("ImageTx: chunk(image %u kind %u, %u/%u, %u B) %s\n",
-                     entry.imageId,
-                     static_cast<unsigned>(ImageKind::THUMBNAIL),
-                     static_cast<unsigned>(entry.nextThumbChunk + 1),
-                     static_cast<unsigned>(entry.thumbTotalChunks),
-                     chunkLen,
-                     ok ? "sent" : "FAILED");
+        if (sdReadFailed) {
+            Serial.printf("ImageTx: chunk(image %u kind %u, %u/%u) SD read failed\n",
+                         entry.imageId,
+                         static_cast<unsigned>(ImageKind::THUMBNAIL),
+                         static_cast<unsigned>(entry.nextThumbChunk + 1),
+                         static_cast<unsigned>(entry.thumbTotalChunks));
+        } else {
+            Serial.printf("ImageTx: chunk(image %u kind %u, %u/%u, %u B) %s\n",
+                         entry.imageId,
+                         static_cast<unsigned>(ImageKind::THUMBNAIL),
+                         static_cast<unsigned>(entry.nextThumbChunk + 1),
+                         static_cast<unsigned>(entry.thumbTotalChunks),
+                         chunkLen,
+                         ok ? "sent" : "FAILED");
+        }
     }
 
     // WR-08 (01-17): the cursor advances ONLY on a successful transmit — a
-    // failed transmit retries the SAME index on subsequent process() passes
-    // (one transmit per pass is the existing pacing), bounded by
-    // IMG_CHUNK_TX_RETRY_MAX. At the bound the chunk is skipped for its pass
-    // with a named log; before the bound the failed index simply retries.
+    // failed transmit (or SD read) retries the SAME index on subsequent
+    // process() passes (one transmit per pass is the existing pacing),
+    // bounded by IMG_CHUNK_TX_RETRY_MAX. At the bound the chunk is skipped
+    // for its pass with a named log; before the bound the failed index
+    // simply retries.
     if (ok) {
         entry.thumbChunkFailStreak = 0;
         entry.nextThumbChunk++;
     } else {
         entry.thumbChunkFailStreak++;
         if (entry.thumbChunkFailStreak >= IMG_CHUNK_TX_RETRY_MAX) {
-            Serial.printf("ImageTx: chunk(image %u kind %u, %u/%u) skipped after %u failed transmit attempts\n",
-                         entry.imageId,
-                         static_cast<unsigned>(ImageKind::THUMBNAIL),
-                         static_cast<unsigned>(entry.nextThumbChunk + 1),
-                         static_cast<unsigned>(entry.thumbTotalChunks),
-                         static_cast<unsigned>(IMG_CHUNK_TX_RETRY_MAX));
+            if (sdReadFailed) {
+                Serial.printf("ImageTx: chunk(image %u kind %u, %u/%u) skipped after %u failed attempts - SD read failed\n",
+                             entry.imageId,
+                             static_cast<unsigned>(ImageKind::THUMBNAIL),
+                             static_cast<unsigned>(entry.nextThumbChunk + 1),
+                             static_cast<unsigned>(entry.thumbTotalChunks),
+                             static_cast<unsigned>(IMG_CHUNK_TX_RETRY_MAX));
+            } else {
+                Serial.printf("ImageTx: chunk(image %u kind %u, %u/%u) skipped after %u failed transmit attempts\n",
+                             entry.imageId,
+                             static_cast<unsigned>(ImageKind::THUMBNAIL),
+                             static_cast<unsigned>(entry.nextThumbChunk + 1),
+                             static_cast<unsigned>(entry.thumbTotalChunks),
+                             static_cast<unsigned>(IMG_CHUNK_TX_RETRY_MAX));
+            }
             entry.thumbChunkFailStreak = 0;
             entry.nextThumbChunk++;
         }
@@ -973,9 +1109,14 @@ bool ImageTxManager::announceFullManifest(ImageTxEntry& entry) {
 ImageTxEntry* ImageTxManager::findReannounceCandidate() {
     ImageTxEntry* best = nullptr;
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+        // Full-bytes truth (STORE-03): a file-backed entry's full lives on
+        // the card — its persist-derived length is the truth, not a buffer.
+        const bool haveFullBytes = entries[i].volatileFallback
+            ? (entries[i].fullBuffer != nullptr)
+            : (entries[i].fullLength > 0);
         if (!entries[i].used ||
             entries[i].state != ImageTxEntryState::ANNOUNCED ||
-            entries[i].fullBuffer == nullptr ||
+            !haveFullBytes ||
             entries[i].fullWindowEverArmed) {
             continue;
         }
@@ -1063,7 +1204,7 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     // liveness evidence the 01-17 drop-clock ignored. Write-only timing data,
     // never used for content decisions (T-01-21-01); the per-entry receipt
     // stamp further below is reachable only after full untrusted-input
-    // validation (kind enum + entry match).
+    // validation (kind enum + entry match + per-kind range bounds — WR-02).
     lastInboundWindowRequestMs = millis();
     // G-01-11 / WINDOWS 16 (01-25): first genuine receipt arms the busy-hold
     // gate — same trust-boundary position as the stamp (before kind
@@ -1105,7 +1246,13 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
             continue;
         }
         if (thumbWindow) {
-            if (entries[i].thumbBuffer == nullptr ||
+            // Thumbnail-bytes truth (STORE-03): a volatile-fallback entry owns
+            // a PSRAM buffer; a file-backed entry's bytes live on the card and
+            // its truth is the persist-derived length (buffers null).
+            const bool haveThumbBytes = entries[i].volatileFallback
+                ? (entries[i].thumbBuffer != nullptr)
+                : (entries[i].thumbLength > 0);
+            if (!haveThumbBytes ||
                 entries[i].state == ImageTxEntryState::PUSH_THUMB_MANIFEST ||
                 entries[i].state == ImageTxEntryState::PUSH_THUMB_CHUNKS) {
                 continue;
@@ -1125,23 +1272,6 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
         return WindowRequestResult::UNKNOWN_IMAGE;
     }
 
-    // G-01-7 burst full-delivery, balloon lever 1 (01-21): receipt evidence —
-    // this request MATCHED a queued entry, so the base demonstrably holds at
-    // least one of its manifests and is asking (reached only after the kind
-    // enum check and entry match above — a crafted frame cannot stamp an
-    // entry it did not fully address, T-01-21-01). Stamp it, and re-arm the
-    // bounded re-announce budget: a manifest the base is demonstrably still
-    // working must not age out at the IMG_FULL_REANNOUNCE_MAX bound while the
-    // base keeps asking for the entry (session-6 images 25/26 — base held
-    // their manifests 3x/4x while the bound expired, balloon11.log:553/:575).
-    target->lastWindowRequestMs = millis();
-    if (target->state == ImageTxEntryState::ANNOUNCED &&
-        !target->fullWindowEverArmed && target->reannounceAttempts > 0) {
-        target->reannounceAttempts = 0;
-        Serial.printf("ImageTx: re-announce budget re-armed - window request received for image %u\n",
-                     imageId);
-    }
-
     // Per-kind range validation (T-02-11): startChunk/count are bounded by
     // the totalChunks of the kind the request actually addresses
     const uint16_t totalChunks = thumbWindow ? target->thumbTotalChunks
@@ -1157,6 +1287,28 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     // what actually exists (a request fully past the end is rejected above)
     if (static_cast<uint32_t>(startChunk) + count > totalChunks) {
         count = static_cast<uint16_t>(totalChunks - startChunk);
+    }
+
+    // G-01-7 burst full-delivery, balloon lever 1 (01-21): receipt evidence —
+    // this request MATCHED a queued entry AND passed FULL untrusted-input
+    // validation (kind enum check, entry match, per-kind range bounds and
+    // tail clamp above — T-01-21-01's full-validation clause), so the base
+    // demonstrably holds at least one of its manifests and is asking. WR-02
+    // (01-REVIEW): the stamp sits AFTER full validation — in its original
+    // pre-validation position a CRC-valid but malformed request (count 0 /
+    // out-of-bounds startChunk) stamped receipt evidence onto an entry,
+    // pinning it in the protected eviction class and re-arming the bounded
+    // re-announce budget indefinitely. Stamp it, and re-arm the bounded
+    // re-announce budget: a manifest the base is demonstrably still working
+    // must not age out at the IMG_FULL_REANNOUNCE_MAX bound while the base
+    // keeps asking for the entry (session-6 images 25/26 — base held their
+    // manifests 3x/4x while the bound expired, balloon11.log:553/:575).
+    target->lastWindowRequestMs = millis();
+    if (target->state == ImageTxEntryState::ANNOUNCED &&
+        !target->fullWindowEverArmed && target->reannounceAttempts > 0) {
+        target->reannounceAttempts = 0;
+        Serial.printf("ImageTx: re-announce budget re-armed - window request received for image %u\n",
+                     imageId);
     }
 
     if (!thumbWindow) {
@@ -1253,51 +1405,89 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
         return true;   // no transmit this pass — the settle window holds
     }
 
-    // KIND-SELECTED source (D-22 / CR-01): the armed window names which owned
-    // buffer it serves — THUMBNAIL windows slice thumbnail bytes, FULL windows
-    // slice full-image bytes. The offset math is identical for both (chunk
-    // index * 200, tail-clamped by the selected buffer's remaining bytes;
-    // bounds hold by construction: windowNextIndex < windowStart +
-    // windowCount <= the armed kind's totalChunks, and the arming matcher
-    // guaranteed that kind's buffer is non-null)
+    // KIND-SELECTED source (D-22 / CR-01): the armed window names which bytes
+    // it serves — THUMBNAIL windows serve thumbnail bytes, FULL windows serve
+    // full-image bytes. STORE-03 (Phase 2.5): a file-backed entry (the
+    // default, no PSRAM image copy exists) reads the armed kind's card file
+    // at chunkIndex * IMG_CHUNK_PAYLOAD_SIZE into a stack buffer; a volatile-
+    // fallback entry slices the selected PSRAM buffer as before (offset math
+    // identical for both kinds: chunk index * 200, tail-clamped by the
+    // selected byte length; bounds hold by construction: windowNextIndex <
+    // windowStart + windowCount <= the armed kind's totalChunks). Only the
+    // byte SOURCE changes — the settle gate above, WR-08 retry/skip, and the
+    // SERVED transition below are untouched.
     const bool thumbWindow = (entry.windowKind == static_cast<uint8_t>(ImageKind::THUMBNAIL));
-    const uint8_t* source = thumbWindow ? entry.thumbBuffer : entry.fullBuffer;
-    const size_t sourceLength = thumbWindow ? entry.thumbLength : entry.fullLength;
-
     uint16_t idx = entry.windowNextIndex;
-    size_t offset = static_cast<size_t>(idx) * IMG_CHUNK_PAYLOAD_SIZE;
-    size_t remaining = sourceLength - offset;
-    uint8_t chunkLen = static_cast<uint8_t>(
-        (remaining > IMG_CHUNK_PAYLOAD_SIZE) ? IMG_CHUNK_PAYLOAD_SIZE : remaining);
 
-    ImageChunkPacket pkt = createChunkPacket(entry.imageId, entry.windowKind,
-                                             idx,
-                                             source + offset, chunkLen);
+    uint8_t chunkBuf[IMG_CHUNK_PAYLOAD_SIZE];
+    const uint8_t* source = nullptr;
+    uint8_t chunkLen = 0;
+    bool sdReadFailed = false;
+    if (!entry.volatileFallback) {
+        size_t got = 0;
+        if (BalloonSdStoreTx().readChunk(entry.imageId,
+                                         thumbWindow ? ImageKind::THUMBNAIL : ImageKind::FULL_IMAGE,
+                                         idx,
+                                         chunkBuf, sizeof(chunkBuf), &got)) {
+            chunkLen = static_cast<uint8_t>(got);
+            source = chunkBuf;
+        } else {
+            // A readChunk false return takes the EXACT failure semantics of
+            // a transmit failure (same-index fail streak, IMG_CHUNK_TX_RETRY_MAX
+            // bound, the named skip log below extended with "SD read failed") —
+            // never a fabricated chunk, never cursor advance on unread bytes.
+            sdReadFailed = true;
+        }
+    } else {
+        const uint8_t* buf = thumbWindow ? entry.thumbBuffer : entry.fullBuffer;
+        const size_t sourceLength = thumbWindow ? entry.thumbLength : entry.fullLength;
+        size_t offset = static_cast<size_t>(idx) * IMG_CHUNK_PAYLOAD_SIZE;
+        size_t remaining = sourceLength - offset;
+        chunkLen = static_cast<uint8_t>(
+            (remaining > IMG_CHUNK_PAYLOAD_SIZE) ? IMG_CHUNK_PAYLOAD_SIZE : remaining);
+        source = buf + offset;
+    }
 
-    uint8_t buffer[CMD_MAX_PACKET_SIZE];
-    size_t length = 0;
-    bool ok = CommandProtocol::serializeChunk(pkt, buffer, length) && lora->transmit(buffer, length);
+    bool ok = false;
+    if (!sdReadFailed) {
+        ImageChunkPacket pkt = createChunkPacket(entry.imageId, entry.windowKind,
+                                                 idx,
+                                                 source, chunkLen);
+
+        uint8_t buffer[CMD_MAX_PACKET_SIZE];
+        size_t length = 0;
+        ok = CommandProtocol::serializeChunk(pkt, buffer, length) && lora->transmit(buffer, length);
+    }
 
     if (DEBUG_IMAGE_TX) {
         // Kind discriminator (CR-01 / G-01-9 defect B, 01-13): the log names
         // the kind the window serves — bench logs can discriminate which
         // kind's bytes left the balloon at every index
-        Serial.printf("ImageTx: window chunk(image %u kind %u, %u/%u, %u B) %s\n",
-                     entry.imageId,
-                     static_cast<unsigned>(entry.windowKind),
-                     static_cast<unsigned>(idx - entry.windowStart + 1),
-                     static_cast<unsigned>(entry.windowCount),
-                     chunkLen,
-                     ok ? "sent" : "FAILED");
+        if (sdReadFailed) {
+            Serial.printf("ImageTx: window chunk(image %u kind %u, %u/%u) SD read failed\n",
+                         entry.imageId,
+                         static_cast<unsigned>(entry.windowKind),
+                         static_cast<unsigned>(idx - entry.windowStart + 1),
+                         static_cast<unsigned>(entry.windowCount));
+        } else {
+            Serial.printf("ImageTx: window chunk(image %u kind %u, %u/%u, %u B) %s\n",
+                         entry.imageId,
+                         static_cast<unsigned>(entry.windowKind),
+                         static_cast<unsigned>(idx - entry.windowStart + 1),
+                         static_cast<unsigned>(entry.windowCount),
+                         chunkLen,
+                         ok ? "sent" : "FAILED");
+        }
     }
 
     // WR-08 (01-17): the cursor advances ONLY on a successful transmit — the
-    // same same-index bound as the push path, with the skip log naming the
-    // window kind. The SERVED transition is SUCCESS-GATED on the final
-    // chunk: a final chunk skipped after the bound still completes the window
-    // (cursor advanced, windowArmed cleared — the base's tail re-request
-    // re-opens service) but leaves the entry at ANNOUNCED, never SERVED for
-    // bytes that never left the balloon.
+    // same same-index bound as the push path (an SD read failure counts
+    // identically), with the skip log naming the window kind. The SERVED
+    // transition is SUCCESS-GATED on the final chunk: a final chunk skipped
+    // after the bound still completes the window (cursor advanced,
+    // windowArmed cleared — the base's tail re-request re-opens service) but
+    // leaves the entry at ANNOUNCED, never SERVED for bytes that never left
+    // the balloon.
     bool finalChunkSkipped = false;
     if (ok) {
         entry.windowChunkFailStreak = 0;
@@ -1305,12 +1495,21 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
     } else {
         entry.windowChunkFailStreak++;
         if (entry.windowChunkFailStreak >= IMG_CHUNK_TX_RETRY_MAX) {
-            Serial.printf("ImageTx: window chunk(image %u kind %u, %u/%u) skipped after %u failed transmit attempts\n",
-                         entry.imageId,
-                         static_cast<unsigned>(entry.windowKind),
-                         static_cast<unsigned>(idx - entry.windowStart + 1),
-                         static_cast<unsigned>(entry.windowCount),
-                         static_cast<unsigned>(IMG_CHUNK_TX_RETRY_MAX));
+            if (sdReadFailed) {
+                Serial.printf("ImageTx: window chunk(image %u kind %u, %u/%u) skipped after %u failed attempts - SD read failed\n",
+                             entry.imageId,
+                             static_cast<unsigned>(entry.windowKind),
+                             static_cast<unsigned>(idx - entry.windowStart + 1),
+                             static_cast<unsigned>(entry.windowCount),
+                             static_cast<unsigned>(IMG_CHUNK_TX_RETRY_MAX));
+            } else {
+                Serial.printf("ImageTx: window chunk(image %u kind %u, %u/%u) skipped after %u failed transmit attempts\n",
+                             entry.imageId,
+                             static_cast<unsigned>(entry.windowKind),
+                             static_cast<unsigned>(idx - entry.windowStart + 1),
+                             static_cast<unsigned>(entry.windowCount),
+                             static_cast<unsigned>(IMG_CHUNK_TX_RETRY_MAX));
+            }
             entry.windowChunkFailStreak = 0;
             entry.windowNextIndex++;
             finalChunkSkipped =
@@ -1505,11 +1704,16 @@ ImageTxSettings ImageTxManager::snapshotSettings() const {
     return s;
 }
 
-// A full transfer can only be armed when the owned buffer exists and its
-// length is inside the IMG_MAX_IMAGE_SIZE cap (oversize entries park after
-// their thumbnail push — the Q4 gate)
+// A full transfer can only be armed when the entry's full bytes exist — a
+// volatile-fallback entry's PSRAM buffer, or (STORE-03, the default) a
+// file-backed entry's persist-derived length with the bytes on the card —
+// and the length is inside the IMG_MAX_IMAGE_SIZE cap (oversize entries park
+// after their thumbnail push — the Q4 wire-contract gate, not a RAM limit)
 bool ImageTxManager::fullTransferArmable(const ImageTxEntry& entry) const {
-    return entry.fullBuffer != nullptr && entry.fullLength > 0 &&
+    const bool haveFullBytes = entry.volatileFallback
+        ? (entry.fullBuffer != nullptr)
+        : (entry.fullLength > 0);
+    return haveFullBytes && entry.fullLength > 0 &&
            entry.fullLength <= IMG_MAX_IMAGE_SIZE;
 }
 
@@ -1546,6 +1750,7 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     entry.windowCount = 0;
     entry.windowNextIndex = 0;
     entry.windowArmedAtMs = 0;
+    entry.volatileFallback = false;   // D-03: a recycled slot starts file-backed (the default)
     entry.used = false;
     entry.state = ImageTxEntryState::IDLE;
 }
