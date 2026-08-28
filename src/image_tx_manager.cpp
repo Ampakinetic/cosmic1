@@ -5,6 +5,9 @@
 #include "sensor_pins.h"
 #include <esp_rom_crc.h>
 #include <esp_heap_caps.h>
+// G-01-10 round #12 discriminator B1 (01-28): esp_reset_reason() for the
+// boot reset-cause line — .planning/debug/d1-crash-regression-push-start.md §7.6
+#include <esp_system.h>
 
 // Debug configuration
 #ifndef DEBUG_IMAGE_TX
@@ -40,6 +43,8 @@ ImageTxManager::ImageTxManager()
     , memDiagLastMs(0)
     , memDiagMinHeap(0)
     , memDiagMinStackHw(0)
+    , lastProcessPassMs(0)
+    , loopSlowPassLogged(false)
 {
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
         entries[i] = ImageTxEntry{};
@@ -54,6 +59,33 @@ ImageTxManager::~ImageTxManager() {
 // ===========================
 // Initialization
 // ===========================
+
+// G-01-10 round #12 discriminator B1 (01-28): local reset-reason name map.
+// IDF 5.5.4's prebuilt headers expose NO esp_reset_reason_to_name() —
+// esp_system.h declares only esp_reset_reason() — so the mapping is local.
+// Full 16-value enum per esp_system.h (verified against the deployed
+// framework-arduinoespressif32-libs/esp32s3 headers).
+static const char* resetReasonName(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_UNKNOWN:     return "UNKNOWN";
+        case ESP_RST_POWERON:     return "POWERON";
+        case ESP_RST_EXT:         return "EXT";
+        case ESP_RST_SW:          return "SW";
+        case ESP_RST_PANIC:       return "PANIC";
+        case ESP_RST_INT_WDT:     return "INT_WDT";
+        case ESP_RST_TASK_WDT:    return "TASK_WDT";
+        case ESP_RST_WDT:         return "WDT";
+        case ESP_RST_DEEPSLEEP:   return "DEEPSLEEP";
+        case ESP_RST_BROWNOUT:    return "BROWNOUT";
+        case ESP_RST_SDIO:        return "SDIO";
+        case ESP_RST_USB:         return "USB";
+        case ESP_RST_JTAG:        return "JTAG";
+        case ESP_RST_EFUSE:       return "EFUSE";
+        case ESP_RST_PWR_GLITCH:  return "PWR_GLITCH";
+        case ESP_RST_CPU_LOCKUP:  return "CPU_LOCKUP";
+        default:                  return "UNMAPPED";
+    }
+}
 
 bool ImageTxManager::begin(E32LoRa* lora) {
     if (!lora) {
@@ -104,6 +136,23 @@ bool ImageTxManager::begin(E32LoRa* lora) {
     memDiagMinHeap = esp_get_minimum_free_heap_size();
     memDiagMinStackHw = uxTaskGetStackHighWaterMark(nullptr);
 
+    // G-01-10 round #12 discriminator B2 state (01-28): re-baseline the
+    // process()-pass stamp at begin() so a re-begin cannot carry a stale
+    // epoch into the slow-pass watch (a first pass after begin() records its
+    // stamp without a gap check).
+    lastProcessPassMs = 0;
+    loopSlowPassLogged = false;
+
+    // G-01-10 D1 round #12 discriminator B1 (01-28) per
+    // .planning/debug/d1-crash-regression-push-start.md §7.6: boot reset-cause
+    // line. Gives the 01-29 bench the reset class on every boot even when the
+    // ROM banner (rst:0x7 TG0WDT_SYS_RST …) scrolls out of console capture —
+    // session 8's class decodes here as TASK_WDT/INT_WDT-class names instead
+    // of a raw ROM code. REMOVAL CONDITION: strips WITH the [MEM]
+    // instrumentation after G-01-10 closes on bench evidence.
+    Serial.printf("ImageTx: [BOOT] reset-cause: %s (G-01-10)\n",
+                  resetReasonName(esp_reset_reason()));
+
     if (DEBUG_IMAGE_TX) {
         Serial.println("ImageTx: Initialized");
     }
@@ -127,6 +176,34 @@ void ImageTxManager::process() {
         return;
     }
 
+    uint32_t now = millis();
+
+    // G-01-10 D1 round #12 discriminator B2 (01-28) per
+    // .planning/debug/d1-crash-regression-push-start.md §7.6: latch-guarded
+    // slow-pass watch. A gap between consecutive process() calls beyond
+    // IMG_LOOP_SLOW_PASS_MS (2500 ms — ≈2.3× the ~1102 ms sustained
+    // FULL-window service cadence, half the TWDT stage-0 period) means the
+    // main loop itself stalled. 01-29's discriminating read: a TG0WDT reset
+    // with NO preceding [LOOP] line = loopTask never stalled (the session-8
+    // CPU0-side signature); [LOOP] lines before a reset = the stall caught
+    // the loop too (a different, loop-visible class). One line per episode
+    // (the reannounceHoldLogged convention), re-armed on a normal pass.
+    // REMOVAL CONDITION: strips WITH the [MEM] instrumentation after G-01-10
+    // closes on bench evidence.
+    if (lastProcessPassMs != 0) {
+        uint32_t passGap = now - lastProcessPassMs;
+        if (passGap > IMG_LOOP_SLOW_PASS_MS) {
+            if (!loopSlowPassLogged) {
+                loopSlowPassLogged = true;
+                Serial.printf("ImageTx: [LOOP] slow pass gap %lu ms (G-01-10)\n",
+                              (unsigned long)passGap);
+            }
+        } else {
+            loopSlowPassLogged = false;
+        }
+    }
+    lastProcessPassMs = now;
+
     // G-01-10 D1 instrumentation watch (01-25): 1 s-throttled check that
     // prints one [MEM] line ONLY when min-ever internal heap or the loopTask
     // stack high-water hits a new low (monotone quantities — naturally
@@ -134,7 +211,6 @@ void ImageTxManager::process() {
     // [MEM] line is the primary bench discriminator; this watch catches
     // degradation between captures. REMOVAL: with the enqueue site, after
     // 01-27 closes G-01-10.
-    uint32_t now = millis();
     if ((uint32_t)(now - memDiagLastMs) >= 1000) {
         memDiagLastMs = now;
         uint32_t minHeap = esp_get_minimum_free_heap_size();

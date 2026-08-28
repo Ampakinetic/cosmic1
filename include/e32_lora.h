@@ -118,9 +118,15 @@ public:
     ~E32LoRa();
 
     // Initialization
+    // uartPort (G-01-10 round #12, 01-28): the hardware UART number of the
+    // passed serial (both boards use UART2 — main_balloon.cpp &Serial2,
+    // main_basestation.cpp HardwareSerial LoRaSerial(2)). Needed only by the
+    // yielding TX-drain in transmit(), which polls uart_ll_is_tx_idle on the
+    // register block HardwareSerial does not expose. Defaulted so existing
+    // call sites are unchanged.
     bool begin(HardwareSerial* serial, int8_t rxPin, int8_t txPin,
                int8_t m0Pin, int8_t m1Pin, int8_t auxPin,
-               uint32_t baudRate = 9600);
+               uint32_t baudRate = 9600, uint8_t uartPort = 2);
     void end();
 
     // Mode control
@@ -172,6 +178,9 @@ public:
 
 private:
     HardwareSerial* serial;
+    // Hardware UART number of `serial` (G-01-10 round #12, 01-28) — see the
+    // begin() uartPort parameter note. Used by transmit()'s yielding TX-drain.
+    uint8_t uartPort;
     int8_t rxPin;
     int8_t txPin;
     int8_t m0Pin;

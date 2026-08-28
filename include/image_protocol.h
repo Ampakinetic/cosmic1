@@ -115,6 +115,19 @@ static constexpr uint8_t  IMG_FULL_REANNOUNCE_MAX    = 3;
 // 15 s after the last inbound request.
 static constexpr uint32_t IMG_FULL_REANNOUNCE_BUSY_MS  = 15000;
 
+// G-01-10 D1 round #12 (01-28) per
+// .planning/debug/d1-crash-regression-push-start.md §7.6 discriminator B2:
+// slow-pass threshold for ImageTxManager::process(). The deployed build's
+// sustained FULL-window service cadence is ~1102 ms per loop pass
+// (balloon2.log Performance lines :915→:1189); 2500 ms is ≈2.3× that cadence
+// and half the task-watchdog stage-0 period (5 s, sdkconfig
+// ESP_TASK_WDT_TIMEOUT_S) — a gap beyond it means the main loop itself
+// stalled, which is the discriminating fact 01-29's bench reads: a TG0WDT
+// reset with NO preceding [LOOP] line = loopTask never stalled (the
+// session-8 CPU0-side signature); [LOOP] lines before a reset = the stall
+// caught the loop too (a different, loop-visible class).
+static constexpr uint32_t IMG_LOOP_SLOW_PASS_MS = 2500;
+
 // Full-image transfer cap (research Q4 resolution): fulls larger than this
 // never arm a pull — the balloon logs a warning naming the image ID and size
 // while the thumbnail still pushes, and the base never sees a FULL_IMAGE

@@ -252,6 +252,17 @@ private:
     uint32_t memDiagMinHeap;
     UBaseType_t memDiagMinStackHw;
 
+    // G-01-10 D1 round #12 discriminators (01-28) per
+    // .planning/debug/d1-crash-regression-push-start.md §7.6: B2 slow-pass
+    // watch state. lastProcessPassMs stamps every process() entry (0 = no
+    // prior pass — the gap check is skipped once); loopSlowPassLogged is the
+    // one-shot latch printing one [LOOP] line per slow-pass episode, re-armed
+    // on a normal pass (the reannounceHoldLogged convention). REMOVAL
+    // CONDITION: strips WITH the [MEM] instrumentation after G-01-10 closes
+    // on bench evidence.
+    uint32_t lastProcessPassMs;
+    bool loopSlowPassLogged;
+
     // Poll side
     void enqueueCapture(uint16_t imageId);
 

@@ -1,4 +1,7 @@
 #include "e32_lora.h"
+// G-01-10 round #12 (01-28): uart_ll_is_tx_idle for the yielding TX-drain in
+// transmit() — see .planning/debug/d1-crash-regression-push-start.md §7.6.
+#include "hal/uart_ll.h"
 
 // Debug configuration
 #ifndef DEBUG_E32
@@ -64,6 +67,7 @@ static void drainConfigRx(HardwareSerial* serial) {
 
 E32LoRa::E32LoRa()
     : serial(nullptr)
+    , uartPort(2)
     , rxPin(-1)
     , txPin(-1)
     , m0Pin(-1)
@@ -88,12 +92,13 @@ E32LoRa::~E32LoRa() {
 
 bool E32LoRa::begin(HardwareSerial* serial, int8_t rxPin, int8_t txPin,
                     int8_t m0Pin, int8_t m1Pin, int8_t auxPin,
-                    uint32_t baudRate) {
+                    uint32_t baudRate, uint8_t uartPort) {
     if (!serial) {
         return false;
     }
 
     this->serial = serial;
+    this->uartPort = uartPort;
     this->rxPin = rxPin;
     this->txPin = txPin;
     this->m0Pin = m0Pin;
@@ -221,7 +226,34 @@ bool E32LoRa::transmit(const uint8_t* data, size_t length) {
 
     // Send data
     size_t sent = serial->write(data, length);
-    serial->flush();
+
+    // G-01-10 D1 round #12 fix, Lever A (01-28) per
+    // .planning/debug/d1-crash-regression-push-start.md §7.6: a YIELDING,
+    // BOUNDED TX-drain replacing serial->flush(). The arduino core's flush
+    // (uartFlushTxOnly, esp32-hal-uart.c:1474-1486) is a bare
+    // `while(!uart_ll_is_tx_idle(...))` busy-spin with NO yield and NO
+    // timeout — at 9600 baud a 217-byte chunk frame spins loopTask ~226 ms
+    // per transmit, and a UART that never goes idle would hang it forever.
+    // This drain polls the same hardware condition (TX fully shifted out)
+    // with delay(1) yields, bounded at 1000 ms (worst legitimate drain at
+    // 9600 baud is ~226 ms — the bound only trips on hardware failure, and
+    // the AUX handshake below tolerates the residual FIFO). HONEST SCOPE per
+    // §7.3/§7.5: the flush was ELIMINATED as session-8's direct starver —
+    // this removes the fatal path's only non-yielding unbounded stretch; it
+    // does not claim to remove the kernel-level stall §7.5 ranks.
+    {
+        uint32_t drainStart = millis();
+        while (!uart_ll_is_tx_idle(UART_LL_GET_HW(uartPort))) {
+            if (millis() - drainStart >= 1000) {
+                if (DEBUG_E32) {
+                    Serial.println("E32: TX-drain bound hit (1000 ms) - "
+                                   "UART not idle (G-01-10)");
+                }
+                break;
+            }
+            delay(1);
+        }
+    }
 
     // Short write: a true failure — the module did not receive every byte,
     // so nothing may be forgiven below (01-11 branch c: only a COMPLETE
