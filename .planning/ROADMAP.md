@@ -142,7 +142,7 @@ Plans:
 
 **Wave 22** *(gap-closure round #13, 2026-08-28; round-local wave 1 — the re-opened D1 blocker first, before any bench re-run)*
 
-- [ ] 01-30-PLAN.md — D1 debug round #3 (BLOCKER, G-01-10/WINDOWS 15, third expression): the §8.6 brief — inter-window-lull candidate audit (Wire-0 BMP280/OLED transactions incl. the deployed ESP_ERR_INVALID_STATE semantics, GPS UART1 reads, NVS/flash ops) with the §7.3 four-property arithmetic, crash-context determinism across the three expressions (lull-vs-service-vs-phase-independent hypothesis table), the I2C+mojibake+WDT convergence verdict, the discriminator-menu disposition (CPU0 idle observability, I2C health instrumentation, TWDT stage-0 check), evidence-selected fix/instrumentation + named bench discriminators; builds + harness, no bench claims (CTRL-01, CTRL-06, PRI-02, IMG-03)
+- [x] 01-30-PLAN.md — D1 debug round #3 (BLOCKER, G-01-10/WINDOWS 15, third expression): the §8.6 brief — inter-window-lull candidate audit (Wire-0 BMP280/OLED transactions incl. the deployed ESP_ERR_INVALID_STATE semantics, GPS UART1 reads, NVS/flash ops) with the §7.3 four-property arithmetic, crash-context determinism across the three expressions (lull-vs-service-vs-phase-independent hypothesis table), the I2C+mojibake+WDT convergence verdict, the discriminator-menu disposition (CPU0 idle observability, I2C health instrumentation, TWDT stage-0 check), evidence-selected fix/instrumentation + named bench discriminators; builds + harness, no bench claims (CTRL-01, CTRL-06, PRI-02, IMG-03)
 
 **Wave 23** *(blocked on Wave 22 — bench re-verification trailing wave)*
 

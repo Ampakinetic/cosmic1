@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 3
+current_plan: 2
 status: executing
-stopped_at: Completed 01-29-PLAN.md
-last_updated: "2026-08-28T03:08:06.069Z"
-state_head: a6645130e19b55895253fe7822585959483d3340
+stopped_at: Completed 01-30-PLAN.md
+last_updated: "2026-08-28T03:50:24.246Z"
+state_head: 1a737ddd15a916686b4b5677ba231bd1723a510d
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 41
-  completed_plans: 38
+  completed_plans: 39
 milestone_name: milestone
-current_phase_name: Command Protocol & Control
 current_phase: 2
+current_phase_name: Command Protocol & Control
 ---
 
 # Project State
@@ -28,7 +28,7 @@ current_phase: 2
 
 ## Current Position
 
-**Current Plan:** 3
+**Current Plan:** 2
 **Total Plans in Phase:** 31
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -135,8 +135,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-28T00:51:42.254Z
-**Stopped at:** Completed 01-29-PLAN.md
+**Last session:** 2026-08-28T03:50:23.686Z
+**Stopped at:** Completed 01-30-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -180,6 +180,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P27 | ~3h across executor pre-flight + operator bench session #8 + continuation closeout | 2 tasks | 4 files |
 | Phase 01-28 P28 | ~46 min | 3 tasks | 9 files |
 | Phase 01 P29 | ~2.5h across executor pre-flight + operator bench session #9 + continuation closeout | 2 tasks | 4 files |
+| Phase 01-30 P30 | 33 min | 3 tasks | 5 files |
 
 ## Decisions
 
@@ -271,3 +272,5 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: Session-9 Saved PC decoded against the verified deployed ELF: 0x4037c7fa = esp_vApplicationTickHook (freertos_hooks.c:34), one frame above session-8's tick_hook - the same WDT tick-ISR chain, zero project frames
 - [Phase 2]: Crash-adjacent i2cWrite (balloon3.log:520) carries the mojibake ON the line itself (hex-dump verified) - the packet's mojibake=0 was the twice-documented 7.4 grep trap; corrected to 1 and carried as discriminating evidence of the session-7 corruption class returning at the crash moment
 - [Phase 2]: D2 and WR-02 regression watches green on the round-#12 firmware (2 genuine hold-line fires, zero health-check-failed) - both entries stay fixed; zero ledger flips, G-01-7 unjudgeable, image 39 INCOMPLETE attributed to the crash
+- [Phase 2]: 01-30 round #13: instrument-only (option b) selected at the Task 2 checkpoint, auto-advanced pending end-of-phase operator confirmation (fifth) — third consecutive elimination-only round; [IDLE0]/[I2C]/[TWDT] instruments landed, no lever
+- [Phase 2]: 01-30: ESP_ERR_INVALID_STATE re-read from deployed source as bus-level non-DONE completion (NACK/timeout), not an FSM refusal — driver-state-corruption reading demoted; probe verdict is the honest FSM-state substitute (IDF 5.5.4 has no error-flags accessor)
