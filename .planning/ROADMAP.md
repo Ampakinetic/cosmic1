@@ -240,7 +240,13 @@ Plans:
 - SD-write-failure volatile fallback with honest labeling
 - Bench re-verification session #12
 
-**Plans:** (none yet — planned 2026-08-29)
+**Plans:** 4 plans
+
+Plans:
+- [ ] 02.5-01-PLAN.md — File-backed pipeline tracer: BalloonSdStore module, persist-before-manifest, chunk serving from file, honest volatile fallback, WR-01/WR-02 folds (wave 1)
+- [ ] 02.5-02-PLAN.md — Crash-resume: persisted delivery bookkeeping, boot-time rescan re-announce of undelivered files (wave 2)
+- [ ] 02.5-03-PLAN.md — Honest capacity: card-full refusal gates (NACK_BUSY + AutoCapture skip), manual SDCLEAR CONFIRM, keep-everything retention gates (wave 3)
+- [ ] 02.5-04-PLAN.md — Bench session #12: pre-flight + operator series (file-backed series A, crash-resume demo, fallback labeling, card-full refusal, riding clauses) + evidence-driven ledger flips (wave 4)
 
 ### Phase 3: Enhanced Web Interface
 
