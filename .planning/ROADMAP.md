@@ -240,7 +240,7 @@ Plans:
 - SD-write-failure volatile fallback with honest labeling
 - Bench re-verification session #12
 
-**Plans:** 2/4 plans executed
+**Plans:** 3/4 plans executed
 
 Plans:
 **Wave 1**
@@ -253,7 +253,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 02.5-03-PLAN.md — Honest capacity: card-full refusal gates (NACK_BUSY + AutoCapture skip), manual SDCLEAR CONFIRM, keep-everything retention gates (wave 3)
+- [x] 02.5-03-PLAN.md — Honest capacity: card-full refusal gates (NACK_BUSY + AutoCapture skip), manual SDCLEAR CONFIRM, keep-everything retention gates (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
