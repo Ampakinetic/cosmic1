@@ -37,6 +37,9 @@
 // Phase 2: Image Transmission
 #include "image_tx_manager.h"
 
+// Phase 2.5: Balloon SD-card flight-archive image store (STORE-01/STORE-03)
+#include "sd_store_balloon.h"
+
 // G-01-10 round #13 D1 instruments (01-30) per
 // .planning/debug/d1-crash-regression-push-start.md §9.6 — three bounded,
 // latch-guarded observables for the CPU0-starvation family (§9.5 verdict:
@@ -153,12 +156,20 @@ static volatile uint32_t s_idle0TickCount = 0;
 // REMOVAL CONDITION: strips WITH the [MEM]/B1/B2 instrumentation after
 // G-01-10 closes on bench evidence.
 static volatile UBaseType_t s_idle0StackMinWords = 0;
+// WR-01 (01-REVIEW): has-sample latch split from the value — the old
+// zero-sentinel conflated "no sample yet" with a genuine 0-word watermark,
+// and 0 is EXACTLY the overflow signature this instrument exists to catch
+// (the loop-side `!= 0` print guard could never print it). No reset sites
+// existed for the old sentinel (declared once, never cleared), so none are
+// added for the latch — boot starts false via static init.
+static volatile bool s_idle0HasSample = false;
 static bool idle0TickHook(void) {
     s_idle0TickCount++;
     if ((s_idle0TickCount & 0x3FF) == 0) {
         UBaseType_t idle0Watermark = uxTaskGetStackHighWaterMark(NULL);
-        if ((s_idle0StackMinWords == 0) || (idle0Watermark < s_idle0StackMinWords)) {
+        if (!s_idle0HasSample || (idle0Watermark < s_idle0StackMinWords)) {
             s_idle0StackMinWords = idle0Watermark;
+            s_idle0HasSample = true;
         }
     }
     return true;
@@ -423,10 +434,16 @@ void loop() {
         // panic; wedge hypothesis → a healthy constant margin at the crash
         // instant. G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2
         // instrumentation after G-01-10 closes on bench evidence.
+        // WR-01 (01-REVIEW): the print guard keys on the has-sample latch
+        // plus a separate ever-printed flag / last-printed value instead of
+        // the old `!= 0` sentinel — a genuine 0-word watermark, the exact
+        // overflow signature the instrument exists to catch, is now
+        // printable and, once printed, stays latched (no per-second reprint).
+        static bool idle0StackEverPrinted = false;
         static UBaseType_t idle0StackLastPrintedWords = 0;
-        if (s_idle0StackMinWords != 0 &&
-            (idle0StackLastPrintedWords == 0 ||
-             s_idle0StackMinWords < idle0StackLastPrintedWords)) {
+        if (s_idle0HasSample &&
+            (!idle0StackEverPrinted || s_idle0StackMinWords < idle0StackLastPrintedWords)) {
+            idle0StackEverPrinted = true;
             idle0StackLastPrintedWords = s_idle0StackMinWords;
             Serial0.printf("[IDLE0] stack watermark %u words free (new low, t=%lu ms) (G-01-10)\n",
                            (unsigned)s_idle0StackMinWords, (unsigned long)millis());
@@ -618,6 +635,19 @@ bool initializeSubsystems() {
         SYS_WARNING("Auto-capture module initialization failed");
     } else {
         SYS_INFO("Auto-capture module initialized");
+    }
+
+    // Phase 2.5: balloon SD-card image store (STORE-01/03) — mounted AFTER
+    // Camera().begin() and BEFORE ImageTx().begin(): the store must answer
+    // isAvailable() before the first capture can persist to it. A failed
+    // mount degrades to the volatile fallback rather than aborting boot
+    // (1223f46 lesson: boot never halts on peripheral failure); the module
+    // prints its own "SdStore:" verdict line alongside this one.
+    BalloonSdStoreTx().begin();
+    if (BalloonSdStoreTx().isAvailable()) {
+        SYS_INFO("SD card store mounted (/images ready)");
+    } else {
+        SYS_WARNING("SD card store unavailable - captures take the volatile fallback");
     }
 
     // Phase 2: image transfer push module (thumbnail stream after each capture)
