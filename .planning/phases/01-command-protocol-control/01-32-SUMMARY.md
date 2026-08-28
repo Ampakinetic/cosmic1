@@ -176,6 +176,16 @@ None — builds 2/2 SUCCESS on the first attempt, harness exit 0, all protected-
 - 01-34's bench session reads exactly the §11.3 discriminator table: the [STACK] baseline→new-low trajectory (stack-capacity CONFIRM/REFUTE), the fixed `registered=` line (1 expected), the [TWDT] ForCPU(0) line (ESP_OK expected; NOT_FOUND re-opens the sessions-8/9 TG0WDT attribution), plus the retained round-#13 instruments. The A/B recipe (§11.4) is staged if the watermark shows healthy margin through a crash.
 - NO bench claims made in this plan — every hardware truth rides 01-34.
 
+## Self-Check: PASSED
+
+- Found: src/main_balloon.cpp ([STACK] latch :140-166, registration print + A/B guard :261-281, 1 Hz new-low print :412-433)
+- Found: src/image_tx_manager.cpp ForCPU(0) fix (:170-172)
+- Found: .planning/debug/d1-crash-regression-push-start.md §11 (five subsections, 11.1-11.5)
+- Found: .planning/WINDOWS.md entry 15 round-#14 extension in BOTH copies; counts 2/17/19 unchanged; JSON valid
+- Found: .planning/phases/01-command-protocol-control/01-UAT.md G-01-10 round-#14 extension + shipped-items marker; stays open
+- Found: commit 7d3abbc (fix: instrument package), b33d07c (docs: round-#14 record + ledgers), a672f70 (docs: plan complete)
+- Builds 2/2 SUCCESS + harness exit 0 verified on the round's final code commit; A/B-disabled build also verified SUCCESS
+
 ---
 *Phase: 01-command-protocol-control*
 *Completed: 2026-08-28*
