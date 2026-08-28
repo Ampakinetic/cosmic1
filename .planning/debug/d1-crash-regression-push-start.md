@@ -721,3 +721,196 @@ recurrence. Concretely: Lever A (yielding bounded TX-drain, defaulted UART
 port parameter) + discriminators B1/B2, each carrying its named removal
 condition. NO pacing, quiet-gate, wire-format, or WDT-config changes (the
 rejected candidates of §7.6 stand).
+
+---
+
+## 8 — SESSION 9 RECURRENCE (01-29 bench, 2026-08-28): the 01-28 lever DISCONFIRMED as sufficient — the crash moves to the INTER-WINDOW LULL, and the i2cWrite adjacency BREAKS the noise classification
+
+Session 9 crashed AGAIN, on the round-#12 firmware (Lever A + discriminators
+B1/B2 all provably in-image). The crash's THIRD expression: session 7 =
+first-post-boot push; session 8 = mid-service of a re-armed window; session 9
+= the inter-window LULL after a cleanly completed FIRST window. Every line
+below re-verified against the retained consoles by the 01-29 continuation
+executor (one correction to the incoming evidence packet discovered in
+re-verification — §8.4).
+
+### 8.1 Provenance (cross-checked BEFORE any decoded frame was trusted)
+
+- Firmware: round #12 (01-28 fix `6ca9a36` + docs `9261b9e`), balloon build
+  banner `Build: Aug 28 2026 12:06:09` (balloon3.log:23 boot 1, again :535
+  post-crash boot 2); pre-flight on record from the prior executor: `pio run`
+  2/2 SUCCESS, harness exit 0.
+- Deployed-ELF provenance: `.pio/build/esp32-s3-balloon/firmware.elf`
+  SHA256 `e09dd034a5ab7b904278902106a0348d12c800ad88b03daac5d29029ad0cb5f7`,
+  mtime Aug 28 12:06 — **MATCHES** the deployed boot banner to the minute;
+  the decode in §8.2 is against the exact crashed build.
+- The round-#12 code is provably IN the deployed image: warm-up line at BOTH
+  boots (balloon3.log:102, :614 `ImageTx: PSRAM first-use warm-up done
+  (G-01-10)`), discriminator B1 at both boots (:103 `[BOOT] reset-cause:
+  POWERON`, :615 `[BOOT] reset-cause: TASK_WDT`), [MEM] lines throughout.
+- Consoles: `balloon3.log` (804 lines) + `base3.log` (221 lines), mtimes Aug
+  28 12:31 (operator-retained names; the plan requested balloon14.log/base9.log
+  — provenance deviation recorded in 01-UAT.md, files never renamed, the
+  01-24 convention).
+
+### 8.2 The fatal event — TG0WDT in the inter-window lull, after a CLEAN first window
+
+Service map (both consoles, verbatim anchors):
+
+> balloon3.log:366 `CommandHandler: Captured image ID 39` (first post-boot
+> capture — CAPTURE_NOW ACKed base3.log:61)
+> balloon3.log:375 `ImageTx: enqueued image 39 (full 7133 B, thumb 1661 B / 9 chunks, source 0)`
+> thumb 9/9 chunks sent :383-:414 → base3.log:79 `image 39 kind 0 finalized COMPLETE (9/9 chunks, 1661 B)`
+> base3.log:81 `manifest image 39 kind 1 (7133 B, 36 chunks, CRC 447D30AB)` → window 1 requested (chunks 0..15, seq 3) and ACKED :89
+> balloon3.log:421 `ImageTx: FULL window armed for image 39 (chunks 0..15)` → **ALL 16/16 window-1 chunks transmitted** :427-:491
+> balloon3.log:492 `ImageTx: re-announce held - inbound window traffic active` (genuine fire — chunks were flowing)
+> inter-window lull :495-:519 — GET_STATUS serviced (:497-:501), `[BCN] seq=23` :505, BMP280 reads, [MEM] :511, Performance :514, telemetry beacon TX :518-:519
+> balloon3.log:520 `[124026][E][esp32-hal-i2c-ng.c:275] i2cWrite(): i2c_master_transmit failed: [259] ESP_ERR_INVALID_S∩┐╜ATE`
+> balloon3.log:521-522 `ESP-ROM:esp32s3-20210327` / `Build:Mar 27 2021`
+> balloon3.log:523 `rst:0x7 (TG0WDT_SYS_RST),boot:0x2b (SPI_FAST_FLASH_BOOT)`
+> balloon3.log:524 `Saved PC:0x4037c7fa`
+
+Decode (xtensa-esp32s3-elf-addr2line `-pfiaC`, ELF SHA `e09dd034…` verified
+first — §8.1; re-run by the continuation executor, output verbatim):
+
+| Addr | Symbol | Role |
+| --- | --- | --- |
+| 0x4037c7fa | `esp_vApplicationTickHook` (esp-idf `components/esp_system/freertos_hooks.c:34`, discriminator 1) | the registered-tick-hook DISPATCH LOOP of the tick-ISR hook phase — where the per-core tick callbacks (int_wdt's `tick_hook` among them) are invoked |
+| 0x403c88b8 (entry, :530) | unresolvable (`?? ??:0`) | second-stage-bootloader load region — expected, not evidence |
+
+**Zero project frames** — the third session in a row. The three Saved-PC
+samples across sessions now reconcile into ONE call chain (§8.5).
+
+What SURVIVED before the crash (the spaced smoke's first window served
+clean): capture → ACK → thumb COMPLETE → FULL window 1 armed and served 16/16
+chunks on air. The session aborted at protocol step 3 (the FULL never
+completed — window 2 was never requested because chunk 7 of window 1 was lost
+on air and the base spent its retransmit passes on chunks 7..7, by which time
+the balloon had already crashed: NACK_INVALID ×3 base3.log:162/:171/:181
+against the rebooted balloon's honest rejections balloon3.log:679/:692/:713 →
+base3.log:194 `image 39 kind 1 finalized INCOMPLETE (retransmit passes
+exhausted): 15/36 chunks after 3 passes`). Zero `timeout after` command
+terminals in base3.log (no forbidden CAPTURE_NOW terminals — unlike session 7,
+like session 8).
+
+### 8.3 The round-#12 discriminators' verdict (B1/B2 answered — they worked)
+
+- **B2 [LOOP] slow-pass latch: ZERO fires in the whole console** (grep count
+  0 against `IMG_LOOP_SLOW_PASS_MS 2500`). Corroborated by the Performance
+  line in the pre-crash stretch: :514 `Performance - Loop: 0 ms, Max: 1277 ms,
+  Avg: 47 ms, Count: 993` — the slowest observed pass was 1277 ms, ~half the
+  2500 ms latch threshold. **loopTask never stalled.** Per §7.6's own
+  discriminating read: a TG0WDT reset with NO preceding [LOOP] line is the
+  session-8 CPU0-side signature — session 9 reproduces it exactly. The Lever A
+  drain-replacement hypothesis (loopTask hanging in an unbounded flush) is
+  therefore ALSO disconfirmed as the mechanism: the drain now yields and
+  bounds, and the loop demonstrably kept cycling to the final second
+  (:518-:519 telemetry TX immediately before the failing Wire transaction).
+- **B1 [BOOT] reset-cause: WORKED at both boots** — :103 POWERON, and :615
+  `TASK_WDT` on the crash reboot: the ROM reason register INDEPENDENTLY
+  confirms the rst:0x7 = task-watchdog read of §7.1 (TG0WDT_SYS_RST ↔
+  ESP_RST_TASK_WDT).
+- **[MEM]: healthy throughout** — enqueue :372 `heap=8544812 minHeap=8501644
+  psram=8339972 stackHW=5772`; last pre-reset sample :511 `heap=8534176
+  minHeap=8499816 psram=8331100 stackHW=5744`; boot-2 baseline healthy.
+  Exhaustion remains ruled out — third consecutive session.
+
+### 8.4 The crash-adjacent i2cWrite BREAKS the non-adjacent-noise classification — and carries mojibake on its own line
+
+Sessions 7/8 dispositioned `i2cWrite … ESP_ERR_INVALID_STATE` as recurring
+non-adjacent BMP280-path noise (each occurrence followed by a successful
+read, far from any reset). **Session 9's single occurrence breaks BOTH legs
+of that classification:**
+
+1. **DIRECTLY ADJACENT to the reset.** balloon3.log:520 error → :521-:522 ROM
+   banner → :523 rst:0x7. No application line separates them. And unlike
+   sessions 7/8, NO successful BMP280 read follows — the reset intervened.
+   The failing transaction is the next Wire-0 action after the :518-:519
+   beacon TX (BMP280 poll or OLED refresh — the log does not discriminate
+   which device).
+2. **The line itself carries the session-7 corruption-class mojibake.** The
+   source string is `ESP_ERR_INVALID_STATE` (esp_err_to_name); the log bytes
+   are `ESP_ERR_INVALID_S` + `e2 88 a9 e2 94 90 e2 95 9c` + `ATE` — the exact
+   9-byte corrupt sequence of session 7 (§1.6: `Transmitted 38 byte∩┐╜`) and
+   session 8's corrected single line (§7.4: balloon2.log:155), here replacing
+   the single `T` of STATE. Hex-dump verified at :520. Count in balloon3.log:
+   exactly 1; base3.log: 0. (Method note: the UTF-8-replacement-character grep
+   returns 0 — the §7.4 trap AGAIN, now twice-documented; the operative grep
+   is the literal rendering sequence / raw byte triple. The incoming evidence
+   packet's "mojibake = 0" claim used the trapped grep; corrected here.)
+
+Reading (honest, both directions stated): at t=124026 ms the UART0 TX bytes
+were ALREADY wrong on the very line that reports the I2C driver FSM rejecting
+a transaction, ≤ seconds before the TWDT stage-1 hardware reset. Two of
+session-7's three corrupted-subsystem markers (UART TX ring + I2C driver FSM)
+fire TOGETHER, adjacent to the third (the kernel-level wedge the TWDT reset
+represents) — the session-7 §1.6 convergence pattern, this time in a tight
+terminal window. Timing constraint from §7.1's topology: stage-1 fires at 10 s
+unfed, so IDLE0 had been starved since ≈ t=114 s at the latest — the
+outwardly-healthy lull (:495-:519, loopTask cycling normally on CPU1) was
+ALREADY wedged underneath on CPU0. On this reading the i2cWrite failure +
+mojibake are co-symptoms of the wedge's terminal phase, not its initiating
+cause — but that is the round-#3 question, not a settled claim (§8.6).
+
+### 8.5 Three PC samples, one chain (the one-family verdict, third data point)
+
+| Session | Saved PC | Decoded symbol | Chain position |
+| --- | --- | --- | --- |
+| 7 (crash 1, Core-0 dump) | SysTick ISR region | `xPortSysTickHandler` → `xTaskIncrementTick` → `spinlock_acquire` CAS spin (§1.4) | the tick INCREMENT phase, spinning on the kernel portMUX |
+| 8 | 0x40376430 | `tick_hook` (int_wdt.c:111, §6.2/§7.1) | the tick HOOK phase — the IWDT-feed hook dispatched BY esp_vApplicationTickHook |
+| 9 | 0x4037c7fa | `esp_vApplicationTickHook` (freertos_hooks.c:34) | the tick HOOK phase — the dispatch loop ONE FRAME ABOVE session 8's sample |
+
+Verified against the deployed framework sources (IDF 5.5.4,
+`framework-espidf`): `esp_vApplicationTickHook` (freertos_hooks.c:29-38) is
+the loop that invokes the registered per-core tick callbacks — int_wdt's
+`tick_hook` (int_wdt.c:104+) is one of those callbacks. Session 8 sampled the
+dispatched hook; session 9 sampled its dispatcher; session 7 observed the
+same ISR's increment phase wedged on the kernel spinlock. **Three samples,
+one chain, zero project frames.** §7.4's one-mechanism-family verdict stands
+with its strongest cross-session confirmation yet.
+
+### 8.6 New root-cause questions (the debug round #3 brief)
+
+The CONSTANT across all three expressions: TG0WDT stage-1 (IDLE0 starved ≥10 s
+on CPU0), PC in the tick-ISR chain, zero project frames, loopTask healthy
+(session 9: Max 1277 ms, zero [LOOP] fires), [MEM] healthy. What CHANGED this
+session — and must be explained, not explained away:
+
+1. **The crash point MOVED from mid-service to the inter-window lull.**
+   Session 8 died at the FIRST CHUNK of a re-armed window (TX-heavy); session
+   9 died in the TX-LIGHT lull (sensors + one beacon + one GET_STATUS
+   response) after a cleanly completed FIRST window, ~124 s in (t=124026 ms
+   on the failing line). "Sustained TX-heavy FULL-window service" is NO
+   LONGER the constant context §6.5 named — the round-#12 axis must be
+   re-examined: is the IDLE0-starvation-on-CPU0 family hypothesis still the
+   best fit when the wedge forms (or terminates) in a lull, or does the
+   lull-vs-service distinction point at a different starver per phase?
+2. **What does a Wire-0 transaction failing ESP_ERR_INVALID_STATE — on a
+   line whose own bytes are corrupt — immediately before a TWDT reset
+   imply?** Three candidate readings, none established: (a) driver-state
+   corruption as a co-effect of the same memory/kernel fault (the §1.6
+   convergence, terminal-phase edition); (b) an I2C bus wedge (stretched
+   clock, stuck slave) with interrupts masked on CPU0 — the INVALID_STATE
+   being the driver's honest refusal, the mojibake and the reset the wedge's
+   other effects; (c) coincidence — one noise-class error that happened to
+   land last. The adjacency + own-line mojibake make (c) the WEAKEST reading,
+   but only round #3 evidence can rank (a) vs (b).
+3. **Why is the corruption signature's return ADJACENT this time?** Session 8
+   had exactly one mojibake line, ~1070 lines from its reset (§7.4); session 9
+   has exactly one, ON the crash-adjacent line. Same count, different
+   proximity — consistent with a wedge that degrades output/driver state in
+   its final seconds, but one sample each is not a trend.
+
+Named discriminators round #3 should consider (menu, not selection — the
+§7.6 convention): a CPU0-interrupt/idle observability line (e.g. an
+esp_timer-based IDLE-run counter sampled from the 1 Hz block — IDLE0's
+absence is today visible only via the 10 s reset); I2C-bus health
+instrumentation at the Wire-0 failure site (transaction count + FSM state at
+failure, bounded); a TWDT stage-0 subscription check (the §7.1 stage-0
+interrupt-path death remains inferred from silence, never observed); and an
+explicit hypothesis table for lull-phase vs service-phase starvers (the §7.3
+arithmetic eliminated service-phase candidates — the lull-phase set — Wire-0
+transactions, GPS UART1 reads, NVS/flash ops — has NOT had the same audit).
+
+The `[MEM]`/B1/B2 instrumentation STAYS IN — removal condition unchanged
+(strip only after G-01-10 closes on bench evidence).
