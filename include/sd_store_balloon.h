@@ -129,6 +129,34 @@ static_assert(sizeof(BalloonCaptureRecord) == 36,
               "BalloonCaptureRecord must stay 36 bytes (33 field bytes + 3 pad) — "
               "see the card-format note above");
 
+// RAM index bound for the boot rescan (02.5-02, T-02.5-06): at most this many
+// undelivered records are surfaced per boot. OVER-CAP CONSEQUENCE (honest
+// degradation, named in bootRescan's log): ids beyond the cap are unreachable
+// until the manual serial clear (explicit CONFIRM token, later plan) or a
+// future boot's rescan after delivery drains below the cap — their files
+// remain safely on card (keep-everything archive).
+static constexpr uint8_t SD_STORE_MAX_TRACKED = 64;
+
+// One validated, undelivered record produced by bootRescan() — everything
+// ImageTxManager::admitRescanned needs to rebuild the file-backed entry
+// shape the PERSISTED branch of enqueueCapture produces (identical fields,
+// same state machine entry point; the settings bytes carry the pinned
+// ImageTxSettings layout verbatim — static_assert'd in the .cpp). The
+// delivery bits ride along as classification truth (a record is only
+// returned when NOT both-set).
+struct BalloonResumedRecord {
+    uint16_t imageId;
+    uint8_t  captureSource;
+    uint32_t captureTimeMs;
+    uint32_t fullLength;
+    uint32_t fullCrc32;
+    uint32_t thumbLength;    // 0 = no thumbnail was captured
+    uint32_t thumbCrc32;
+    uint8_t  settings[7];    // ImageTxSettings layout verbatim (the manifest's 7-byte trailer)
+    bool     thumbDelivered;
+    bool     fullDelivered;
+};
+
 // Honest module state (IN-03 discipline: computed truth, never a hardcoded
 // OK). Four distinct, reachable states: OK; unavailable-at-boot (initFailed
 // — volatile fallback territory); write-failed-since (writeFailed — the
@@ -197,6 +225,29 @@ public:
     // 02.5-02's boot rescan.
     bool markDelivered(uint16_t imageId, ImageKind kind);
 
+    // Boot-time rescan (02.5-02, STORE-02): ONE bounded openNextFile() walk
+    // of SD_STORE_DIR collecting IMG_%05u.META commit records (the base's
+    // buildIndex walk idiom), plus one companion pass naming JPGs whose id
+    // has no META file at all (a persist that died before the commit write).
+    // Per-record validation before any admission (T-02.5-05): META magic +
+    // id, then the referenced JPG files must EXIST with sizes matching the
+    // recorded lengths (the _T.JPG is checked only when thumbLength > 0 —
+    // thumbLength 0 legitimately means no thumbnail was captured).
+    // Classification — each observable in the boot log:
+    //   resumed   → a BalloonResumedRecord in out[] (caller re-admits it)
+    //   delivered → both SD_ST_DELIV_* bits set: counted, one summary line,
+    //               history stays on card, never re-announced
+    //   torn      → named skip line, file KEPT (never deleted, never
+    //               fabricated — keep-everything + the no-fabrication rule)
+    // Output is sorted ascending by imageId (FIFO resume order mirrors
+    // capture order) and capped at `cap` (SD_STORE_MAX_TRACKED) keeping the
+    // NEWEST ids when over cap — the honest over-cap degradation line names
+    // what was left un-announced. Untrusted removable media: a corrupt,
+    // foreign, or hand-mangled card can only ever produce skipped records,
+    // never transferable state. Boot-time only — never called per loop pass.
+    // Returns the number of records written to out[].
+    uint8_t bootRescan(BalloonResumedRecord* out, uint8_t cap);
+
 private:
     bool available;
     BalloonSdStoreStatus status;
@@ -206,6 +257,12 @@ private:
     // network-supplied string ever enters a file path)
     static void filePath(char* out, size_t cap, uint16_t imageId, ImageKind kind);
     static void metaPath(char* out, size_t cap, uint16_t imageId);
+
+    // bootRescan's per-record validator (T-02.5-05): reads the 36-byte META
+    // for id, validates magic + id, then requires the referenced JPGs to
+    // exist with sizes matching the recorded lengths. Any failure -> false
+    // (the caller classifies the capture torn and skips it).
+    static bool bootRescanValidateMeta(uint16_t id, BalloonCaptureRecord& rec);
 };
 
 // ===========================

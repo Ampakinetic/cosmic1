@@ -317,3 +317,229 @@ bool BalloonSdStore::markDelivered(uint16_t imageId, ImageKind kind) {
     }
     return ok;
 }
+
+// ===========================
+// Boot Rescan (02.5-02, STORE-02)
+// ===========================
+
+// Per-record validator for bootRescan (T-02.5-05): the META record must
+// validate (magic + id), and the referenced JPG files must EXIST with sizes
+// matching the recorded lengths — thumbLength 0 legitimately means no
+// thumbnail was captured, so the _T.JPG is checked only when thumbLength > 0.
+// A record that fails any check is a torn capture: the caller skips it with
+// the named line and the files stay on card — never fabricated metadata,
+// never deletion.
+bool BalloonSdStore::bootRescanValidateMeta(uint16_t id, BalloonCaptureRecord& rec) {
+    char path[32];
+    metaPath(path, sizeof(path), id);
+    File f = SD_MMC.open(path, FILE_READ);
+    if (!f) {
+        return false;
+    }
+    const bool recOk =
+        f.read(reinterpret_cast<uint8_t*>(&rec), sizeof(rec)) == sizeof(rec) &&
+        rec.magic == SD_STORE_META_MAGIC &&
+        rec.imageId == id;
+    f.close();
+    if (!recOk) {
+        return false;
+    }
+
+    // Full JPG: must exist and match the recorded length (a zero-length full
+    // is a broken capture, not a resumable one).
+    if (rec.fullLength == 0) {
+        return false;
+    }
+    filePath(path, sizeof(path), id, ImageKind::FULL_IMAGE);
+    File g = SD_MMC.open(path, FILE_READ);
+    if (!g) {
+        return false;
+    }
+    const bool fullOk = (g.size() == rec.fullLength);
+    g.close();
+    if (!fullOk) {
+        return false;
+    }
+
+    // Thumbnail JPG: checked only when the record says one exists.
+    if (rec.thumbLength > 0) {
+        filePath(path, sizeof(path), id, ImageKind::THUMBNAIL);
+        File t = SD_MMC.open(path, FILE_READ);
+        if (!t) {
+            return false;
+        }
+        const bool thumbOk = (t.size() == rec.thumbLength);
+        t.close();
+        if (!thumbOk) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Walk-local name parser: recognizes IMG_<digits>.META (pass 1) and
+// IMG_<digits>.JPG / IMG_<digits>_T.JPG (pass 2), extracting the id.
+// Names are built ONLY from %05u ids at persist time (T-02.5-04); the parser
+// mirrors the base's buildIndex discipline (f.name() may carry a leading
+// path depending on the core version — parse the LAST component only).
+static bool bootRescanParseName(const char* base, const char* suffix, uint16_t& outId) {
+    const size_t blen = strlen(base);
+    const size_t slen = strlen(suffix);
+    if (blen <= 4 + slen + 1 || strncmp(base, "IMG_", 4) != 0 ||
+        strcmp(base + blen - slen, suffix) != 0) {
+        return false;
+    }
+    const char* p = base + 4;
+    const char* end = base + blen - slen;
+    if (end <= p) {
+        return false;
+    }
+    for (const char* q = p; q < end; ++q) {
+        if (*q < '0' || *q > '9') {
+            return false;
+        }
+    }
+    const unsigned long parsed = strtoul(p, nullptr, 10);
+    if (parsed < 1 || parsed > 65535) {
+        return false;
+    }
+    outId = static_cast<uint16_t>(parsed);
+    return true;
+}
+
+uint8_t BalloonSdStore::bootRescan(BalloonResumedRecord* out, uint8_t cap) {
+    if (out == nullptr || cap == 0) {
+        return 0;
+    }
+    if (!available || status.initFailed) {
+        return 0;   // no card — nothing to resume from (the caller logs the regime)
+    }
+
+    File dir = SD_MMC.open(SD_STORE_DIR);
+    if (!dir || !dir.isDirectory()) {
+        Serial.println("SdStore: bootRescan - /images open failed; nothing to resume");
+        return 0;
+    }
+
+    uint8_t  count = 0;             // resumed records held in out[] (ascending by imageId)
+    uint16_t deliveredCount = 0;    // both delivery bits set — history, stays on card
+    uint16_t tornCount = 0;         // META-invalid or size-mismatched captures
+    uint16_t overCapDropped = 0;    // undelivered beyond the tracked cap (oldest ids)
+
+    // Pass 1 — the openNextFile() walk (the base's buildIndex idiom, mirrored):
+    // every .META candidate is read, validated, and classified. Walk order is
+    // FAT directory order — records are inserted ascending-by-id so the
+    // output is FIFO resume order regardless.
+    File f;
+    while ((f = dir.openNextFile())) {
+        if (!f.isDirectory()) {
+            const char* base = f.name();
+            const char* slash = strrchr(base, '/');
+            if (slash) {
+                base = slash + 1;
+            }
+            uint16_t id = 0;
+            if (bootRescanParseName(base, ".META", id)) {
+                BalloonCaptureRecord rec{};
+                if (!bootRescanValidateMeta(id, rec)) {
+                    tornCount++;
+                    Serial.printf("SdStore: torn capture at image %u skipped (no validating META/size mismatch) — file kept on card\n",
+                                  static_cast<unsigned>(id));
+                } else if ((rec.flags & (SD_ST_DELIV_THUMB | SD_ST_DELIV_FULL)) ==
+                           (SD_ST_DELIV_THUMB | SD_ST_DELIV_FULL)) {
+                    // Delivered history: counted here, one summary line below —
+                    // delivered images are never re-announced.
+                    deliveredCount++;
+                } else {
+                    // Validated + undelivered → resume candidate. The settings
+                    // trailer copies verbatim (pinned 7-byte ImageTxSettings
+                    // layout, static_assert'd at the top of this file).
+                    BalloonResumedRecord rr{};
+                    rr.imageId = rec.imageId;
+                    rr.captureSource = rec.captureSource;
+                    rr.captureTimeMs = rec.captureTimeMs;
+                    rr.fullLength = rec.fullLength;
+                    rr.fullCrc32 = rec.fullCrc32;
+                    rr.thumbLength = rec.thumbLength;
+                    rr.thumbCrc32 = rec.thumbCrc32;
+                    memcpy(rr.settings, &rec.resolution, sizeof(rr.settings));
+                    rr.thumbDelivered = (rec.flags & SD_ST_DELIV_THUMB) != 0;
+                    rr.fullDelivered = (rec.flags & SD_ST_DELIV_FULL) != 0;
+
+                    // Ascending-by-id insertion; over cap the NEWEST ids are
+                    // kept (the oldest shift out — honest, named degradation).
+                    uint8_t pos = 0;
+                    while (pos < count && out[pos].imageId < rr.imageId) {
+                        pos++;
+                    }
+                    if (pos < count && out[pos].imageId == rr.imageId) {
+                        // duplicate id (impossible on FAT) — keep the first
+                    } else if (count < cap) {
+                        for (uint8_t i = count; i > pos; --i) {
+                            out[i] = out[i - 1];
+                        }
+                        out[pos] = rr;
+                        count++;
+                    } else if (rr.imageId > out[0].imageId) {
+                        overCapDropped++;
+                        for (uint8_t i = 1; i < cap; ++i) {
+                            out[i - 1] = out[i];
+                        }
+                        // the array shifted left by one — insert at pos-1
+                        for (uint8_t i = cap - 1; i > pos - 1; --i) {
+                            out[i] = out[i - 1];
+                        }
+                        out[pos - 1] = rr;
+                    } else {
+                        overCapDropped++;   // older than everything held
+                    }
+                }
+            }
+        }
+        f.close();
+    }
+    dir.close();
+
+    // Pass 2 — JPGs whose id has NO META file at all (a persist that died
+    // between the JPG writes and the META commit): the same named torn line,
+    // so no card artifact is ever silently ignored. Ids whose META file
+    // EXISTS were already classified in pass 1 (validated, delivered, or
+    // torn) — never double-printed. Memory-free: an SD_MMC.exists() check
+    // per JPG, boot-time only.
+    dir = SD_MMC.open(SD_STORE_DIR);
+    if (dir) {
+        while ((f = dir.openNextFile())) {
+            if (!f.isDirectory()) {
+                const char* base = f.name();
+                const char* slash = strrchr(base, '/');
+                if (slash) {
+                    base = slash + 1;
+                }
+                uint16_t id = 0;
+                if (bootRescanParseName(base, ".JPG", id) ||
+                    bootRescanParseName(base, "_T.JPG", id)) {
+                    char mpath[32];
+                    metaPath(mpath, sizeof(mpath), id);
+                    if (!SD_MMC.exists(mpath)) {
+                        tornCount++;
+                        Serial.printf("SdStore: torn capture at image %u skipped (no validating META/size mismatch) — file kept on card\n",
+                                      static_cast<unsigned>(id));
+                    }
+                }
+            }
+            f.close();
+        }
+        dir.close();
+    }
+
+    if (deliveredCount > 0) {
+        Serial.printf("SdStore: rescan skipped %u already-delivered record(s) - history kept on card\n",
+                      static_cast<unsigned>(deliveredCount));
+    }
+    if (overCapDropped > 0) {
+        Serial.printf("SdStore: %u undelivered exceeds tracked cap %u - oldest ids left un-announced (files kept on card)\n",
+                      static_cast<unsigned>(count + overCapDropped),
+                      static_cast<unsigned>(cap));
+    }
+    return count;
+}

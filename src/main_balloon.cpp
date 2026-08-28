@@ -656,6 +656,26 @@ bool initializeSubsystems() {
     } else {
         SYS_INFO("Image TX module initialized");
     }
+
+    // Phase 2.5 plan 02.5-02 (STORE-02 crash-resume): with the store mounted,
+    // rescan /images for undelivered captures and re-admit them into the
+    // EXISTING push/manifest/window pipeline — the balloon re-announces each
+    // (thumbnail push, then FULL manifest; fresh sequence, same CRC/lengths —
+    // the base's restart-on-new-manifest behavior is the IN-08-benign
+    // duplicate class) and the base re-arms windows and completes from the
+    // card files. Wire unchanged; runs once here in setup, never per loop
+    // pass. A failed mount skips the rescan entirely: nothing to resume
+    // from, the volatile fallback regime applies.
+    if (!BalloonSdStoreTx().getStatus().initFailed) {
+        static BalloonResumedRecord s_resumedRecords[SD_STORE_MAX_TRACKED];
+        const uint8_t found = BalloonSdStoreTx().bootRescan(s_resumedRecords, SD_STORE_MAX_TRACKED);
+        const uint8_t admitted = ImageTx().admitRescanned(s_resumedRecords, found);
+        Serial.printf("SdStore: rescan found %u undelivered image(s), admitted %u\n",
+                      static_cast<unsigned>(found), static_cast<unsigned>(admitted));
+    } else {
+        SYS_WARNING("SD card store unavailable at boot - no rescan; nothing to resume (volatile fallback regime)");
+    }
+
     StatusOLED().showBootStage("IMG TX");
     appState.communicationActive = true;
 

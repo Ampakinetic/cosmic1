@@ -7,6 +7,10 @@
 #include "command_protocol.h"
 #include "image_protocol.h"
 
+// 02.5-02 crash-resume: the boot-rescan record type (defined in
+// sd_store_balloon.h; only the pointer form is used here)
+struct BalloonResumedRecord;
+
 // ===========================
 // Image TX Manager
 // Balloon Unit - Pushes thumbnails, announces fulls, services window pulls,
@@ -212,6 +216,20 @@ public:
     // Re-arming the same window is idempotent (Pitfall 10).
     WindowRequestResult handleWindowRequest(const uint8_t* payload, size_t len);
 
+    // 02.5-02 crash-resume (STORE-02): admit boot-rescanned undelivered
+    // records into the EXISTING pipeline. Each becomes the IDENTICAL entry
+    // shape enqueueCapture's PERSISTED branch builds (state
+    // PUSH_THUMB_MANIFEST when the record carries a thumbnail,
+    // ANNOUNCE_FULL/THUMB_PUSHED when it does not; null buffers — the card
+    // is the byte source; META-derived lengths/CRCs/chunk counts), admitted
+    // FIFO into free slots. A record whose id collides with an already-
+    // queued entry is skipped (impossible in practice — ids are monotonic
+    // via NVS — but the guard is one comparison). When the queue fills,
+    // admission stops with a named log — leftover records wait for a future
+    // boot's rescan. lastEnqueuedImageId (AutoCap's sequence axis) is NOT
+    // disturbed by admission. Returns the number admitted.
+    uint8_t admitRescanned(const BalloonResumedRecord* records, uint8_t count);
+
 private:
     E32LoRa* lora;
     bool initialized;
@@ -319,6 +337,11 @@ private:
     static ImageManifestBody fillFullManifestBody(const ImageTxEntry& entry);
     bool serviceWindowChunk(ImageTxEntry& entry);
     void freeEntry(ImageTxEntry& entry);
+    // 02.5-02: fills entry from one BalloonResumedRecord — the IDENTICAL
+    // shape enqueueCapture's PERSISTED branch produces (the rescan must
+    // re-enter the same state machine, not a parallel one); assigns the
+    // admission-order enqueueSeq (FIFO) and stamps lastActivityMs.
+    void admitRescannedFillEntry(ImageTxEntry& entry, const BalloonResumedRecord& rec);
 };
 
 // ===========================

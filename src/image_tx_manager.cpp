@@ -709,6 +709,116 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
 }
 
 // ===========================
+// Crash-Resume Admission (02.5-02, STORE-02)
+// ===========================
+
+// Entry construction for boot-rescanned records — the PERSISTED branch of
+// enqueueCapture replayed from a validated META record instead of live
+// Camera() buffers: null buffers (the card is the byte source), META-derived
+// lengths/CRCs/chunk counts, state PUSH_THUMB_MANIFEST when the record
+// carries a thumbnail and ANNOUNCE_FULL/THUMB_PUSHED when it does not
+// (identical armability arithmetic — fullTransferArmable's file-backed rule).
+// Delivery bits ride the record as classification truth only: a HALF-delivered
+// record (e.g. thumb pushed before the crash, full never pulled) is admitted
+// whole — the EXISTING machinery re-announces both manifests and the base
+// re-pulls idempotently; no per-kind resume cursors exist on the wire.
+void ImageTxManager::admitRescannedFillEntry(ImageTxEntry& entry, const BalloonResumedRecord& rec) {
+    entry = ImageTxEntry{};   // zero-init: null buffers, clean streaks/budgets
+    entry.used = true;
+    entry.enqueueSeq = nextEnqueueSeq++;   // admission order == FIFO resume order
+    entry.imageId = rec.imageId;
+    entry.captureSource = rec.captureSource;
+    entry.captureTimeMs = rec.captureTimeMs;
+    static_assert(sizeof(ImageTxSettings) == 7,
+                  "BalloonResumedRecord's 7 settings bytes assume the ImageTxSettings layout");
+    memcpy(&entry.settings, rec.settings, sizeof(entry.settings));
+    entry.volatileFallback = false;   // file-backed by construction ({}-init; explicit)
+    entry.fullLength = rec.fullLength;
+    entry.fullCrc32 = rec.fullCrc32;
+    entry.fullTotalChunks = chunksForSize(rec.fullLength);
+    if (rec.thumbLength > 0) {
+        entry.thumbLength = rec.thumbLength;
+        entry.thumbCrc32 = rec.thumbCrc32;
+        entry.thumbTotalChunks = chunksForSize(rec.thumbLength);
+        entry.state = ImageTxEntryState::PUSH_THUMB_MANIFEST;
+    } else {
+        // No thumbnail in the record (persist-time thumbnail failure, whose
+        // vacuous thumb obligation was already retired in the META) — mirror
+        // the PERSISTED no-thumb path: skip the thumbnail pushes, announce
+        // the armable full or park.
+        entry.thumbLength = 0;
+        entry.thumbCrc32 = 0;
+        entry.thumbTotalChunks = 0;
+        entry.state = fullTransferArmable(entry) ? ImageTxEntryState::ANNOUNCE_FULL
+                                                 : ImageTxEntryState::THUMB_PUSHED;
+    }
+    entry.lastActivityMs = millis();
+}
+
+uint8_t ImageTxManager::admitRescanned(const BalloonResumedRecord* records, uint8_t count) {
+    if (records == nullptr || count == 0) {
+        return 0;
+    }
+    uint8_t admitted = 0;
+    for (uint8_t r = 0; r < count; r++) {
+        const BalloonResumedRecord& rec = records[r];
+
+        // Nothing-transferable guard (mirrors enqueueCapture): a validated
+        // record carrying zero bytes on both kinds must not occupy a slot.
+        if (rec.fullLength == 0 && rec.thumbLength == 0) {
+            Serial.printf("ImageTx: rescanned image %u carries no transferable bytes; skipped\n",
+                          static_cast<unsigned>(rec.imageId));
+            continue;
+        }
+
+        // Id-collision guard — one comparison scan. Impossible in practice
+        // (ids are monotonic via NVS), but a duplicate admission would
+        // corrupt window addressing.
+        bool collides = false;
+        for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+            if (entries[i].used && entries[i].imageId == rec.imageId) {
+                collides = true;
+                break;
+            }
+        }
+        if (collides) {
+            Serial.printf("ImageTx: rescanned image %u already queued; skipped\n",
+                          static_cast<unsigned>(rec.imageId));
+            continue;
+        }
+
+        ImageTxEntry* slot = nullptr;
+        for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+            if (!entries[i].used) {
+                slot = &entries[i];
+                break;
+            }
+        }
+        if (slot == nullptr) {
+            // Honest named stop (the rescan cap arithmetic makes this rare):
+            // more undelivered work surfaced than the depth-5 queue holds —
+            // the leftovers wait for a future boot's rescan.
+            Serial.printf("ImageTx: admitRescanned - queue full (depth %u) at image %u; %u record(s) remain for a future rescan\n",
+                          static_cast<unsigned>(QUEUE_DEPTH),
+                          static_cast<unsigned>(rec.imageId),
+                          static_cast<unsigned>(count - r));
+            break;
+        }
+        admitRescannedFillEntry(*slot, rec);
+        admitted++;
+        if (DEBUG_IMAGE_TX) {
+            Serial.printf("ImageTx: admitted rescanned image %u (full %u B / %u chunks, thumb %u B / %u chunks) - resume\n",
+                          static_cast<unsigned>(rec.imageId),
+                          static_cast<unsigned>(rec.fullLength),
+                          static_cast<unsigned>(slot->fullTotalChunks),
+                          static_cast<unsigned>(rec.thumbLength),
+                          static_cast<unsigned>(slot->thumbTotalChunks));
+        }
+    }
+    return admitted;
+}
+
+// ===========================
 // Push Side
 // ===========================
 
