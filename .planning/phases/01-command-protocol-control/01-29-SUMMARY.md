@@ -212,6 +212,16 @@ Zero flips this plan. Entry 15 (D1) stays open with the third-expression evidenc
 
 Debug round #3 must investigate the inter-window-lull TG0WDT reset on the round-#12 firmware — the window itself served clean, so audit what the lull runs (GET_STATUS handling, beacon tick, tick-hook dispatch) for WDT-period blocks, against the deployed ELF `e09dd034a5ab` with `Saved PC:0x4037c7fa = esp_vApplicationTickHook (freertos_hooks.c:34)`, the crash-adjacent on-line-mojibake i2cWrite (:520), and the three-PCs-one-chain table in debug doc §8 — then re-run the bench moment (sustained full-service + series A + the eighth-round clauses; D2 and WR-02 watches read clean).
 
+## Self-Check: PASSED
+
+- File check: 01-29-SUMMARY.md, debug doc, 01-UAT.md, WINDOWS.md, STATE.md, ROADMAP.md all FOUND
+- Commit check: f25b41b (session-9 evidence + honest ledger updates) and a5dd90b (closeout docs) both FOUND in git log
+- Task 2 verify greps re-run: STATE.md contains 01-29 (x7) and secure-phase (x4); 01-UAT.md contains G-01-10 (x7); WINDOWS JSON contains ids 15 and 3
+- WINDOWS integrity: zero flips; 2 open / 17 fixed / 19 total reconciled (validated this session: JSON parses, open = {3, 15}, table and JSON agree)
+- Honesty audit: no D1/G-01-7 closure claims; requirements-completed is [] with all 8 shared IDs verified already-complete in REQUIREMENTS.md; actuals recorded honestly (53,965 chars/4 vs the 9,000 estimate - the §8 decode tables and hex evidence are dense)
+- state.update-progress skipped by the tool (reason: phase scope unscoped, not complete) - tool-determined, all other state handlers applied
+- Untracked residue: balloon3.log/base3.log retained untracked (session evidence, prior-session convention); pre-existing dirty files (.pio/build/project.checksum, .planning/config.json, 03-UAT.md, .gsd/, milestone.lock, research/) untouched
+
 ---
 *Phase: 01-command-protocol-control*
 *Completed: 2026-08-28*
