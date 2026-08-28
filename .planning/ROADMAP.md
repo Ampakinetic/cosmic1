@@ -240,7 +240,7 @@ Plans:
 - SD-write-failure volatile fallback with honest labeling
 - Bench re-verification session #12
 
-**Plans:** 1/4 plans executed
+**Plans:** 2/4 plans executed
 
 Plans:
 **Wave 1**
@@ -249,7 +249,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 02.5-02-PLAN.md — Crash-resume: persisted delivery bookkeeping, boot-time rescan re-announce of undelivered files (wave 2)
+- [x] 02.5-02-PLAN.md — Crash-resume: persisted delivery bookkeeping, boot-time rescan re-announce of undelivered files (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 

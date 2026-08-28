@@ -52,7 +52,7 @@ Requirements for Base Station Camera Control Extension. Each maps to roadmap pha
 ### Image Storage (Phase 2.5)
 
 - [x] **STORE-01**: Captured images are persisted to the balloon's FAT32 SD card (SDMMC 1-bit) as files before any transfer manifest is sent
-- [ ] **STORE-02**: Undelivered images survive reboot/power-loss — boot-time index rescan re-announces and resumes transfer of files already on the card
+- [x] **STORE-02**: Undelivered images survive reboot/power-loss — boot-time index rescan re-announces and resumes transfer of files already on the card
 - [x] **STORE-03**: Image transfer serves chunk data from the SD file; the volatile PSRAM queue exists only as an honestly-labeled fallback when the SD write fails
 - [ ] **STORE-04**: A full card refuses new captures with an honest error while telemetry and commands continue unaffected
 
@@ -113,7 +113,7 @@ Which phases cover which requirements. Updated during roadmap creation.
 | ALRT-05 | Phase 3 | Complete |
 | ALRT-06 | Phase 3 | Complete |
 | STORE-01 | Phase 2.5 | Complete |
-| STORE-02 | Phase 2.5 | Pending |
+| STORE-02 | Phase 2.5 | Complete |
 | STORE-03 | Phase 2.5 | Complete |
 | STORE-04 | Phase 2.5 | Pending |
 
