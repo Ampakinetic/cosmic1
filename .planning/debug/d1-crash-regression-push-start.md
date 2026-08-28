@@ -1463,3 +1463,173 @@ console's only t-stamp (IDF E/W log format); the crash time is bounded only by
   guard.
 - No bench claims ride this section beyond the quoted lines; the D1 gap stays
   OPEN with the FOURTH expression recorded (01-UAT.md G-01-10, WINDOWS 15).
+
+## 11 — ROUND-#14 IMPLEMENTATION RECORD (01-32, 2026-08-28): the §10.5 instrument package wired — [STACK] watermark, [TWDT] ForCPU(0) fix, [IDLE0] printf fix, [I2C] write-path disposition, the A/B hook guard
+
+### 11.1 PROVENANCE
+
+- Code commit: `fix(01-32): D1 debug round #4 — the [STACK]/[TWDT]/[I2C]
+  instrument package per debug doc §10.5` = 7d3abbc (the ledger/docs commit
+  follows separately).
+- Touched files (line numbers at this commit):
+  - `src/main_balloon.cpp` — the [STACK] instrument: `s_idle0StackMinWords`
+    latch + the throttled in-hook sample (:140-166), the fixed registration
+    print + the `G01_D1_IDLE_HOOK_DISABLED` guard (:261-281), the 1 Hz
+    new-low print block (:412-433); the `<freertos/task.h>` instrument
+    include (:44). The round-#13 [IDLE0] counter, frozen latch, and the
+    [I2C] reading-path probe are BYTE-IDENTICAL.
+  - `src/image_tx_manager.cpp` — the [TWDT] handle fix (:170-172 and the
+    ROUND-#14 comment block :173-185). B1, B2, [MEM], the D2 receipt-ever
+    flag, and the round-#10 discriminator lines untouched.
+- IMPLEMENTATION-ONLY — **NO D1 lever shipped** (§10.5 item 5's standing
+  guard: three elimination-only rounds plus two bench-disconfirmed levers
+  make lever-speculation ahead of the watermark evidence dishonest). The
+  ONLY code changes are the four instrument items + the A/B macro. The D1
+  fix decision is explicitly DEFERRED until the [STACK] watermark answers
+  at 01-34.
+- Builds: `pio run -e esp32-s3-balloon -e esp32-s3-basestation` 2/2 SUCCESS;
+  `node scripts/verify_protocol_roundtrip.mjs` exit 0 (all retained
+  surfaces byte-intact — Lever A, B1 [BOOT], B2 [LOOP], [MEM], the
+  round-#10 lines, the D2 flag, the round-#13 instruments, the wire
+  format). The A/B guard also compiles clean BOTH ways: the balloon env
+  built SUCCESS with `-DG01_D1_IDLE_HOOK_DISABLED=1` and again without it
+  (the default build is behavior-identical to round #13).
+- Instrument-convention arithmetic: the REMOVAL CONDITION citation count
+  across the two touched files grows 8 → 11 (+3 in main_balloon.cpp — the
+  [STACK] hook-side construct, the [STACK] 1 Hz print-side construct, the
+  A/B guard; image_tx_manager.cpp unchanged at 4 — the [TWDT] fix modifies
+  an existing instrument whose REMOVAL CONDITION already stands in its
+  comment).
+
+### 11.2 WDT-CONFIG RE-DERIVATION (the deployed-config facts, from the pinned framework)
+
+The §7.1 artifact-side reading is re-derived from the PINNED FRAMEWORK's
+sdkconfig — the retained `.pio/build/esp32-s3-balloon/` carries no
+sdkconfig artifact (the §10.3 finding), and this project's pioarduino
+arduino-esp32 3.3.9 install keeps the prebuilt SDK config at:
+
+- **Exact path:** `C:\Users\Amp\.platformio\packages\framework-arduinoespressif32-libs\esp32s3\sdkconfig`
+  (the plan-context's guessed `framework-arduinoespressif32/tools/sdk/esp32s3/`
+  directory does not exist in this package layout — the
+  `framework-arduinoespressif32-libs` package is the pinned SDK tree).
+
+The [TWDT]-relevant lines (sdkconfig:2175-2180):
+
+| Config | Value |
+|---|---|
+| `CONFIG_ESP_TASK_WDT_EN` | y (:2175) |
+| `CONFIG_ESP_TASK_WDT_INIT` | y (:2176) — the TWDT is initialized at boot |
+| `CONFIG_ESP_TASK_WDT_PANIC` | y (:2177) — stage-2 panic configured |
+| `CONFIG_ESP_TASK_WDT_TIMEOUT_S` | 5 (:2178) |
+| `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0` | **y** (:2179) — IDLE0 IS TWDT-subscribed by config |
+| `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1` | **not set** (:2180) — IDLE1 NOT subscribed |
+
+Reconciliation against §7.1: identical values — §7.1's table (:478) already
+recorded `sdkconfig:2175-2179 (EN/INIT/PANIC=y, TIMEOUT_S=5,
+CHECK_IDLE_TASK_CPU0=y; :2180 CHECK_IDLE_TASK_CPU1 not set)`; the 10 s
+stage-1 period is the IMPLEMENTATION reading (RESET_SYSTEM @10 s,
+task_wdt_impl_timergroup.c:124-126), not a second config value. Nothing in
+the re-derivation disturbs §7.1's topology; what it adds is the decisive
+prediction for §10.3's two-reading question:
+
+**The config PREDICTS reading (a) — the wrong-handle instrument bug.** With
+`CHECK_IDLE_TASK_CPU0=y` and `INIT=y`, `esp_task_wdt_status()` on the CPU0
+idle handle is expected to return **ESP_OK**. Session 10's
+`ESP_ERR_NOT_FOUND` is then exactly what the config predicts for the handle
+the buggy call actually sampled — IDLE1, the one idle task (:2180) that is
+NOT subscribed: `xTaskGetIdleTaskHandle()` from CPU1 setup() context
+returned IDLE1. Reading (b) (IDLE0 genuinely unsubscribed) would contradict
+the pinned config and falsify §7's 'only IDLE0 feeds the TWDT' premise,
+re-opening the sessions-8/9 TG0WDT attribution. **The live boot line
+remains the deciding evidence** — 01-34 reads
+`ImageTx: [TWDT] idle0 wdt status=ESP_OK (G-01-10)` (expected) or the
+NOT_FOUND that re-opens the attribution. Until that line is read, no
+WDT-chain conclusion changes.
+
+Handle-API finding (the plan's stop-condition check): the pinned core does
+NOT declare `xTaskGetIdleTaskHandleForCPU` in task.h — it is declared in
+`freertos/esp_additions/include/freertos/idf_additions.h:645` as a
+deprecated static inline forwarding to `xTaskGetIdleTaskHandleForCore`
+(:144; deprecation notice names ESP-IDF 6.0 removal). `idf_additions.h` is
+included by FreeRTOS.h (:1533), so the call compiles and links on both
+targets (verified by the builds); semantics are identical (same handle
+returned). The plan's `xTaskGetIdleTaskHandleForCPU(0)` call is used
+verbatim; the declaration-site finding is recorded here rather than
+substituted silently.
+
+### 11.3 THE 01-34 DISCRIMINATOR TABLE (every new/changed log line)
+
+| Line (exact format string) | Print site | Cadence / trigger | Predicted signature | Removal condition |
+|---|---|---|---|---|
+| `[IDLE0] stack watermark %u words free (new low, t=%lu ms) (G-01-10)` | main_balloon.cpp:431, 1 Hz loopTask block | on a new running-minimum low; first print = the boot baseline; NEVER per-sample, NEVER from the hook (sampled in-hook every 1024 idle ticks, main_balloon.cpp:158-163) | stack-capacity hypothesis CONFIRMED by: new lows accelerating toward 0 words under heavy TX ahead of a canary panic (the baseline-to-new-low trajectory IS the deliverable; the value at the crash instant or the session minimum is the reading). Wedge hypothesis: a healthy, constant margin at the crash instant REFUTES stack capacity | strips WITH the [MEM]/B1/B2 family after G-01-10 closes on bench evidence |
+| `[IDLE0] hook cpu0 registered=%d (G-01-10)` | main_balloon.cpp:278, boot one-shot | once per boot, before subsystem init | **registered=1 expected** (ESP_OK). registered=0 would now be a GENUINE registration failure (esp_freertos_hooks.h:44 return compared against ESP_OK) — a new fact, not the printf bug | same clause |
+| `[IDLE0] hook cpu0 DISABLED for A/B (G-01-10)` | main_balloon.cpp:280, boot one-shot | ONLY in the `-DG01_D1_IDLE_HOOK_DISABLED=1` A/B image — identifies the arm on console | marks the A/B image; the two arms are distinguishable without console-side guesswork | same clause |
+| `ImageTx: [TWDT] idle0 wdt status=%s (G-01-10)` | image_tx_manager.cpp:170-172, boot one-shot (format unchanged) | once per boot, ImageTxManager::begin | **ESP_OK expected** under the §11.2 config reading (CPU0 subscribed; the fix removes the core ambiguity). `ESP_ERR_NOT_FOUND` with the ForCPU(0) handle would falsify §7's premise and re-open the sessions-8/9 TG0WDT attribution | unchanged (in the :167 comment) |
+| `[I2C] write-path …` — **NOT added** | — | — | branch (b): the write path provably swallows errors end-to-end (§11.3.1); the HAL's own `[E][esp32-hal-i2c-ng.c:275] i2cWrite()` line remains the write-path observable | — |
+
+Retained verbatim (01-34 may also grep, all unchanged): `[MEM]` new-low
+lines, `[BOOT] reset-cause` (B1), `[LOOP] slow pass gap` (B2), the
+`[IDLE0] frozen` latch line, the `[I2C] BMP280 invalid … probe 0x76`
+reading-path probe, the round-#10 discriminator lines (budget re-arm,
+class-5 eviction labels, deadline release), the D2 receipt-ever flag.
+
+#### 11.3.1 The [I2C] write-path disposition (§10.5 item 3, branch b — the coverage answer)
+
+The session-10 gap (the instrument wired only to the invalid-READING path)
+is closed IN WRITING as a swallowing finding, not with a speculative
+poller. The full write chain was read from the pinned sources:
+
+1. `Adafruit_SSD1306::display()` (`.pio/libdeps/esp32-s3-balloon/Adafruit
+   SSD1306/Adafruit_SSD1306.cpp`) returns **void** and DISCARDS the
+   `wire->endTransmission()` return at every call site (:401, :427, :435,
+   :1044, :1052).
+2. `TwoWire` (framework-arduinoespressif32 3.3.9,
+   `libraries/Wire/src/Wire.h`) retains NO error state — the class has no
+   `lastError()` accessor and no error member (full class read; the
+   older-core `lastError()` API does not exist here). Its
+   `endTransmission()` (`Wire.cpp:445-478`) translates the esp_err_t to
+   the Arduino return codes {0, 2, 5, 4} and the return value is the ONLY
+   surface — discarded by (1).
+3. `i2cWrite` (`cores/esp32/esp32-hal-i2c-ng.c`, the :275 log site) logs
+   `i2c_master_transmit failed: [%d] %s` at log_e and returns the
+   esp_err_t to (2) — the console [E] line session 10 saw at balloon4.log:1093
+   IS the HAL write-path observable.
+
+Conclusion: nothing surfaces to project code; the honest options were the
+HAL's existing [E] line (already in every console) or a speculative
+write-failure poller — the plan forbids the poller, so the finding stands
+as the coverage answer and the reading-path instrument stays untouched.
+
+### 11.4 THE A/B INSTRUCTIONS (§10.5 item 4 — producing the hook-unregistered image)
+
+- Build: add `-DG01_D1_IDLE_HOOK_DISABLED=1` to the `esp32-s3-balloon`
+  env's `build_flags` in `platformio.ini` (or one-shot via
+  `PLATFORMIO_BUILD_FLAGS="-DG01_D1_IDLE_HOOK_DISABLED=1" pio run -e
+  esp32-s3-balloon`), rebuild, flash per the bench both-boards rule (the
+  base image is unchanged — only the balloon needs the A/B arm).
+- Verify the arm on console: boot 1 must print
+  `[IDLE0] hook cpu0 DISABLED for A/B (G-01-10)` (and NO
+  `[IDLE0] frozen`/`stack watermark` lines — the counter stops advancing).
+- When to reach for it: if 01-34's [STACK] watermark shows a HEALTHY
+  constant margin through a crash, the stack-capacity reading is refuted
+  and the round-#13 hook-dispatch question (the hook executes once per
+  tick inside IDLE0) rises in rank — the A/B image then discriminates
+  hook-dispatch-in-family vs not in one session. If the watermark shows
+  the accelerating-new-low signature, the stack answer has priority and
+  the A/B stays on the shelf.
+- Revert the build_flags line after the A/B session (the default build
+  must keep the hook registered).
+
+### 11.5 SELECTION-PROVENANCE RECORD (the sixth pending operator confirmation)
+
+Per the 01-23/01-25/01-26/01-28/01-30 convention: the round-#14 fix-shape
+selection — the §10.5 package VERBATIM (option b-instrument + fix lineage:
+four instrument items + the A/B macro, no lever) — was pre-named by debug
+doc §10.5 (lines 1452-1463) and STATE.md's round-#14 routing, and
+auto-advanced under `workflow.auto_advance: true` (config.json). Recorded
+as PENDING end-of-phase operator confirmation, the SIXTH of the campaign
+(after 01-23 fix-all, 01-25 option-a+option-b, 01-26 option-a, 01-28
+(a)+(b), 01-30 option-b).
+
+No bench claims ride §11; the D1 gap stays OPEN with the FOURTH expression
+pending 01-34's hardware session (01-UAT.md G-01-10, WINDOWS 15).
