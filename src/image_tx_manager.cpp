@@ -8,6 +8,9 @@
 // G-01-10 round #12 discriminator B1 (01-28): esp_reset_reason() for the
 // boot reset-cause line — .planning/debug/d1-crash-regression-push-start.md §7.6
 #include <esp_system.h>
+// G-01-10 round #13 instrument [TWDT] (01-30): esp_task_wdt_status() for the
+// boot-time IDLE0-subscription line — same doc §9.6
+#include <esp_task_wdt.h>
 
 // Debug configuration
 #ifndef DEBUG_IMAGE_TX
@@ -152,6 +155,21 @@ bool ImageTxManager::begin(E32LoRa* lora) {
     // instrumentation after G-01-10 closes on bench evidence.
     Serial.printf("ImageTx: [BOOT] reset-cause: %s (G-01-10)\n",
                   resetReasonName(esp_reset_reason()));
+
+    // G-01-10 round #13 instrument [TWDT] (01-30) per
+    // .planning/debug/d1-crash-regression-push-start.md §9.6: boot-time
+    // one-shot confirmation that IDLE0 is subscribed to the task WDT.
+    // sdkconfig has CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y and
+    // INCLUDE_xTaskGetIdleTaskHandle=1, so status(idle0) is expected
+    // ESP_OK — turning §7.1's stage-0-inferred-from-silence into a positive
+    // boot fact: once stage-0 is proven armed, a future SILENT rst:0x7 with
+    // no "Tasks currently running" print is affirmative evidence the
+    // stage-0 INT path died, not a config assumption. REMOVAL CONDITION:
+    // strips WITH the [MEM] instrumentation after G-01-10 closes on bench
+    // evidence.
+    Serial.printf("ImageTx: [TWDT] idle0 wdt status=%s (G-01-10)\n",
+                  esp_err_to_name(
+                      esp_task_wdt_status(xTaskGetIdleTaskHandle())));
 
     if (DEBUG_IMAGE_TX) {
         Serial.println("ImageTx: Initialized");

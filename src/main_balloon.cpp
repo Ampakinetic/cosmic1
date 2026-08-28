@@ -37,6 +37,16 @@
 // Phase 2: Image Transmission
 #include "image_tx_manager.h"
 
+// G-01-10 round #13 D1 instruments (01-30) per
+// .planning/debug/d1-crash-regression-push-start.md §9.6 — three bounded,
+// latch-guarded observables for the CPU0-starvation family (§9.5 verdict:
+// elimination-only for the third consecutive round → instrument-only; no
+// lever named). REMOVAL CONDITION (all three): strips WITH the [MEM]/B1/B2
+// instrumentation after G-01-10 closes on bench evidence.
+#include <esp_freertos_hooks.h>  // [IDLE0] idle-hook registration
+#include <esp32-hal-i2c.h>       // [I2C] i2cBusHandle(0)
+#include <driver/i2c_master.h>   // [I2C] i2c_master_probe
+
 // Forward declarations for missing types
 struct PowerData {
     float batteryVoltage;
@@ -111,6 +121,24 @@ struct AppState {
 // ===========================
 
 static AppState appState;
+
+// G-01-10 round #13 instrument [IDLE0] (01-30) per
+// .planning/debug/d1-crash-regression-push-start.md §9.6: 1 Hz-resolution
+// CPU0 liveness. The hook runs in IDLE0's context and counts one tick per
+// call (return true = call again next tick; the hook contract forbids
+// blocking — the body is one increment on a volatile). loop()'s existing
+// 1 Hz block samples the counter: a delta of 0 across a full second means
+// IDLE0 ran ZERO ticks — the starvation family's first observable that
+// fires ~9 s BEFORE the 10 s TWDT stage-1 reset instead of only at it.
+// Discriminates audit §9.3's hypotheses: H-phase-independent predicts
+// [IDLE0] freezing in ANY phase; H-service/H-lull predict phase-correlated
+// freezing. G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2
+// instrumentation after G-01-10 closes on bench evidence.
+static volatile uint32_t s_idle0TickCount = 0;
+static bool idle0TickHook(void) {
+    s_idle0TickCount++;
+    return true;
+}
 
 // ===========================
 // Function Declarations
@@ -200,6 +228,13 @@ void setup() {
     appState.maxLoopTime = 0;
     appState.avgLoopTime = MAIN_LOOP_INTERVAL_MS;
     Serial.println("Application state initialized");
+
+    // G-01-10 round #13 instrument [IDLE0] (01-30) per §9.6: register the
+    // CPU0 idle hook BEFORE subsystem init so boot-time starvation is
+    // observable too. Prints its own registration line so the 01-31 log
+    // proves the instrument was live in the session it is read from.
+    bool idle0HookOk = esp_register_freertos_idle_hook_for_cpu(idle0TickHook, 0);
+    Serial0.printf("[IDLE0] hook cpu0 registered=%d (G-01-10)\n", idle0HookOk ? 1 : 0);
     
     // Initialize hardware
     Serial.println("Initializing hardware...");
@@ -301,6 +336,37 @@ void loop() {
     static uint32_t lastOledMs = 0;
     if (millis() - lastOledMs >= 1000) {
         lastOledMs = millis();
+
+        // G-01-10 round #13 instrument [IDLE0] (01-30) per §9.6: sample the
+        // CPU0 idle-tick counter at 1 Hz. delta==0 over a full second = IDLE0
+        // ran zero ticks = the starvation family's signature, latched one
+        // line per episode and re-armed by a healthy sample. This line only
+        // prints while loopTask (CPU1) is alive, so "frozen [IDLE0] + silent
+        // [LOOP]" is exactly the CPU0-dead/CPU1-alive split of audit §9.4
+        // reading (b). G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/
+        // B1/B2 instrumentation after G-01-10 closes on bench evidence.
+        static uint32_t lastIdle0SampleMs = 0;
+        static uint32_t idle0CountAtLastSample = 0;
+        static bool idle0FrozenLogged = false;
+        if (lastIdle0SampleMs == 0) {
+            // first pass: baseline only
+            idle0CountAtLastSample = s_idle0TickCount;
+            lastIdle0SampleMs = millis();
+        } else {
+            uint32_t idle0Delta = s_idle0TickCount - idle0CountAtLastSample;
+            idle0CountAtLastSample = s_idle0TickCount;
+            if (idle0Delta == 0) {
+                if (!idle0FrozenLogged) {
+                    idle0FrozenLogged = true;
+                    Serial0.printf("[IDLE0] frozen - 0 idle ticks in last %lu ms, t=%lu ms (G-01-10)\n",
+                                   (unsigned long)(millis() - lastIdle0SampleMs),
+                                   (unsigned long)millis());
+                }
+            } else {
+                idle0FrozenLogged = false;
+            }
+            lastIdle0SampleMs = millis();
+        }
         BalloonOledStatus oled{};
         oled.e32Ready = E32LoRaModule().isReady();
         oled.auxHigh = E32LoRaModule().isAuxHigh();
@@ -766,6 +832,45 @@ void processSensors() {
     }
     
     Sensors().update();
+
+    // G-01-10 round #13 instrument [I2C] (01-30) per
+    // .planning/debug/d1-crash-regression-push-start.md §9.6: bus health
+    // probe at the BMP280-invalid transition. IDF 5.5.4 exposes NO bus
+    // error-flag accessor, so the honest available observable is a bounded
+    // i2c_master_probe against the HAL-exported Wire-0 bus handle:
+    //   ACK     = device answered (bus alive — a transient read failure)
+    //   NACK    = bus alive, device silent (session-9-class candidate)
+    //   TIMEOUT = bus wedged (kernel-contention reading (b) candidate)
+    // Audit §9.4's readings (a)/(b)/(c) discriminate on this verdict at the
+    // next occurrence. One probe (<=50 ms) per failure episode,
+    // latch-guarded — never in the hot path; counters make episodes
+    // countable across the log. G-01-10; REMOVAL CONDITION: strips WITH the
+    // [MEM]/B1/B2 instrumentation after G-01-10 closes on bench evidence.
+    static bool i2cFailLatched = false;
+    static uint32_t i2cEpisodeCount = 0;
+    static uint32_t i2cProbeCount = 0;
+    bool bmpOkNow = Sensors().isBMP280Ready();
+    if (!bmpOkNow && !i2cFailLatched) {
+        i2cFailLatched = true;
+        i2cEpisodeCount++;
+        i2cProbeCount++;
+        esp_err_t probeErr = i2c_master_probe(
+            (i2c_master_bus_handle_t)i2cBusHandle(0), 0x76, 50);
+        const char* i2cVerdict;
+        switch (probeErr) {
+            case ESP_OK:            i2cVerdict = "ACK (bus alive, device answered)"; break;
+            case ESP_ERR_NOT_FOUND: i2cVerdict = "NACK (bus alive, device silent)"; break;
+            case ESP_ERR_TIMEOUT:   i2cVerdict = "TIMEOUT (bus wedged)"; break;
+            default:                i2cVerdict = esp_err_to_name(probeErr); break;
+        }
+        Serial0.printf("[I2C] BMP280 invalid t=%lu ms - probe 0x76 -> %s (episodes=%lu probes=%lu) (G-01-10)\n",
+                       (unsigned long)millis(), i2cVerdict,
+                       (unsigned long)i2cEpisodeCount, (unsigned long)i2cProbeCount);
+    } else if (bmpOkNow && i2cFailLatched) {
+        i2cFailLatched = false;
+        Serial0.printf("[I2C] BMP280 recovered t=%lu ms (G-01-10)\n",
+                       (unsigned long)millis());
+    }
     
     // Get sensor data for system state
     BMP280Data sensorData = Sensors().getBMP280Data();
