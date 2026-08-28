@@ -1633,3 +1633,94 @@ as PENDING end-of-phase operator confirmation, the SIXTH of the campaign
 
 No bench claims ride §11; the D1 gap stays OPEN with the FOURTH expression
 pending 01-34's hardware session (01-UAT.md G-01-10, WINDOWS 15).
+
+### 11.6 SESSION-11 READING (01-34 bench, 2026-08-29): the §11.3 instruments ANSWER — zero crashes, no fifth expression, [TWDT] ESP_OK, [STACK] refutes stack capacity, [I2C] coverage closed by absence — NO §12 (nothing crashed; this subsection IS the session's debug-doc record)
+
+Provenance: consoles balloon5.log (1,068 lines) / base5.log (524 lines), repo
+root, written 2026-08-29 ~01:05 — the operator-retained names happen to match
+the plan's request this time (the #5 name-collision hazard noted in the 01-34
+artifacts did not bite: the session-#5-of-2026-08-25 files were balloon5.log/
+base5.log too and were OVERWRITTEN by this session's captures — the 01-24
+convention records the operator's retained names either way). Firmware =
+round #14 (01-32 instruments + 01-33 lever), build banner
+`Build: Aug 28 2026 23:13:40` (balloon5.log:24); balloon ELF SHA256
+`32d31f270cb81b52731cf77501c38980de3ac36ad398109cf1da1c0815e5043a` and base
+`ce657093cb0ae6c7e6227c72ea06a30d1078ffa5a97b48d47ec244926c231718` — both
+re-verified on-disk against `.pio/build/*/firmware.elf` by the 01-34 executor
+(matching the pre-flight record at HEAD 70191a9). The console-side ELF-SHA
+banner is ABSENT BY DESIGN — it prints only from the panic handler, and
+nothing panicked; provenance rides the on-disk SHA match + the build banner.
+Single boot: `[BOOT] reset-cause: POWERON` (balloon5.log:104) is the only
+boot; no second boot exists to read.
+
+THE INSTRUMENT ANSWERS (each against its §11.3 predicted signature):
+
+- **[TWDT] = ESP_OK — the two-reading question is RESOLVED.**
+  `ImageTx: [TWDT] idle0 wdt status=ESP_OK (G-01-10)` (balloon5.log:105, the
+  only boot). Reading (a) confirmed exactly as §11.2's config derivation
+  predicted: IDLE0 genuinely IS TWDT-subscribed (CHECK_IDLE_TASK_CPU0=y);
+  §7's 'only IDLE0 feeds the TWDT' premise STANDS; the sessions-8/9 TG0WDT
+  attribution survives; session 10's ESP_ERR_NOT_FOUND was the wrong-handle
+  instrument bug (it sampled IDLE1). No premise re-opens.
+- **[IDLE0] registered=1** (balloon5.log:33) — the printf fix proven; the
+  hook is genuinely armed (ESP_OK compared, not bool-coerced).
+- **[STACK] — the stack-capacity hypothesis is REFUTED per the §11.3
+  pre-written rule.** The boot baseline is the ONLY watermark line in the
+  whole console: `[IDLE0] stack watermark 240 words free (new low, t=2392 ms)
+  (G-01-10)` (balloon5.log:138) — zero further new-lows across the entire
+  session INCLUDING every multi-window FULL service. IDLE0's stack never
+  dropped below 240 words (960 B) free at any 1024-idle-tick sample. The
+  accelerating-toward-0 CONFIRM signature never appeared. Honest caveats,
+  recorded rather than smoothed: (1) no crash occurred, so there is no
+  crash-instant value to read — the refutation rides the healthy constant
+  margin through the session's TX-heaviest stretch, exactly the wedge-side
+  reading §11.3 wrote down in advance; (2) this session's TX-heaviest
+  stretch was lighter than session 10's fatal one (AUX-low-missed ×40 vs
+  ×81; largest SERVED image 41 chunks vs 119) — the refutation is as strong
+  as the exercised load, and the load ceiling is named. Per §11.4's own
+  instruction, the healthy-margin reading PROMOTES the round-#13
+  hook-dispatch question: the A/B hook-unregistered image
+  (G01_D1_IDLE_HOOK_DISABLED, the §11.4 recipe) is the next discriminator —
+  the wedge family (scheduler/tick-chain, sessions 7/8/9) re-ranks to the
+  top of the remaining candidate set.
+- **[I2C] — the coverage answer lands by absence.** Zero `[I2C]` lines AND
+  zero i2cWrite errors whole-console (both greps 0): no write-failure
+  episode occurred, so the §11.3.1 branch-(b) swallowing disposition (closed
+  in writing at 01-32) stands as the coverage answer — §10.3's gap is
+  closed on evidence, not coverage-silence.
+- **B1/B2/[MEM]**: B1 POWERON (:104); B2 `[LOOP]` zero fires (loopTask
+  healthy throughout); `[MEM]` ×40 healthy (loopTask stackHW 5600-5804,
+  heap floor 8,310,804 — e.g. balloon5.log:807 heap=8311180 minHeap=8310804);
+  exhaustion ruled out a fifth session.
+
+CRASH-SIGNATURE CENSUS (whole balloon5.log, executor-grepped): rst:0x7 = 0;
+rst:0xc = 0; Guru Meditation = 0; stack canary = 0; i2cWrite = 0; mojibake
+(corrected raw-byte method `grep -c $'\xe2\x88\xa9\xe2\x94\x90\xe2\x95\x9c'`)
+= 0 (the UTF-8-replacement-char grep also 0). NO FIFTH EXPRESSION — the
+first bench session of the D1 campaign with zero crash signatures
+end-to-end. NO §12 is appended: §12 exists for crashes, and none occurred.
+
+What the ladder did NOT exercise (recorded so the absence is not passed off
+as a pass): D1 class 1 (first-post-boot push) PASSED a fourth consecutive
+session — image 44, the only first capture, went thumb 6/6 + full 41/41 both
+COMPLETE (base5.log:99/:275) across 3 distinct windows / 4 armings
+(balloon5.log:397/:516+:526/:597 area) with zero crashes. Class 2's
+>=7-window SVGA bar was NOT met: image 45 (SET_RESOLUTION wire 10, re-init
+6 -> 11, balloon5.log:781-:782, zero FB-OVF; SVGA-class 32,850 B / 165
+chunks) served ZERO full chunks — starved by the G-01-7 lever's honest-
+reject path (the NEW over-rejection mode, full record in 01-UAT.md G-01-7
+and WINDOWS entry 3). Class 3's >=3-minute dwell was NOT met: ~50 s TX-light
+between image 44's completion and image 45's capture (balloon [BCN] seq=27
+at :641 -> seq=37 at :767, the locked 5 s cadence). The instruments'
+ANSWERS are the round's deliverable and they are in; the ladder's heavy
+tail (sustained >=7-window SVGA service, the 3-minute dwell, series A) is
+owed a re-run on the next round's firmware.
+
+ROUTING (recorded, not speculated): §10.5's item set is ANSWERED — the
+[TWDT] question settled (ESP_OK), the [STACK] question settled (REFUTED),
+the [I2C] question settled (branch b by absence). D1's root cause remains
+open in the WEDGE FAMILY (sessions 7/8/9's scheduler/tick-chain class);
+round #15's cheapest discriminator is the §11.4 A/B hook-unregistered build,
+one session, with the ladder's heavy tail re-run on the same firmware. The
+G-01-7 over-rejection fix (capacity-aware supersede admission) is the
+companion lever round — the two share the next bench session.
