@@ -3,17 +3,17 @@ gsd_state_version: 1.0
 milestone: v1.0
 current_plan: 2
 status: executing
-stopped_at: Completed 01-30-PLAN.md
-last_updated: "2026-08-28T06:44:38.413Z"
-state_head: 153783e6f09560e78c25848c2b32ee95db65e798
+stopped_at: Completed 01-32-PLAN.md
+last_updated: "2026-08-28T10:44:07.736Z"
+state_head: b33d07ced0518f644eb81abb14bcb29ece4aafd0
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 44
-  completed_plans: 39
+  completed_plans: 41
 milestone_name: milestone
-current_phase_name: Command Protocol & Control
 current_phase: 2
+current_phase_name: Command Protocol & Control
 ---
 
 # Project State
@@ -136,8 +136,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-28T03:50:23.686Z
-**Stopped at:** Completed 01-30-PLAN.md
+**Last session:** 2026-08-28T10:44:07.000Z
+**Stopped at:** Completed 01-32-PLAN.md
 **Resume file:** None
 
 ## Performance Metrics
@@ -182,6 +182,7 @@ See: `.planning/PROJECT.md`
 | Phase 01-28 P28 | ~46 min | 3 tasks | 9 files |
 | Phase 01 P29 | ~2.5h across executor pre-flight + operator bench session #9 + continuation closeout | 2 tasks | 4 files |
 | Phase 01-30 P30 | 33 min | 3 tasks | 5 files |
+| Phase 01-32 P32 | 33min | 2 tasks | 6 files |
 
 ## Decisions
 
@@ -275,3 +276,6 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: D2 and WR-02 regression watches green on the round-#12 firmware (2 genuine hold-line fires, zero health-check-failed) - both entries stay fixed; zero ledger flips, G-01-7 unjudgeable, image 39 INCOMPLETE attributed to the crash
 - [Phase 2]: 01-30 round #13: instrument-only (option b) selected at the Task 2 checkpoint, auto-advanced pending end-of-phase operator confirmation (fifth) — third consecutive elimination-only round; [IDLE0]/[I2C]/[TWDT] instruments landed, no lever
 - [Phase 2]: 01-30: ESP_ERR_INVALID_STATE re-read from deployed source as bus-level non-DONE completion (NACK/timeout), not an FSM refusal — driver-state-corruption reading demoted; probe verdict is the honest FSM-state substitute (IDF 5.5.4 has no error-flags accessor)
+- [Phase 2]: 01-32 round #14: [I2C] write-path coverage executed branch (b) — the write path provably swallows errors end-to-end (Adafruit_SSD1306 discards all five endTransmission returns, display() returns void; TwoWire retains no error state), so no speculative poller; the HAL's [E] i2cWrite line stays the write-path observable, recorded with source paths in debug doc §11.3.1
+- [Phase 2]: 01-32 round #14: the pinned-sdkconfig re-derivation (framework-arduinoespressif32-libs/esp32s3/sdkconfig:2175-2180 — INIT=y/CHECK_IDLE_TASK_CPU0=y/CPU1 not set/TIMEOUT_S=5/PANIC=y) predicts the wrong-handle reading for session-10's ESP_ERR_NOT_FOUND (it sampled IDLE1, the unsubscribed idle task); ESP_OK expected at 01-34 with the fixed ForCPU(0) handle, a repeated NOT_FOUND would re-open the sessions-8/9 TG0WDT attribution — the live boot line stays the deciding evidence
+- [Phase 2]: 01-32 round #14: NO D1 lever shipped per §10.5 item 5's standing guard — the [STACK] watermark instrument (throttled in-hook uxTaskGetStackHighWaterMark(NULL) + running-minimum latch + 1 Hz new-low print, the [MEM] convention) is the round's only designed discriminator; the D1 fix decision is deferred until the watermark answers at 01-34; the A/B guard G01_D1_IDLE_HOOK_DISABLED + §11.4 recipe make the hook-dispatch question cheap to kill
