@@ -914,3 +914,400 @@ transactions, GPS UART1 reads, NVS/flash ops — has NOT had the same audit).
 
 The `[MEM]`/B1/B2 instrumentation STAYS IN — removal condition unchanged
 (strip only after G-01-10 closes on bench evidence).
+
+---
+
+## 9 — SESSION-9 DEBUG ROUND #3 (round #13): the lull-phase audit, crash-context determinism, the I2C+mojibake convergence verdict
+
+Scope: §8.6's three questions + the discriminator menu, executed against the
+retained evidence BEFORE any code change (the §6.1/§7 convention — the audit's
+object of study is the build that crashed). Evidence base: `balloon3.log` (804
+lines) / `base3.log` (221 lines) (retained), the deployed ELF
+`.pio/build/esp32-s3-balloon/firmware.elf` SHA256
+`e09dd034a5ab7b904278902106a0348d12c800ad88b03daac5d29029ad0cb5f7`
+(re-confirmed this round, §9.1), and the deployed framework artifacts pinned by
+platformio.ini (platform espressif32 55.03.39 → arduino-esp32 3.3.9 → ESP-IDF
+5.5.4 prebuilt libs). Framework-source claims below were re-verified against the
+installed packages this round: IDF 5.5.4 at `~/.platformio/packages/framework-espidf`
+(components `esp_driver_i2c/i2c_master.c`, `esp_system/freertos_hooks.c`,
+`esp_system/include/esp_task_wdt.h`, `esp_system/include/esp_freertos_hooks.h`),
+arduino core at `~/.platformio/packages/framework-arduinoespressif32`
+(`cores/esp32/esp32-hal-i2c-ng.c`, `cores/esp32/esp32-hal-i2c.h`,
+`libraries/Wire/src/Wire.cpp`, `libraries/Preferences/src/Preferences.cpp`),
+prebuilt esp32s3 config at
+`~/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/sdkconfig`
+(hereafter "sdkconfig"; TWDT/IWDT rows re-read this round and identical to
+§7.1: CONFIG_ESP_TASK_WDT_TIMEOUT_S=5 / PANIC=y / CHECK_IDLE_TASK_CPU0=y /
+CPU1 not set; INT_WDT 300 ms CHECK_CPU1=y) and its FreeRTOSConfig.h
+(`include/freertos/config/include/freertos/FreeRTOSConfig.h`).
+Project-source claims carry `file:line` against HEAD `1cccc42` (source unchanged
+since the round-#12 fix commit `6ca9a36` — docs-only commits after).
+
+### 9.1 PROVENANCE + LULL RECONSTRUCTION
+
+**ELF SHA check (performed FIRST, before any decode claim):**
+`sha256sum .pio/build/esp32-s3-balloon/firmware.elf` →
+`e09dd034a5ab7b904278902106a0348d12c800ad88b03daac5d29029ad0cb5f7` — **MATCHES**
+§8.1's deployed-build SHA in full (not just the 10-hex prefix). No new addr2line
+decode was required this round (§8.2's `0x4037c7fa → esp_vApplicationTickHook
+freertos_hooks.c:34` decode is retained; this round re-verified the SOURCE line:
+`esp-vApplicationTickHook` at `framework-espidf/components/esp_system/freertos_hooks.c:29-38`
+is the per-core dispatch loop `for (n = 0; n < MAX_HOOKS; n++) { if
+(tick_cb[core][n] != NULL) { tick_cb[core][n](); } }` — the Saved PC samples the
+callback invocation inside that loop, exactly §8.5's reading).
+
+**Bus-clock ground truth (new this round):** balloon3.log:58 — the deployed
+driver's own boot line — `[1181][I][esp32-hal-i2c-ng.c:112] i2cInit():
+Initializing I2C Master: num=0 sda=1 scl=2 freq=100000`. The balloon's Wire-0
+runs at **100 kHz**. The 400 kHz upgrade exists only on the BASE board path
+(src/status_display.cpp:35 sets it inside `Board::BASE`); the BALLOON path
+never calls `Wire.setClock` (status_display.cpp:37 comment; the bus is begun in
+src/sensor_manager.cpp:86 `Wire.begin(BMP280_SDA_PIN, BMP280_SCL_PIN)` — default
+100 kHz, Wire.cpp/`i2cInit` fallback esp32-hal-i2c-ng.c:98-99). All Wire-0
+timing arithmetic below uses 100 kHz.
+
+**The lull, reconstructed from balloon3.log :491-:523.** Timestamps print only
+on milestones/errors, so the bracket is reconstructed from cadences (each
+cadence source-cited) anchored on the two hard timestamps: [124026] on the
+failing line :520 and the 993-pass Performance line :514.
+
+| Lines | Activity | Cadence (source) |
+| --- | --- | --- |
+| :491 | window chunk 16/16 sent — last FULL-window transmit | — |
+| :492 | `re-announce held - inbound window traffic active` (genuine fire) | bookkeeping, no radio |
+| :493-:496 | BMP280 :493/:494/:496, GPS no-fix :495 | BMP280 1000 ms (balloon_config.h:34); GPS drain 2000 ms (balloon_config.h:35) |
+| :497-:501 | GET_STATUS serviced: command 20 → Status sent → 47 B E32 TX → Response sent → SUCCESS | base 30 s poll (base3.log:103/:129) |
+| :502-:505 | legacy telemetry packet :502, 30 B TX :504, `[BCN] seq=23` :505 | legacy telemetry 5000 ms (main_balloon.cpp:67); beacon 5000 ms (image_protocol.h:178) |
+| :506-:513 | BMP280 :506/:510/:512, GPS :507/:513, heartbeat+status debug :508-:509, `[MEM] new-low` :511 | as above |
+| :514 | `Performance - Loop: 0 ms, Max: 1277 ms, Avg: 47 ms, Count: 993` | 10 s gate (main_balloon.cpp:70) |
+| :515-:517 | BMP280 :515/:516, GPS :517 | as above |
+| :518-:519 | 30 B E32 TX + telemetry packet created (legacy gate) | as above |
+| :520 | `[124026][E][esp32-hal-i2c-ng.c:275] i2cWrite(): i2c_master_transmit failed: [259] ESP_ERR_INVALID_S∩┐╜ATE` | the next Wire-0 action (BMP280 poll or OLED refresh — the log cannot discriminate which device; §9.4) |
+| :521-:524 | ROM banner → rst:0x7 TG0WDT_SYS_RST → Saved PC:0x4037c7fa | the reset |
+
+Loop bookkeeping: MAIN_LOOP_INTERVAL_MS = 100 (src/main_balloon.cpp:66) — the
+loop targets 10 Hz; :514's own arithmetic gives the observed average
+124026 ms / 993 passes ≈ **125 ms/pass** (compute Avg 47 ms + delay-to-100 ms on
+idle passes, stretched to 0.2-1.3 s on transmit passes). **Wall-clock
+brackets:** [BCN] seq=18 at :378 → seq=23 at :505 is five 5 s intervals ≈ 25 s,
+so the service stretch :378-:505 spans ≈ t≈94→119 s, and the lull :505-:520 is
+the final ≈5 s (t≈119→124 s). seq=24's beacon was DUE at ≈ t≈124 s — the crash
+instant; the :518-:519 30 B TX is the legacy 5 s telemetry gate, and it
+COMPLETED ITS FULL E32 HANDSHAKE (the `Transmitted N bytes` line prints only at
+transmit end, after waitForAuxHigh(5000) — src/e32_lora.cpp:287-299 — the §7.2
+ordering fact): the radio, its AUX line, and UART0 were all healthy within the
+final second.
+
+**Every activity that ran in the lull window** (the §9.2 audit's closed set):
+BMP280 Wire-0 register reads (~1 Hz), the 1 Hz OLED full-frame Wire-0 refresh
+(src/main_balloon.cpp:302-319 → src/status_display.cpp:159 `display()` —
+invisible in the log, its tick landed somewhere in-window), GPS UART1 drains
+(2 s cadence, :495/:507/:513/:517), the GET_STATUS service + 47 B response TX
+(:497-:501), two 30 B legacy telemetry TXs (:504, :518-:519), the [BCN] seq=23
+beacon TX (:505), heartbeat/status packet-creation debug (:508-:509 — CPU1
+bookkeeping, no E32 line adjacent), Serial.printf console output for every
+line, loop statistics/delay bookkeeping (main_balloon.cpp:336-353). **NOT in
+the window:** any capture (last :366), any NVS write (capture-time only —
+§9.2 candidate 4), any chunk/window push (window 2 never armed), any Wi-Fi
+activity (the balloon runs none).
+
+### 9.2 LULL-PHASE CANDIDATE ARITHMETIC (the §7.3 standard, applied to the set that never had it)
+
+Reference periods (unchanged from §7.1, re-used verbatim): TWDT stage-1 = 10 s
+(fired at :523); TWDT stage-0 = INT @5 s, prints unconditionally, never printed
+(the stage-0 interrupt path was dead ≥5 s before the reset); IWDT = 300 ms,
+never fired (both cores' tick chains ran to the end).
+
+**The deployed-driver INVALID_STATE semantics first** (§8.6 question 2's
+factual foundation — read from the deployed sources, every claim path-cited):
+
+- The Arduino HAL wrapper `i2cWrite` (cores/esp32/esp32-hal-i2c-ng.c:237-293)
+  guards each bus with `bus[].lock` = `xSemaphoreCreateMutex()` (:80) — a
+  **YIELDING FreeRTOS mutex**, taken with portMAX_DELAY (:87, :249) and held
+  across the transaction; **NOT a portMUX**. Every Arduino transaction is
+  SYNCHRONOUS: `trans_queue_depth = 0` (:130) → `async_trans` false.
+- The log's exact line `esp32-hal-i2c-ng.c:275` is the `log_e` after
+  `i2c_master_transmit` returns non-OK (:273-276).
+- `i2c_master_transmit` (IDF `esp_driver_i2c/i2c_master.c`, sync path): takes
+  the bus `bus_lock_mux` binary semaphore (created :1092-1094; taken :1416
+  region), runs `s_i2c_transaction_start` (:678-738). **A busy/stuck bus does
+  NOT produce a refusal**: a prior TIMEOUT status or a bus-busy reading
+  triggers `s_i2c_hw_fsm_reset(bus, true)` FIRST (:685-687) and the
+  transaction proceeds (on S3 the clear-bus is the GPIO-pulse variant —
+  `soc_caps.h:215` records SOC_I2C_SUPPORT_HW_FSM_RST is NOT defined for
+  esp32s3 → i2c_master.c:70-88, ≤9 SCL pulses with esp_rom_delay_us,
+  microsecond-class). The bus spinlock is taken only around register/FIFO
+  setup (:693-715) — ISR-grade, never across a wait. Then
+  `s_i2c_send_commands` (:532-613) waits on the event queue with
+  `ticks_to_wait` (:588) and returns **ESP_ERR_INVALID_STATE iff the final
+  status is not I2C_STATUS_DONE** (:726-728).
+- The completion statuses the ISR writes (:782-809): I2C_STATUS_ACK_ERROR on
+  NACK (:797-798), I2C_STATUS_TIMEOUT on SCL-timeout/arbitration (:800-801),
+  I2C_STATUS_DONE on master-complete (:803-805).
+
+**Meaning: ESP_ERR_INVALID_STATE at :275 is NOT a driver-FSM "wrong state,
+refusing to start" — there is no such FSM state in the deployed stack. It is
+the honest completion status of a transaction that RAN and ended non-DONE: a
+NACK (ACK_ERROR) or a bus timeout (TIMEOUT).** A Wire-0 transaction therefore
+cannot wedge loopTask: it is bounded at task level by the Wire timeout —
+default 50 ms (`libraries/Wire/src/Wire.cpp:44` `_timeOutMillis(50)`; S3's
+clear-bus adds microseconds) — plus at most a tick-bounded trailing busy-wait
+after a NACK event (i2c_master.c:595-604, bounded by the same ticks_to_wait),
+all on CPU1, all behind yielding locks. One audited non-reachable stretch,
+recorded for completeness: the UNBOUNDED `while (i2c_ll_is_bus_busy(...)) {}`
+at i2c_master.c:648 lives in `s_i2c_send_command_async` (:615) — reached only
+when `async_trans == true` (:816), which this firmware never configures.
+
+Candidate table (duration vs the 10 s stage-1 period; properties: masks
+interrupts? / kernel portMUX across a blocking wait? / suspends the flash
+cache? / feeds or starves IDLE0?):
+
+| # | Candidate (site) | Worst case (lull) | Masks int? | portMUX across wait? | Cache suspend? | IDLE0 effect | Disposition |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | BMP280 Wire-0 poll (src/sensor_manager.cpp:186-187; Adafruit readPressure+readTemperature = 2 transactions of 3-4 B @100 kHz, 1 Hz) | <5 ms typical; ≤~100 ms absolute worst (50 ms timeout + tick-bounded NACK wait + µs clear-bus, §9.2 semantics) | no (ISR-driven; the I2C ISR allocates on the allocating task's core — CPU1) | no (HAL lock = yielding mutex i2c-ng.c:80; bus spinlock ISR-grade µs) | no | none — CPU1 only | **ELIMINATED** |
+| 2 | 1 Hz OLED full-frame refresh (src/main_balloon.cpp:302-319 → src/status_display.cpp:159; 1024 B frame + command stream @100 kHz) | ~95 ms/refresh at 1 Hz (1024×9 µs + overhead) | no | no | no | none — CPU1 | **ELIMINATED** |
+| 3 | GPS UART1 drain (src/sensor_manager.cpp:210-220; 2000 ms cadence, `while (millis() < timeout && gpsSerial->available())` bounded at 100 ms, 38400 baud sensor_pins.h:50) | 100 ms per 2 s | no (UART RX is ISR-fed ring) | no (Serial1 API = HAL yielding locks) | no | none — CPU1 | **ELIMINATED** |
+| 4 | NVS image-ID persistence (src/auto_capture.cpp:318-320; `putUShort` = nvs_set_u16 + nvs_commit, Preferences.cpp:159-170 region — a REAL flash-write window WITH cache suspension) | ms-class when it fires — but it fires ONLY inside `allocateImageId()` at capture allocation (from `fire()` :290 and the CAPTURE_NOW handler); last capture :366, ≈87 s before the reset; **no capture occurred in the lull** | (would not mask) | (no) | YES at write — not in this window | none — CPU1 | **ELIMINATED as LULL-reachable** (the flash-write window belongs to the capture phase; §9.4 notes it as a non-constant across expressions) |
+| 5 | [BCN] seq=23 beacon + the two legacy 30 B telemetry TXs (:504, :518-:519; src/image_tx_manager.cpp:262-330, main_balloon.cpp:964+; common path E32LoRa::transmit src/e32_lora.cpp:212-300 incl. Lever A's delay(1)-polled 1000 ms-bounded drain :244-256) | 30 B ≈ 31 ms drain; Lever-A bound 1000 ms; AUX waits ≤6000 ms worst case, delay(10)-polled (yields throughout) | no | no (UART_MUTEX_LOCK = yielding recursive mutex, esp32-hal-uart.c:108-111) | no | none — CPU1 | **ELIMINATED** (§7.3 properties unchanged post-Lever-A; the :518-:519 TX provably COMPLETED its handshake — §9.1) |
+| 6 | GET_STATUS response TX 47 B (:497-:501) | 47 B ≈ 49 ms drain + same AUX path as (5) | as (5) | as (5) | as (5) | none — CPU1 | **ELIMINATED** |
+| 7 | Serial.printf console output (every log line; UART0 TX ring 115200) | ring-buffered driver write; yields on a full ring | no | no | no | none — CPU1 | **ELIMINATED** |
+| 8 | Loop bookkeeping / millis / delay (src/main_balloon.cpp:336-353) | delay() = vTaskDelay — yields | no | no | no | none — CPU1 | **ELIMINATED** |
+
+**Negative result, stated honestly: no lull-phase project-code candidate can
+starve IDLE0 on CPU0 for 10 s.** Every lull activity is CPU1, bounded
+ms-class, and holds only yielding locks. The §7.3 verdict generalizes: the
+starver is below project code in BOTH phases — the lull set simply had never
+been through the arithmetic until now. And the INVALID_STATE semantics sharpen
+the §8.6 question-2 foundation: the :520 line is evidence of a BUS-LEVEL
+non-DONE completion (NACK or timeout), not of a corrupted driver refusing to
+run — which makes the §9.4 convergence question "what does a bus-level
+failure at t=124.0 s mean about the CPU0 wedge", not "what corrupted the
+driver".
+
+**The starvation window's opening (back-computation).** Stage-1 fired at
+t=124.0 s ⇒ IDLE0's last successful feed was ≤ t≈114.0 s. By the §9.1
+brackets, t≈114 s falls INSIDE or AT THE IMMEDIATE END of the window-service
+stretch (:378-:505 ≈ t≈94-119 s) — the wedge matured during sustained service
+or in its first lull second, and the lull's ≈10 s of visibly-healthy CPU1
+activity (:505-:519) ran on top of an already-starving CPU0. The lull did not
+form the wedge; it is where the wedge's 10 s fuse happened to burn out. (The
+±few-seconds honesty bound: per-pass cost varies 0.2-1.3 s across the service
+stretch, so the bracket is not finer than that.)
+
+### 9.3 CRASH-CONTEXT DETERMINISM (§8.6 question 1)
+
+**The three expressions against the shared constants** (§7.1's constraint
+triple + the discriminator readings):
+
+| Constant | S7 crash 1 | S7 crash 2 | S8 | S9 |
+| --- | --- | --- | --- | --- |
+| Reset class | INT_WDT CPU1 panic (300 ms class) + canary | rst:0x7 silent | rst:0x7 silent | rst:0x7 silent |
+| PC sample | tick INCREMENT phase — `spinlock_acquire` CAS spin (§1.4) | ROM 0x40055xxx (unresolvable, §1.5) | `tick_hook` int_wdt.c:111 (hook phase) | `esp_vApplicationTickHook` freertos_hooks.c:34 (dispatch loop — one frame ABOVE S8) |
+| Project frames | zero | zero | zero | zero |
+| loopTask | healthy | healthy | healthy (log to :1227) | **healthy — B2 [LOOP] ZERO fires, Max 1277 ms (:514), loop cycling to :519** |
+| [MEM] | n/a (pre-instrument) | n/a | healthy (:611/:1175) | healthy (:372/:511) |
+| Phase at crash | first-post-boot push | first-post-boot push (post-reboot) | mid-service, chunk 1/14 of the 7th re-armed window | **inter-window lull**, ~5 s after a cleanly completed first window |
+| Corruption markers | UART ring + I2C FSM + canary trio (:299/:301/:313) | none visible | 1 mojibake line ~1070 lines pre-reset (§7.4); 2 non-adjacent recovered i2cWrite | **1 mojibake ON the crash-adjacent line (:520); 1 i2cWrite adjacent, never recovered** |
+
+**Hypothesis table** (each row: statement, predicted 01-31 discriminator
+signature, verdict):
+
+| Hypothesis | Statement | Predicted 01-31 signature | Verdict |
+| --- | --- | --- | --- |
+| **H-lull** — a lull-phase starver (a Wire-0/GPS/NVS lull activity starves IDLE0) | some activity that runs chiefly in TX-light phases blocks CPU0 | crashes correlate with lulls; the [I2C] instrument (§9.6) would show failure storms in lulls; [IDLE0] freezes only in lulls | **REJECTED as the family mechanism.** §9.2 eliminates every lull candidate by the same arithmetic that killed the service set (§7.3) — nothing project-code in a lull can touch CPU0's IDLE0 or interrupt path. H-lull survives only as a description of WHERE fuses burn out, not WHAT lights them |
+| **H-service** — a service-phase starver (TX-heavy sustained service starves IDLE0) | some activity that runs only during window service blocks CPU0; crashes require sustained service | crashes correlate with sustained service; lull-phase sessions never reset; [IDLE0] freezes only mid-service | **WEAKENED but not zero.** S9 breaks "sustained service" as the NECESSARY context (the reset landed in a lull) — but §9.2's back-computation shows the starvation window OPENED at the service→lull transition (≤ t≈114 s), and S8 died mid-service. Service is implicated in the fault's MATURATION in 2/3 expressions, but is not the mechanism's boundary condition |
+| **H-phase-independent** — an intermittent kernel/interrupt-delivery fault on CPU0 that matures (accumulates or fires stochastically) REGARDLESS of which project phase executes | the starver is below project code; once matured, ticks keep running (IWDT fed — the hook precedes the increment in the tick ISR, §7.1), IDLE0 never schedules again, the TG0 stage-0 INT path is dead, and the 10 s stage-1 reset lands wherever the maturation deadline falls — lull (S9) or service (S8) | resets at ANY phase once [IDLE0] freezes; the PC always samples the tick-ISR chain; zero project frames; [LOOP]/[MEM] healthy; terminal-phase I2C/mojibake markers appear only in SOME expressions (S7 loud trio, S8 near-clean, S9 adjacent pair) — co-effects of the terminal phase, not of the triggering phase | **BEST FIT — retained.** The only hypothesis consistent with ALL THREE expressions + §7.1's triple + §7.4's one-family verdict. The IDLE0-starvation-on-CPU0 family remains the best fit; what S9 adds is that the family's clock is FAULT MATURATION, not executing phase |
+
+Reconciliation with prior verdicts: §7.4's ONE-mechanism-family verdict STANDS
+with its strongest confirmation yet (three PC samples, one chain — §8.5, now
+including the dispatcher frame); §6.5's "sustained FULL-window service" axis is
+AMENDED: sustained service was the common observation of sessions 7-8, not the
+mechanism. The honest residual: what matures, and what event advances it, remain
+unobserved (§9.5's limit).
+
+### 9.4 THE CONVERGENCE VERDICT (§8.6 question 2) + the proximity question (question 3)
+
+**Question 2 — what does a Wire-0 INVALID_STATE, on a line whose own bytes are
+corrupt, immediately before a TWDT reset imply?** Readings ranked:
+
+**(b) — kernel-contention wedge, INVALID_STATE as the wedge's task-level
+observable: RANKED #1.** The claim: CPU0's wedge (whatever its inner structure)
+degrades the KERNEL-MEDIATED completion path of a CPU1 transaction enough that
+the transaction's 50 ms event wait expires non-DONE. The concrete, source-cited
+linkage: the I2C transaction's completion event is delivered by
+`xQueueSendFromISR` from the CPU1 I2C ISR (i2c_master.c:807-809) into the queue
+loopTask blocks on (:588) — and FreeRTOS queue operations take the kernel
+(portMUX) lock shared across cores; session 7 OBSERVED CPU0's own tick ISR
+spinning in `spinlock_acquire` on exactly that lock class (§1.4). A CPU0 side
+that holds/spins/misbehaves on the kernel lock makes CPU1's queue operations
+stretch; the transaction ends TIMEOUT-status → INVALID_STATE (:726-728); and
+the same terminal degradation touches the UART TX path (the mojibake). Evidence
+FOR: the direct adjacency (:520 → :523 with only the ROM banner between); the
+own-line mojibake (two corrupted-subsystem markers firing in the SAME second);
+no successful read after (the reset intervened); the already-open starvation
+window underneath an outwardly-healthy lull (§9.2 back-computation); and the
+session-7 precedent of the kernel lock being the observed wedge site. Evidence
+AGAINST (recorded, not explained away): the log RAN to :520 — dozens of
+kernel-mediated operations (Serial prints, delay() expiries, the completed E32
+handshake at :518) succeeded in the terminal window, so the contention must be
+intermittent/marginal, not an absolute lock hold; and a plain bus-level NACK
+(slave-side) producing the same line cannot be excluded from the log alone —
+because the driver's INVALID_STATE hides WHICH non-DONE status it was
+(ACK_ERROR vs TIMEOUT — §9.2). That hidden discriminator is exactly what the
+round's [I2C] instrument (§9.6) exposes.
+
+**(a) — driver-state corruption as co-effect: RANKED #2, weakened by this
+round's source read.** §8.6's phrasing assumed the driver HAS a state that can
+be corrupted into refusing transactions. The deployed stack has no such FSM
+state (§9.2): INVALID_STATE is a completion status, not a refusal — so reading
+(a) must shrink to "the corruption landed on the bus handle/status atom or the
+transaction buffers" — possible, but unfalsifiable as stated, and it predicts
+no specific instrument signature beyond (b)'s. Session-7's precedent (three
+subsystems corrupted at once) keeps it alive; it no longer needs the I2C error
+as its flagship, because the flagship error now has a better-explained reading.
+
+**(c) — coincidence (one noise-class NACK that happened to land last): RANKED
+#3 — the weakest, as §8.6 itself anticipated.** FOR: sessions 7/8 produced
+recovered i2cWrite noise far from resets (2 occurrences in S8, both
+read-followed, §6.4). AGAINST: the exact adjacency + own-line mojibake +
+no-successful-read-after + this being the FIRST session where the error landed
+adjacent — three facts §8.6 ordered carried as discriminating evidence, and
+this round carries them still. Coincidence requires the one noise event of the
+session to choose the one second that contains the reset.
+
+What each reading predicts for the round-#3 instruments: (b) — the [I2C] line
+at the failure shows a TIMEOUT-class probe result and/or the [IDLE0] counter
+frozen while [LOOP] stays silent (CPU0 dead, CPU1 alive, bus healthy until the
+kernel path degrades); (a) — anomalous [I2C] values inconsistent with any
+single bus event, or persistent INVALID_STATE across consecutive transactions;
+(c) — a clean ACK-class [I2C] result with [IDLE0] healthy to the reset
+(would also force a re-read of the adjacency).
+
+**Question 3 — why the corruption signature moved adjacent (S8's single
+mojibake ~1070 lines pre-reset vs S9's ON the fatal line).** The
+terminal-phase-degradation reading: the wedge's final window corrupts
+in-flight UART TX bytes (each session shows exactly ONE mojibake line); WHERE
+that one corrupted print falls relative to the reset is print-timing luck — S8's
+corrupted print was an early transmit, S9's was the terminal error print
+itself. The coincidence reading cannot be excluded at one sample per session,
+and the honest bound is that bound: **n=1 per session is not a trend**; the
+next session's mojibake count/position (if any) is the only data that can
+promote either reading. No instrument is added for this question specifically —
+the [IDLE0] instrument gives the terminal phase a 1 s-resolution clock
+(§9.6), which retro-sharpens exactly this timing question at the next
+occurrence.
+
+### 9.5 RANKED ROOT CAUSE (with the honest limit)
+
+**RANKED #1 (family unchanged, boundary condition amended): CPU0
+scheduler/interrupt-delivery stall — kernel level, below project-code
+visibility — whose MATURATION TIME, not the executing project phase, sets the
+crash time. The stall is the same family all three expressions sampled in the
+tick-ISR chain; session 9 adds that it matures across (or independent of)
+phase, and that its terminal phase has a task-level observable signature
+(b) — kernel-contention degradation of CPU1 completion paths (§9.4 reading
+(b)).**
+
+- Evidence FOR: §9.3's table (every shared constant holds across all three
+  expressions); §9.2's negative result (the lull set joins the service set in
+  total elimination — the starver is below project code in BOTH phases); the
+  t≈114 s back-computation (the wedge matured at the service→lull transition
+  while the visible phase was healthy); §8.5's three-PC one-chain record; the
+  §9.4 (b) linkage giving the family its first task-level observable.
+- Evidence AGAINST / THE HONEST LIMIT (the 01-25 §3 convention, invoked
+  explicitly for the third consecutive round): the stall's INNER STRUCTURE
+  remains unobserved — which interrupt path dies first, whether the kernel
+  lock is held/spun/corrupted, what event advances the maturation. **No
+  mechanism site in project code is named. This round's honest result is
+  again elimination + blast radius + determinism-shape — elimination-only.**
+  Per the honesty guard (two consecutive lever fixes bench-disconfirmed: the
+  01-25 warm-up at session 8, the 01-28 Lever A at session 9) and the plan's
+  own prohibition on a third speculative lever, **an elimination-only audit
+  routes Task 2 to instrument-only (option b)** — no lever is named by this
+  evidence, and inventing one would be the exact masking failure the guard
+  exists to prevent.
+- Eliminated across the rounds of this doc, cumulative: first-use PSRAM (§6.3),
+  heap/stack exhaustion ([MEM], three sessions), unspaced bursts (S8/S9 ran
+  spaced), sustained-service as boundary condition (§9.3), every
+  project-code starver in the service set (§7.3) AND the lull set (§9.2).
+
+### 9.6 DISCRIMINATOR MENU DISPOSITION + NAMED INSTRUMENTS (Task 2's evidence record)
+
+Menu disposition (§8.6's three candidates, each verified implementable against
+the deployed framework headers this round):
+
+1. **CPU0 idle-observability — SHIP (the round's primary instrument).**
+   `esp_register_freertos_idle_hook_for_cpu(cb, 0)` (public header
+   `esp_system/include/esp_freertos_hooks.h:44`; the dispatch loop verified at
+   `esp_system/freertos_hooks.c:41-59` — the callback runs in IDLE0's context,
+   return-true = once per tick; the hook contract forbids blocking — the
+   callback is ONE counter increment on a volatile static). Sampled every 1 s
+   from the loop's existing 1 Hz block (src/main_balloon.cpp:302-333 region):
+   delta 0 ⇒ IDLE0 ran zero ticks in that second ⇒ one latched line
+   `[IDLE0] frozen ...` (the reannounceHoldLogged latch convention: one line
+   per episode, re-armed by a healthy sample). This converts §7.1's
+   "IDLE0 starvation visible only via the 10 s reset" into a 1 s-resolution
+   observable that fires ≈9 s BEFORE a stage-1 reset — and pins §9.3's
+   hypothesis table to data (H-phase-independent predicts [IDLE0] freezing in
+   ANY phase; H-service/H-lull predict phase-correlated freezing).
+2. **I2C-bus health at the Wire-0 failure site — SHIP in adapted form
+   (bounded).** IDF 5.5.4 exposes NO bus error-flags accessor
+   (`i2c_master_bus_get_error_flags` does not exist in this
+   `driver/i2c_master.h`; verified by grep) — so the "driver FSM state at
+   failure" of the §8.6 menu is replaced by the honest available observable: a
+   bounded `i2c_master_probe(bus, addr, timeout)` (i2c_master.h:253) against
+   the HAL-exported bus handle (`i2cBusHandle(0)`, public
+   `cores/esp32/esp32-hal-i2c.h:44`) on the BMP280-invalid transition, latched
+   one line per episode with poll/fail counters: `[I2C] ... probe 0x76 -> ...`
+   (G-01-10). The probe's verdict discriminates §9.4's readings at the next
+   occurrence: ACK-class (device NACKed — bus alive) vs TIMEOUT-class (bus
+   wedged) vs probe-OK (transient). Bounded: one probe transaction ≈ ≤50 ms,
+   failure-path only, latch-guarded.
+3. **TWDT stage-0 subscription check — SHIP (boot-time one-shot).**
+   `esp_task_wdt_status(xTaskGetIdleTaskHandle())` (public
+   `esp_system/include/esp_task_wdt.h:170`; `INCLUDE_xTaskGetIdleTaskHandle = 1`
+   verified in the deployed prebuilt FreeRTOSConfig.h:215) beside B1 in
+   ImageTxManager::begin — expected ESP_OK per sdkconfig:2175-2179
+   (IDLE0 subscribed, stage-0 INT @5 s PANIC=y). This turns §7.1's
+   inferred-from-silence stage-0 death into a positive boot-time fact: once
+   stage-0 is proven armed, a future SILENT rst:0x7 with no
+   `Tasks currently running` print is affirmative evidence the stage-0
+   interrupt path died — not a config assumption.
+
+Named log lines 01-31 greps (the [MEM]/B1/B2 naming convention, each with the
+G-01-10 citation and removal condition in-source):
+- `[IDLE0]` — latched freeze line (1 Hz sample; episode-latched) — G-01-10;
+  removal: with [MEM]/B1/B2 after G-01-10 closes on bench evidence.
+- `[I2C]` — latched failure line (probe verdict + counters) — G-01-10; removal:
+  same clause.
+- `[TWDT]` — boot-time one-shot subscription line — G-01-10; removal: same
+  clause.
+- Retained unchanged: `[MEM]`, `[BOOT]` (B1), `[LOOP]` (B2), the round-#10
+  discriminator lines, the D2 receipt-ever flag.
+
+**The lever: NONE. §9 names no mechanism site** (§9.5's elimination-only
+limit) — **the round ships instrumentation only (option b).** Untouched by
+explicit disposition: any pacing/quiet-gate/D-05/D-07 surface (protected; and
+§9.2 shows the lull's radio activity completed cleanly), any WDT-config lever
+(the §7.6 rejection stands; stage-0's death is now an instrumented observable,
+not something to re-time), the wire format (unchanged; the harness stays the
+tripwire).
+
+### FIX SHAPE SELECTED (round #13 Task 2 checkpoint record)
+
+Checkpoint Task 2 (fix-shape selection, gate `blocking`) auto-resolved under
+`auto_advance: true` (config.json) per the 01-23/01-25/01-26/01-28 convention —
+selection recorded as PENDING end-of-phase operator confirmation (joins the
+FOUR existing pending confirmations). Selected: **option (b) — instrument-only.**
+The evidence that selected it: §9.5's honest limit is elimination-only for the
+THIRD consecutive round (no §9-named mechanism site exists, which option (a)
+requires by this checkpoint's own acceptance criteria), and the plan's honesty
+guard is explicit that two consecutive bench-disconfirmed levers make a third
+speculative lever evidence-DISHONEST — while §9.6 ships three verified,
+bounded, latch-guarded instruments ([IDLE0] 1 s-resolution CPU0 liveness; [I2C]
+probe-verdict at the failure site; [TWDT] stage-0 boot confirmation) that make
+01-31's bench session capable of CLASSIFYING the starver rather than guessing
+at it. Concretely: the three instruments above, each with its named log line,
+G-01-10 citation, and removal condition; NO lever, NO pacing/quiet-gate/
+wire-format/WDT-config change (the rejected candidates of §7.6 and §9.6 stand);
+Lever A, B1/B2, [MEM], and the round-#10 discriminator lines untouched.
