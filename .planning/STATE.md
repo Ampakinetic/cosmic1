@@ -1,19 +1,19 @@
 ---
 gsd_state_version: 1.0
 milestone: v1.0
-current_plan: 4
+current_plan: 2
 status: executing
-stopped_at: "Completed 01-27-PLAN.md (bench session #8 FAILED at image 38 FULL TX: D1 re-opened — 01-25 fix disconfirmed, new WDT-starvation axis; D2/G-01-11 closed; debug round #2 next)"
-last_updated: "2026-08-27T23:18:40.333Z"
-state_head: 0045b56aa20d9227561692441e492fc9b1d0d49d
+stopped_at: "Completed 01-28-PLAN.md (D1 debug round #2: audit + fix + discriminators; G-01-10/WINDOWS 15 stay open for 01-29 bench)"
+last_updated: "2026-08-28T00:12:58.762Z"
+state_head: 6ca9a368f42faf234ba4d6a964b78b5276ea93e7
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 39
-  completed_plans: 36
+  completed_plans: 37
 milestone_name: milestone
-current_phase_name: Command Protocol & Control
 current_phase: 2
+current_phase_name: Command Protocol & Control
 ---
 
 # Project State
@@ -28,7 +28,7 @@ current_phase: 2
 
 ## Current Position
 
-**Current Plan:** 4
+**Current Plan:** 2
 **Total Plans in Phase:** 29
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -134,8 +134,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-27T22:24:54.064Z
-**Stopped at:** Completed 01-27-PLAN.md (bench session #8 FAILED at image 38 FULL TX: D1 re-opened — 01-25 fix disconfirmed, new WDT-starvation axis; D2/G-01-11 closed; debug round #2 next)
+**Last session:** 2026-08-28T00:12:58.346Z
+**Stopped at:** Completed 01-28-PLAN.md (D1 debug round #2: audit + fix + discriminators; G-01-10/WINDOWS 15 stay open for 01-29 bench)
 **Resume file:** None
 
 ## Performance Metrics
@@ -177,6 +177,7 @@ See: `.planning/PROJECT.md`
 | Phase 01 P25 | 1170 | 3 tasks | 4 files |
 | Phase 01 P26 | 546s | 3 tasks | 5 files |
 | Phase 01 P27 | ~3h across executor pre-flight + operator bench session #8 + continuation closeout | 2 tasks | 4 files |
+| Phase 01-28 P28 | ~46 min | 3 tasks | 9 files |
 
 ## Decisions
 
@@ -261,3 +262,6 @@ See: `.planning/PROJECT.md`
 - [Phase 2]: 01-26: review 7d96a98's three confirmed warnings routed (WINDOWS 17-19) and ALL FIXED per option-a auto-selected at the Task 2 gate=blocking checkpoint under auto_advance (01-23 convention) — ps_malloc fall-through keeps the thumbnail under PSRAM exhaustion, the camera health check warns only on a genuinely absent sensor handle (stageable at every 01-27 healthy boot), ackedAtLastPoll uint32 end-to-end; builds 2/2 + harness exit 0; WR-01/WR-03 unstageable triggers recorded by name (entries 8-14 convention)
 - [Phase 2]: 01-26: routing-before-disposition — confirmed findings enter the ledger open-first regardless of the checkpoint outcome, so the unrouted-findings gap's minimum bar never depends on the disposition decision; end-of-phase operator confirmations pending: 01-23 fix-all (entries 10-14) + this round's option-a (entries 17-19)
 - [Phase 2]: 01-25 PSRAM warm-up disconfirmed as the D1 fix — crash recurred at session 8 with healthy [MEM] values (enqueue :611, last sample :1175); new root-cause axis: task-watchdog starvation / loopTask-or-kernel block during SUSTAINED FULL window service (Saved PC 0x40376430 = esp-idf tick_hook vs ELF c53635e181); D2 closed clean at both boots — G-01-11/WINDOWS 16 resolved on the receipt-ever flag's boot-window evidence
+- [Phase 2]: D1 round #12: TG0WDT_SYS_RST pinned as the TASK watchdog stage-1 silent 10 s backstop; only IDLE0 feeds the TWDT in this build, so session 8 proves IDLE0 starved >=10 s on CPU0 while ticks stayed alive — the stall is below project-code visibility
+- [Phase 2]: Verdict: ONE mechanism family, two expressions — session-7's kernel-portMUX spin and session-8's tick_hook PC sample the same tick-ISR chain; all eight project-code candidates eliminated (flush = sole non-yielding stretch, no kernel lock, on CPU1)
+- [Phase 2]: Fix shape (a)+(b) auto-advanced per 01-23/01-25/01-26 convention: yielding bounded TX-drain (hazard removal, not a claimed cure) + [BOOT] reset-cause and [LOOP] slow-pass discriminators for 01-29; WINDOWS 15 / G-01-10 stay open pending hardware

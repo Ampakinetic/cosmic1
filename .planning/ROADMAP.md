@@ -45,7 +45,7 @@
 - Retry logic with timeout
 - Basic camera control web UI
 
-**Plans:** 27/27 plans executed through round #11 (01-27 bench session #8 FAILED at image 38's FULL TX — D1 RECURRED and re-opened on the new task-watchdog-starvation axis, 01-25 warm-up disconfirmed as sufficient; D2/G-01-11 closed; G-01-7 unjudgeable seventh round; SC-3/WR-03/CIF-as-specified/QVGA clauses riding). Gap-closure round #12 planned 2026-08-28 as 01-28..01-29: D1 debug round #2 (WDT-starvation audit of the serviceWindowChunk -> E32 transmit path per debug doc §6.5, dispositioned fix, discriminators) then bench re-verification session #9 (both D1 crash classes + G-01-7 series A + every riding clause). Then the security gate
+**Plans:** 27/29 plans executed through round #11 (01-27 bench session #8 FAILED at image 38's FULL TX — D1 RECURRED and re-opened on the new task-watchdog-starvation axis, 01-25 warm-up disconfirmed as sufficient; D2/G-01-11 closed; G-01-7 unjudgeable seventh round; SC-3/WR-03/CIF-as-specified/QVGA clauses riding). Gap-closure round #12 planned 2026-08-28 as 01-28..01-29: D1 debug round #2 (WDT-starvation audit of the serviceWindowChunk -> E32 transmit path per debug doc §6.5, dispositioned fix, discriminators) then bench re-verification session #9 (both D1 crash classes + G-01-7 series A + every riding clause). Then the security gate
 
 Plans:
 **Wave 1**
@@ -134,7 +134,7 @@ Plans:
 
 **Wave 20** *(gap-closure round #12, 2026-08-28; round-local wave 1 — the re-opened D1 blocker first, before any bench re-run)*
 
-- [ ] 01-28-PLAN.md — D1 debug round #2 (BLOCKER, G-01-10/WINDOWS 15 re-opened at session 8): WDT-starvation audit of the serviceWindowChunk -> E32 transmit path per debug doc §6.5 — watchdog topology of the deployed build (TG0 period + silent-vs-panic behavior), post-chunk crash-window reconstruction, candidate-block arithmetic (UART flush ~226 ms at 9600, AUX waits, OLED I2C frame, sensor reads, beacon, PSRAM slicing), one-mechanism-or-two vs session-7's spinlock wedge, ranked root cause + disposition-checkpoint fix + named bench discriminators; builds + harness, no bench claims (CTRL-01, CTRL-06, PRI-02, IMG-03)
+- [x] 01-28-PLAN.md — D1 debug round #2 (BLOCKER, G-01-10/WINDOWS 15 re-opened at session 8): WDT-starvation audit of the serviceWindowChunk -> E32 transmit path per debug doc §6.5 — watchdog topology of the deployed build (TG0 period + silent-vs-panic behavior), post-chunk crash-window reconstruction, candidate-block arithmetic (UART flush ~226 ms at 9600, AUX waits, OLED I2C frame, sensor reads, beacon, PSRAM slicing), one-mechanism-or-two vs session-7's spinlock wedge, ranked root cause + disposition-checkpoint fix + named bench discriminators; builds + harness, no bench claims (CTRL-01, CTRL-06, PRI-02, IMG-03)
 
 **Wave 21** *(blocked on Wave 20 — bench re-verification trailing wave)*
 
