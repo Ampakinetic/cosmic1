@@ -229,6 +229,12 @@ static void IRAM_ATTR tickStampHook(void) {
     // If at the next boot a core's tick stamp froze while its ccount stamp
     // ADVANCED, that core was alive and running with the systimer DEAD —
     // the stall named even for the silent-reset deaths that leave no dump.
+    // WRAP NOTE (session-19 lesson): CCOUNT is 32-bit and wraps every
+    // 2^32/240 MHz ≈ 17.9 s, so this value reads MODULO ~17.9 s — a phase,
+    // never a boot age (session-19's 16.7 s "ages" were wrap phases). The
+    // alive-vs-frozen comparison still works within a wrap window; compare
+    // the tick stamp and ccount stamp of the SAME core, never absolute
+    // ages across clocks.
     s_rtcTickCcount[core] = (uint32_t)(esp_cpu_get_cycle_count() / 240000u);
 }
 
@@ -397,7 +403,7 @@ void setup() {
     // the CALLING core only, and setup() runs on CPU1: every core0 stamp
     // read t=0 all session).
     if (s_rtcTickMagic == RTC_TICKSTAMP_MAGIC) {
-        Serial0.printf("[TICKSTAMP] prev boot: core0 tick t=%lu ms (ccount %lu ms), core1 tick t=%lu ms (ccount %lu ms) (G-01-10)\n",
+        Serial0.printf("[TICKSTAMP] prev boot: core0 tick t=%lu ms (ccount %lu ms, wraps ~17.9 s), core1 tick t=%lu ms (ccount %lu ms) (G-01-10)\n",
                        static_cast<unsigned long>(s_rtcTickStamp[0]),
                        static_cast<unsigned long>(s_rtcTickCcount[0]),
                        static_cast<unsigned long>(s_rtcTickStamp[1]),
