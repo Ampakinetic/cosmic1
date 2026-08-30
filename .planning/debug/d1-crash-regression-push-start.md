@@ -2322,3 +2322,105 @@ the stamp freezes at the last COMPLETED hook dispatch — a core wedging
 at the tick handler's post-hook kernel-lock take still leaves a fresh
 stamp, so the ordering data survives. First genuine readouts owed at the
 next bench session's first crash. (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 20 — SESSION-18 (balloon15 bench, 2026-08-30): THE MECHANISM IS NAMED — all seven dumps die in the SYSTIMER read's unbounded valid-bit spin, and the spin-on-halt configuration is ARMED BY DEFAULT
+
+### 20.1 Provenance + the session's own finding
+
+`balloon15.log` (4,144 lines, 8 boots: 1 POWERON + 1 silent rst:0x7 + SEVEN
+rst:0xc int-wdt panics with dual-core dumps) / `base15.log` (1,262 lines),
+2026-08-30, build `3ad7be9` (the [TICKSTAMP] v1). Recorded honestly FIRST:
+v1 had a registration gap — `esp_register_freertos_tick_hook` registers on
+the CALLING core only (esp_freertos_hooks.h:77, the comment the design
+read and misapplied), setup() runs on CPU1, so core0's stamp read t=0 in
+every boot (balloon15.log:944/:1228/:1688/:2191/:2625/:2946). The gap
+itself produced the session's discovery: the hook (registered on CPU1)
+calls millis() ON EVERY CPU1 TICK, and millis() reads the systimer —
+**the probe converted the silent TG0WDT family into SEVEN int-wdt panics
+with dumps** (the one silent rst:0x7 = the wedge caught on a CPU0-side
+read path the hook could not see). Session totals: boot lifetimes 25–262 s
+(boot 1: 4.4 min); [STAMP] gaps −2/−80/−1443/−509/−60/−663 ms — the
+whole-CPU freeze reading continues.
+
+### 20.2 THE DECODE: every dump dies in the same three frames
+
+All seven CPU1 last-tick chains are frame-for-frame identical (addr2line
+against the deployed ELF):
+
+```
+STUCK: systimer_ll_counter_snapshot / systimer_ll_is_counter_value_valid
+       (systimer_hal.h:90/:95 inlined into systimer_hal.c:50-51)
+   ← esp_timer_impl_get_time (esp_timer_impl_systimer.c:72)
+   ← millis (esp32-hal-misc.c:209)
+   ← tickStampHook (main_balloon.cpp:216)
+   ← esp_vApplicationTickHook (freertos_hooks.c:36)
+   ← xPortSysTickHandler (port_systick.c:199) ← SysTickIsrHandler
+```
+
+The read is `systimer_ll_counter_snapshot()` (set the unit's UPDATE bit)
+followed by an **UNBOUNDED** `while (!timer_unit_value_valid);`
+(systimer_hal.c:51, verified in the pinned IDF 5.5.4 source) — if the
+systimer unit stops acknowledging the snapshot, the read spins forever AT
+THE CALLER'S INTERRUPT LEVEL. THE WEDGE IS THE SYSTIMER READ ITSELF.
+
+### 20.3 Why the counter would stop acknowledging: the stall-on-halt configuration
+
+`esp_timer_impl_early_init` (esp_timer_impl_systimer.c:176-179) arms, BY
+DEFAULT, on every boot:
+
+```c
+bool can_stall = (cpuid < portNUM_PROCESSORS);   // TRUE for BOTH CPUs
+systimer_hal_counter_can_stall_by_cpu(..., cpuid, can_stall);
+```
+
+the SYSTIMER counter **stalls whenever EITHER CPU is debug-halted**. A
+spurious halt assertion therefore stops the counter, the UPDATE
+acknowledgment never comes, and the first time-read after that spins
+unbounded. Candidate trigger #1 (recorded, not confirmed): the USB-SJ
+debug module on the bench USB — the classic spurious-halt source, and
+consistent with the console corruption observed at three deaths
+(§13.5/§16.1/§17.1). Alternatives: counter/clock hardware stall; an S3
+systimer erratum. Ruled OUT this session: WiFi modem sleep (zero [NET]
+lines whole-log — the balloon never brings WiFi up).
+
+### 20.4 The unification (the campaign's expressions, one mechanism)
+
+- **Silent TG0WDT deaths**: the wedge caught by a task/idle/tick time-read
+  OUTSIDE ISR-panic reach — IDLE0 dies INSIDE its own millis() (the idle
+  hook reads millis()!), the TWDT is never fed, stage-0's print itself
+  cannot run through the spinning context, stage-1 resets silently. The
+  Saved-PC censuses (§12.4/§13.5) are exactly the system's hot time-read
+  paths.
+- **Int-wdt panics with dumps** (balloon8/14/15): the wedge caught at
+  tick-ISR level on the probed core.
+- **[STAMP] gaps ≈ 0** (sessions 15-18): every core's NEXT time-read
+  wedges within milliseconds of the stall — a simultaneous-looking freeze
+  from individual call sites.
+- HONEST LIMIT: boot 4's micro-timeline (loopTask frozen at 92.6 s, IDLE0
+  at 93.1 s, yet CPU1's ticks ran to 108.1 s — a 15 s window with the
+  tasks dead and the counter alive) shows the per-boot ordering VARIES —
+  transient stall-and-recover, or stacked events. The dumps' common fact
+  stands on seven identical chains; the micro-ordering is not settled.
+
+### 20.5 [TICKSTAMP] v2 (committed beside this record)
+
+(1) Registration FIXED: `esp_register_freertos_tick_hook_for_cpu` on BOTH
+cores — every stall-side wedge should now produce a DUMP instead of a
+silent reset. (2) Per-core CCOUNT stamps added (CPU cycle counter — an
+independent clock, no systimer involvement): at the next boot, a core
+whose tick stamp froze while its ccount stamp ADVANCED was **alive and
+running with the systimer dead** — the stall named even for silent
+deaths. Readout: `[TICKSTAMP] prev boot: core0 tick t=%lu ms (ccount
+%lu ms), core1 tick t=%lu ms (ccount %lu ms)`.
+
+### 20.6 Routing
+
+(1) v2 readouts + (expected) dumps at the next session — the first
+dual-instrument reading of a stall. (2) The stall-trigger A/B: run a bench
+session with the USB-SJ port physically DISCONNECTED (console stays on
+the UART bridge) — if the deaths stop, the spurious-halt theory is
+confirmed and the mitigation is electrical (cable/ferrite/descent
+configuration), not software. (3) S3 systimer erratum search (network —
+the operator's call). D1 is no longer "open" in the old sense: the wedge
+site is dump-proven; what remains is the TRIGGER. (01-UAT.md G-01-10,
+WINDOWS 15.)
