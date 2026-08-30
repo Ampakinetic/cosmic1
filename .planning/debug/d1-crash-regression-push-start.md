@@ -3201,3 +3201,82 @@ Bench note: flashing the new table REQUIRES a full reflash of both boards
 (partition layout change; `pio run -t erase` then upload, or upload with
 `--erase-all` per esptool defaults on partition change — the table mismatch
 forces the rewrite). (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 32 — SESSION-29 (balloon26 bench, 2026-08-31): §31.4's SECOND branch taken — the write dies on FRESH silicon, but its DATA LANDS — the death is inside the flash op's completion tail; the card-out state is the surviving discriminator and the SDMMC arm is retired for the card-in test
+
+### 32.1 The verdict
+
+`balloon26.log` (418+ lines; the capture starts mid-boot — monitor attached
+to an already-running session at [BCN] seq=34) / `base26.log`, 2026-08-31
+11:23, round-#18 image (`a0d891d`: relocated 64 KB NVS + [CAPWIN]
+START/done pair). The relocation provably TOOK EFFECT: the first visible
+capture allocated **ID 4** (not 109+ — the old partition's sequence), i.e.
+captures 1-3 and their writes ran on the virgin 0xF00000 partition this
+session. The readings:
+
+- **BOTH deaths are byte-identical at the START line**: `…chunk(image N
+  kind 0, 1/23|2/22 …) sent` → BMP280 → `[CAPWIN] deferred id-commit
+  START` → ESP-ROM banner → `rst:0x8 TG1WDT_SYS_RST`. START flushed =
+  execution reached the write; done absent = the death is inside the flash
+  operation — §31.4's second branch, twice, deterministic.
+- **THE WRITE'S DATA LANDS**: boot 2 restored `next capture is ID 5` and
+  boot 3 `ID 6` — value 4 (written by the boot that died mid-write) was
+  READ BACK from flash after its crash; same for 5. The putUShort
+  COMPLETES its flash programming; the board dies in the operation's tail
+  (between programming and the done-line printf — the cache-restore /
+  interrupt-reenable / other-core-unstall window).
+- Honest insensitivity: whether the pre-visible captures' commits (IDs
+  1-3) died in prior boots or survived inside boot A (alive 170+ s at its
+  capture, [BCN] seq=34) cannot be distinguished — the ID sequence
+  persists either way (the data lands regardless). Recorded, not smoothed.
+- Zero GC claims remain: on a virgin partition the first writes APPEND
+  (no page-full condition, no GC erase) — **the GC-erase-specific theory
+  of §31.2 is DEAD as the necessary trigger. What survives is broader:
+  the NVS flash WRITE itself, anywhere, in the card-out state.**
+
+### 32.2 What the campaign already knows about card-out vs card-in (the discriminator)
+
+The surviving-write configuration ALREADY EXISTS in the campaign's own
+record: the SD era (balloon6-16, card IN, SDMMC claimed) ran capture-time
+NVS id-writes through minutes-long boots (§12-§19) — those boots' deaths
+were the TG0WDT family, NOT at the writes. Every write-death in this
+family (balloon18-23 at-capture, balloon25 deferred, balloon26 deferred-
+on-fresh-silicon) occurred with **the card OUT** (socket empty: floating
+JTAG-domain pins 39/38/40 per §22.2, SDMMC claim irrelevant — §25 tested
+both). The card's presence/claiming is the one board-level differential
+the campaign has never varied SINCE the writes started dying. The
+candidate mechanism shapes (recorded, not ranked): the floating MTCK/MTDI
+lines interacting with SPI1 flash operations (the flash controller's
+QIO pins and the GPIO matrix are separate, but the erase/program charge-
+pump and clock domains are shared die resources), or a board-level
+electrical path (§22.4's second-order note) that only loads when the
+socket is empty.
+
+### 32.3 The round (committed beside this record)
+
+`G01_SDMMC_BEGIN_DISABLED` RETIRED from the balloon env (removal comment
+in platformio.ini names the re-arm recipe): the next bench runs **card
+IN + SDMMC claimed** — the exact SD-era configuration in which NVS writes
+survived. Bench notes: (a) the archive card holds images up to the 100s —
+if captures are refused with `card full`, the named manual clear
+(`SDCLEAR CONFIRM`) or a fresh card applies; (b) boot-rescan resumes any
+undelivered rows (SD-era behavior — expected); (c) the [CAPWIN]
+START/done lines remain the readout.
+
+Pre-written readings:
+
+- **Deaths STOP across a multi-capture session with START→done pairs
+  landing ~1.5 s after every capture** → the card-out state is NAMED as
+  the write-death trigger; the permanent fix is board-level (rewire the
+  card off the JTAG-domain pins — §23.3 option 1 — or socket/pull-up
+  remediation); flight config = card in + rewired pins. G-01-10 then
+  closes with the §28.3 SD-era cross-check as its last thread.
+- **Deaths CONTINUE at the writes with the card in and claimed** → the
+  era's surviving-writes memory is confounded (or a change since balloon16
+  matters); the §31.3 escape hatch (IWDT timeout surgery) + a flash-chip
+  diagnosis open, with the writes-none A/B (re-armed flag) as the same-
+  session baseline.
+- **A death NOT at a write** → record per the census discipline; the
+  SD-era TG0WDT family may simply have resumed with the card back.
+
+(01-UAT.md G-01-10, WINDOWS 15.)
