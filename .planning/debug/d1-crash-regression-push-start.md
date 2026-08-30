@@ -2806,3 +2806,47 @@ the next move (network). The XCLK/fb_location changes are flight-viable
 configurations in their own right: XCLK 10 MHz costs capture speed the
 balloon never needed; a DRAM fb costs PSRAM headroom it has. (01-UAT.md
 G-01-10, WINDOWS 15.)
+
+## 27 — SESSION-24 (balloon21 bench, 2026-08-30): the signal-domain reduction REFUTED too — XCLK 10 MHz + DRAM fb still dies at captures — and the audit finally names the variable every test left constant: CAMERA_GRAB_LATEST is a CONTINUOUS-capture mode
+
+### 27.1 The second refutation
+
+`balloon21.log` (634 lines, 4 boots: 1 POWERON + 3 `rst:0x8 TG1WDT`) /
+`base21.log` (28 lines), 2026-08-30, build `0bbf150`. The banner confirms
+`XCLK freq: 10000000 Hz` (the DRAM-fb DEBUG line is release-silent) —
+and three deaths, all `rst:0x8`, all at
+`Camera: Image captured, size: N bytes` (6770/3766/3766 B — the DRAM-fb
+captures themselves work; the wedge still lands post-return). **The
+signal-domain reduction is refuted: XCLK 10 MHz + DRAM framebuffer dies
+exactly like 20 MHz + PSRAM.** Four capture-pipeline configurations have
+now produced byte-identical deaths (fb2/PSRAM/20MHz, fb1/PSRAM/20MHz,
+fb1/PSRAM/10MHz, fb1/DRAM/10MHz — across SDMMC claimed and unclaimed,
+card in and out).
+
+### 27.2 The audit names the constant: CAMERA_GRAB_LATEST never stopped capturing
+
+Every prior lever varied configuration AROUND a continuously-running
+DMA. `CAMERA_GRAB_LATEST` (esp32-camera semantics) means the driver
+CAPTURES CONTINUOUSLY, replacing the buffer in a loop — **with
+fb_count 1 included**, which is why the session-22 fb1 lever was a
+no-op on the DMA duty cycle and "refuted" nothing: the exposure never
+changed. The XCLK and fb_location levers varied the clock and
+destination OF a transfer that never stopped. THE ONE VARIABLE NONE OF
+THE TESTS TOUCHED IS THE DMA ITSELF.
+
+### 27.3 The lever (committed beside this record)
+
+`grab_mode = CAMERA_GRAB_WHEN_EMPTY`: the driver captures ONLY when
+esp_camera_fb_get() is pending — the LCD_CAM DMA idles between
+captures. The balloon's interval cadence never wanted a standing DMA;
+all four prior reductions (fb1, DRAM fb, XCLK 10 MHz — kept, they are
+flight-viable configurations) stay in place around it. Pre-written
+readings: deaths STOP → the continuous LCD_CAM DMA is confirmed as the
+trigger and the campaign's every death since balloon6 unifies under it
+(including the no-CAPTURE_NOW resume-push deaths — the continuous DMA
+runs from boot regardless of capture commands, which is how the 52-row
+pushes died with the camera "idle"); deaths CONTINUE with the DMA
+truly fetch-paced → the continuous-DMA family closes too and the
+suspect becomes the esp32-camera driver's S3 LCD_CAM path itself
+(version audit, then a pin-level/driver-patch investigation).
+(01-UAT.md G-01-10, WINDOWS 15.)

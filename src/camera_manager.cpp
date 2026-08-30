@@ -182,7 +182,19 @@ void CameraManager::configureCameraForBalloon() {
     // the balloon's interval cadence).
     cameraConfig.xclk_freq_hz = 10000000;
     cameraConfig.pixel_format = PIXFORMAT_JPEG;
-    cameraConfig.grab_mode = CAMERA_GRAB_LATEST;
+    // grab_mode WHEN_EMPTY, NOT LATEST (the D1 session-24 lever — the one
+    // variable every prior test left constant): CAMERA_GRAB_LATEST means
+    // the driver CAPTURES CONTINUOUSLY, replacing the buffer in a loop —
+    // with fb_count 1 included, so the session-22 fb1 change never
+    // altered the DMA duty cycle (which is why fb1 "refuted" nothing:
+    // the exposure was unchanged). GRAB_WHEN_EMPTY makes the driver
+    // capture ONLY when esp_camera_fb_get() is pending: the LCD_CAM DMA
+    // idles between captures — the balloon's interval cadence never
+    // wanted a standing DMA in the first place. Every prior lever
+    // (fb2/fb1, PSRAM/DRAM fb, 20/10 MHz XCLK, SDMMC claimed or not)
+    // varied configuration AROUND a continuously-running DMA; this one
+    // varies the DMA itself.
+    cameraConfig.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     
     // PSRAM configuration
     if (psramFound()) {
