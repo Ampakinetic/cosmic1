@@ -2491,3 +2491,59 @@ comment + the wrap note in the format string; the alive-vs-frozen
 comparison (tick stamp vs ccount stamp of the SAME core, within a wrap
 window) remains valid and is the v2 payoff still owed its first clean
 reading. (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 22 — OPERATOR FACT + PIN FINDING (post-session-19, 2026-08-30): nothing is connected to the USB-SJ port — and the SD card drives GPIO39 (MTCK) and GPIO40 (MTDI)
+
+### 22.1 The operator fact and its first consequence
+
+The operator confirmed NOTHING is plugged into the board's USB-SJ port
+(the console runs on the UART-bridge port per the 01-10 bench deviation).
+The §20.6 "USB-SJ disconnect A/B" is therefore already satisfied as an
+elimination in its cable form: a HOST-driven debug halt cannot occur —
+no host is on the USB-SJ path. The spurious-halt trigger candidate
+loses its host-attachment arm.
+
+### 22.2 The pin finding
+
+The SD store's transport pins (sd_store_balloon.h:54-56) are:
+
+- `SD_STORE_CLK_PIN = 39` — **GPIO39 = MTCK, the JTAG clock**
+- `SD_STORE_CMD_PIN = 38`
+- `SD_STORE_DATA_PIN = 40` — **GPIO40 = MTDI, JTAG data-in**
+
+The card's clock line toggles at SDMMC_FREQ_DEFAULT (20 MHz) on the
+JTAG-clock pin during every card access. On the ESP32-S3 the JTAG source
+defaults to the USB-SJ peripheral; the external pins serve JTAG only when
+the strapping pin is LOW at reset (or via eFuse). EVERY boot in the
+campaign reads `boot:0x2b` — the standard strapping value, GPIO0 high —
+so the external pins are (per the docs) plain GPIOs and the
+JTAG-TAP-latch reading of the SD-clock-on-MTCK fact DOWNGRADES to
+"possible but unverified" (residual arms: the live-but-hostless USB-SJ
+peripheral's documented interaction quirks with MTCK activity; board-level
+deviations from a stock DevKitC are unknown). What the fact DOES
+establish regardless of mechanism: **the SD-line class is the only
+board-level novelty that correlates with the crash era** — sessions 7-11
+(pre-SD-store) ended with the FIRST zero-crash session; the SD store
+landed; balloon6 onwards produced 10/1/9/6/9/4/9/3/6/9 silent-or-panic
+deaths. §12.1's "recorded, NOT read as causation" correlation now has a
+concrete board-level candidate underneath it.
+
+### 22.3 The decisive A/B (hardware-only, no code)
+
+Run one bench session with the SD CARD REMOVED (the firmware already owns
+this regime: mount failure → `SD card store unavailable - captures take
+the volatile fallback` → no SD IO at all; captures still flow via the
+volatile fallback and the delivery machinery). Deaths stop → the SD-line
+class is CONFIRMED as the trigger family (mechanism then narrowed by the
+JTAG/electrical split). Deaths continue → the SD lines are exonerated and
+the hunt moves to supply/XTAL integrity and the S3 systimer errata.
+Either branch is a campaign-level answer for one card removal.
+
+### 22.4 Open board questions (the operator's next answers gate the rest)
+
+(1) How is the board POWERED at the bench — PC USB through the bridge
+port, or an external supply? (The supply rail is stage-2's other
+candidate: the systimer is XTAL-derived, and a rail dip can stall it
+without halting the cores.) (2) Is this a stock DevKitC or custom wiring,
+and is anything else on GPIO39-42? (3) Confirm GPIO0's handling (button
+only, or wired?). (01-UAT.md G-01-10, WINDOWS 15.)
