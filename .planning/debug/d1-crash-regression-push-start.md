@@ -2539,11 +2539,30 @@ JTAG/electrical split). Deaths continue → the SD lines are exonerated and
 the hunt moves to supply/XTAL integrity and the S3 systimer errata.
 Either branch is a campaign-level answer for one card removal.
 
-### 22.4 Open board questions (the operator's next answers gate the rest)
+### 22.4 Board questions ANSWERED (2026-08-30, with the card-removal A/B launched)
 
-(1) How is the board POWERED at the bench — PC USB through the bridge
-port, or an external supply? (The supply rail is stage-2's other
-candidate: the systimer is XTAL-derived, and a rail dip can stall it
-without halting the cores.) (2) Is this a stock DevKitC or custom wiring,
-and is anything else on GPIO39-42? (3) Confirm GPIO0's handling (button
-only, or wired?). (01-UAT.md G-01-10, WINDOWS 15.)
+The operator answered all three gating questions:
+
+1. **Power**: bench power is PC USB through the bridge port — AND AN
+   EXTERNAL SUPPLY WAS ALREADY TRIED, WITH THE FAILURES CONTINUING. The
+   PC-rail-quality candidate is ELIMINATED as the primary trigger: the
+   deaths travel with the board+card across two independent supplies.
+   (Board-local electrical paths — e.g. the card's own draw on shared
+   local rails — remain technically possible but are now second-order.)
+2. **Board**: stock DevKitC — no custom wiring; GPIO39-42 carry ONLY the
+   SD card (CLK/CMD/DATA per §22.2). No other JTAG-domain users.
+3. **GPIO0**: button only — strapping normal, consistent with every
+   boot:0x2b; the external-JTAG mux stays unselected per the docs.
+
+The trigger candidate ladder after the eliminations: (1) the SD-line
+class (board-local: JTAG-domain residual, SDMMC interaction, or local
+electrical) — PRIME, the card-removal A/B is RUNNING as this is written;
+(2) an S3 systimer erratum independent of SD — predicts deaths continue
+card-less; (3) stage 1 (the task-context freeze that precedes the
+systimer break by 0.4–15.5 s) — untouched by all of the above and still
+the campaign's one genuinely open mechanism question. Interpretation
+guide for the card-less session: `SD card store unavailable - captures
+take the volatile fallback` at boot, NO SdStore rescan/persist/chunk
+lines, captures served from PSRAM buffers; the instruments ([STAMP],
+[TICKSTAMP] v2, gate, latch) all function unchanged. (01-UAT.md G-01-10,
+WINDOWS 15.)
