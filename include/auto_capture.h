@@ -91,6 +91,19 @@ private:
     uint32_t lastCaptureTime;
     uint16_t lastImageId;
 
+    // G-01-10 (session-27, balloon24 A/B verdict): the NVS id-commit is
+    // DEFERRED out of the capture window — allocateImageId() hands out the
+    // RAM ID immediately and records a pending persist; process() writes it
+    // to NVS once the capture window is safely behind the boot (the
+    // WHEN_EMPTY capture refill has long completed by then). RAM stays the
+    // authority for the handed-out ID (the overwrite bug stays fixed); a
+    // crash between allocation and the deferred write costs at most the
+    // last ID's persistence — the exact fail-open trade the 01-11 NVS layer
+    // already accepts.
+    bool idPersistPending;
+    uint32_t idPersistReqMs;
+    void persistImageIdIfDue();
+
     // Event-trigger state (D-25..D-28) — baselines track independently of
     // the ImageTx telemetry beacon's clock
     AutoCaptureEventConfig eventConfig;

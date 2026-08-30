@@ -3019,3 +3019,82 @@ Pre-written readings (one session answers):
 The SD-era honest remainder (capture-coverage cross-check of balloon11/13)
 is unchanged; the SDMMC arm stays on until G-01-10 closes. (01-UAT.md
 G-01-10, WINDOWS 15.)
+
+## 30 — SESSION-27 (balloon24 bench, 2026-08-31): THE [CAPWIN] A/B VERDICT — deaths STOP — the NVS flash write in the capture window is NAMED — and the fix lands: the id-commit is DEFERRED out of the capture window (session-27, code committed beside this record)
+
+### 30.1 The verdict
+
+`balloon24.log` (860 lines, ONE boot) / `base24.log` (240 lines), 2026-08-31
+10:14, the round-#16 image (`9e063f5`: [CAPWIN] bisector + the
+G01_CAPWIN_NVS_ID_DISABLED arm), card out, SDMMC arm still on. Census:
+**rst:0x8 = 0, rst:0x7 = 0, rst:0xc = 0, Guru = 0 — ZERO crash signatures
+for the first capture-active session since balloon17** (which ran zero
+captures; this one ran one to completion). The arm marker printed at boot
+(balloon24.log:103 `[CAPWIN] NVS id-commit DISABLED for A/B - RAM-only IDs
+this session`). The single capture survived its ENTIRE death window — the
+first since the TG1WDT era began (balloon18-23: 41 deaths / 42 captures,
+the lone survivor balloon18's image-71 boot):
+
+> balloon24.log:499-503 `Camera: Image captured, size: 5780 bytes, duration:
+> 0 ms` → `[CAPWIN] pre-id id=1` → `[CAPWIN] post-id` → `[CAPWIN]
+> post-baseline` → `CommandHandler: Captured image ID 1`
+
+and delivered end-to-end: enqueue (volatile fallback — card out) :507-:511,
+thumbnail window 10/10 (:693-:728), the base finalized the full image
+COMPLETE (base24.log:153-154 `image 1 kind 0 finalized COMPLETE (26/26
+chunks, 5780 B)` → persisted to the base card, complete=true). Session ran
+minutes past the capture (2100+ loop passes, Max 1361 ms, beacons to
+seq=48), ended by the operator — no crash at any phase.
+
+Per §29.4's first pre-written reading: **the NVS flash write in the capture
+window is NAMED as the death interaction** — the A/B removed ONLY the
+putUShort/commit (the fail-open RAM-only path, byte-identical flow
+otherwise) and the death rate went from ~every capture to zero. The
+mechanism reading (consistent with §29.2's double-exception decode): a
+cache-suspending SPI1 write landing on a JUST-REARMED LCD_CAM capture
+(fb_return under WHEN_EMPTY re-arms the DMA within the same milliseconds;
+the deferred world simply never overlaps them). Honest scale: n=1 capture
+this session against the era's 42 — the verdict rides the A/B's
+single-variable construction plus the §29.2/§29.3 evidence chain, and the
+next session is the confirmation (below).
+
+### 30.2 The fix (the §29.4 fix shape, implemented)
+
+`allocateImageId()` now hands out the RAM ID immediately (the 01-11
+overwrite bug stays fixed — the counter advances and is answered to the
+base instantly) and records a PENDING persist; `AutoCapture::process()`
+writes it to NVS `kImageIdPersistDelayMs` (1500 ms) after the allocation —
+deliberately from the TOP of process(), BEFORE the enabled/camera master
+gate, because manual CAPTURE_NOW allocations must persist while the balloon
+runs auto-capture disabled. The 1500 ms delay puts the flash write
+comfortably past the capture window (the WHEN_EMPTY refill completes
+~100-200 ms after fb_return at XCLK 10 MHz). Contract preservation: one
+write attempt per allocation; a NEWER allocation refreshes the request
+while pending stays set (one NVS value — committing lastImageId covers
+every earlier allocation); a failed write degrades to RAM-only for the
+boot with the result logged. The G01_CAPWIN_NVS_ID_DISABLED flag and its
+begin() block are REMOVED (verdict delivered); the [CAPWIN] bisector lines
+STAY (their removal condition is unchanged — they now bracket a µs-scale
+RAM-only interval and the deferred write carries its own line).
+
+### 30.3 Pre-written readings for the next bench session
+
+- **`[CAPWIN] deferred id-commit id=N written=2` appears ~1.5 s after each
+  capture, and deaths stay ZERO across multiple captures** (the bar balloon24
+  could not set: more than one capture per boot, including an unspaced
+  series-A push) → the fix is CONFIRMED; G-01-10's camera-capture family is
+  closable pending the SD-era resume-push cross-check (§28.3 remainder) on a
+  card-in session.
+- **A death lands AT the deferred commit** (last lines = the allocation
+  bracket, death ~1.5 s post-capture, no `deferred id-commit` line) → the
+  flash write is fatal ANYWHERE, not just in the capture window — the
+  systimer/flash-cache class of §20 re-opens with a new trigger site, and
+  the NVS write moves to a further-reduced window (e.g., boot-time-only
+  persistence).
+- **Deaths return AT the capture moment despite the deferral** → the A/B's
+  n=1 was insufficient — re-arm the NVS-off flag for a higher-n repeat.
+- **A crash during a normal (non-capture) boot phase** → unrelated family;
+  record per the census discipline.
+
+The SDMMC arm stays on; the [CAPWIN]/[MEM]/[STAMP]/[TICKSTAMP] instruments
+stay with their standing removal conditions. (01-UAT.md G-01-10, WINDOWS 15.)

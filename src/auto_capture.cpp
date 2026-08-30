@@ -36,6 +36,11 @@ static Preferences imageIdPrefs;          // NVS handle (namespace below)
 static bool imageIdPrefsOpen = false;     // fail-open guard (NVS hiccup)
 static const char kImageIdNamespace[] = "imgid";
 static const char kImageIdKey[] = "last";
+// G-01-10 (session-27): the deferred commit waits this long after the
+// allocation that dirtied it — comfortably past the capture window (the
+// WHEN_EMPTY refill completes ~100-200 ms after fb_return at XCLK 10 MHz),
+// so the flash write never overlaps a live/just-rearmed LCD_CAM capture.
+static const uint32_t kImageIdPersistDelayMs = 1500;
 
 // ===========================
 // Constructor
@@ -54,6 +59,8 @@ AutoCapture::AutoCapture()
     , lastEventLon(0.0)
     , eventBaselinesInit(false)
     , phaseSeenMask(0)
+    , idPersistPending(false)
+    , idPersistReqMs(0)
 {
 }
 
@@ -73,17 +80,6 @@ bool AutoCapture::begin(CameraManager* camera) {
     // stored value) or an NVS failure degrades to the old RAM-only behavior
     // — a capture is never blocked by the persistence layer.
     imageIdPrefsOpen = imageIdPrefs.begin(kImageIdNamespace, false);
-
-    // A/B arm (D1 session-26, balloon23 verdict): RAM-only IDs for one bench
-    // session — removes the ONLY flash write from the capture death window so
-    // the [CAPWIN] bisector can name or exonerate it. Reuses the existing
-    // fail-open path (imageIdPrefsOpen == false, the line below prints the
-    // honest degradation), so a capture is never blocked and no other code
-    // changes. REMOVE together with the platformio.ini flag after the test.
-#ifdef G01_CAPWIN_NVS_ID_DISABLED
-    imageIdPrefsOpen = false;
-    Serial.println("[CAPWIN] NVS id-commit DISABLED for A/B - RAM-only IDs this session (G-01-10)");
-#endif
 
     if (imageIdPrefsOpen) {
         lastImageId = imageIdPrefs.getUShort(kImageIdKey, 0);
@@ -180,6 +176,11 @@ bool AutoCapture::setEventConfig(uint16_t altDeltaM, uint16_t distDeltaM,
 // ===========================
 
 void AutoCapture::process() {
+    // G-01-10 (session-27): the deferred image-ID commit runs BEFORE the
+    // master gate — manual CAPTURE_NOW allocations must persist even when
+    // auto-capture is disabled (the balloon's bench and flight default).
+    persistImageIdIfDue();
+
     // Master gate: AUTO_CAPTURE_DISABLE stops ALL automatic capture — the
     // interval branch and every event trigger live below this guard (SC-5)
     if (!enabled || camera == nullptr) {
@@ -341,28 +342,65 @@ uint16_t AutoCapture::allocateImageId() {
 
     // [CAPWIN] bisector (D1 round #16, debug doc section 29): every TG1WDT-era
     // death since balloon18 lands AFTER the "Image captured" print and BEFORE
-    // the caller's image-ID print — and after the session-25 QQVGA retire the
-    // only heavyweight left in that window is THIS function's NVS commit (a
-    // flash write with cache suspension; the balloon23 Saved-PC census decodes
-    // to the double-exception/panic machinery, the fetch-from-flash-while-
-    // cache-suspended signature). These latch-free lines bracket the flash op,
-    // FLUSHED to the UART so a silent death cannot swallow them: presence of a
-    // line proves execution reached it, absence names the step that died.
-    // Removal: with the [MEM]/B1/B2/[STAMP]/[TICKSTAMP] family after G-01-10
-    // closes on bench evidence.
+    // the caller's image-ID print. These latch-free flushed lines now bracket
+    // a µs-scale RAM-only interval — their value is the async-death
+    // discriminator (a death BETWEEN them with nothing heavy in between is
+    // corruption, not code). Removal: with the [MEM]/B1/B2/[STAMP]/[TICKSTAMP]
+    // family after G-01-10 closes on bench evidence.
     Serial.printf("[CAPWIN] pre-id id=%u (G-01-10)\n", static_cast<unsigned>(lastImageId));
     Serial.flush();
 
-    // 01-11 (G-01-6): persist BEFORE handing out the ID — a reboot after a
-    // capture must never re-issue the same ID (that re-issue is the
-    // overwrite bug). A failed write degrades to RAM-only behavior (logged
-    // once per boot in begin()); the capture itself always proceeds.
+    // G-01-10 (session-27, balloon24 A/B verdict): the id-commit is DEFERRED
+    // out of the capture window. The A/B (flash write removed, everything
+    // else identical) took the death rate from ~every capture (41 deaths /
+    // 42 captures, balloon18-23) to zero, so the NVS flash write — a
+    // cache-suspending SPI1 operation landing on a JUST-REARMED LCD_CAM
+    // capture — is the named death interaction. The RAM ID stays the
+    // authority handed out to callers (the 01-11 overwrite bug stays fixed:
+    // every capture advances the counter instantly); the flash write follows
+    // kImageIdPersistDelayMs later from process(). A crash in between costs
+    // at most the last ID's persistence — the fail-open trade this NVS layer
+    // has always accepted. A failed write still degrades to RAM-only for the
+    // boot (logged at the deferred write, 01-11 contract preserved).
     if (imageIdPrefsOpen) {
-        imageIdPrefs.putUShort(kImageIdKey, lastImageId);
+        idPersistPending = true;
+        idPersistReqMs = millis();
     }
 
     Serial.println("[CAPWIN] post-id (G-01-10)");
     Serial.flush();
 
     return lastImageId;
+}
+
+// The deferred half of the 01-11 image-ID persistence (G-01-10 session-27):
+// called every loop pass from the TOP of process() — deliberately BEFORE the
+// enabled/camera master gate, because manual CAPTURE_NOW allocations must
+// persist too and the balloon runs auto-capture disabled.
+void AutoCapture::persistImageIdIfDue() {
+    if (!idPersistPending) {
+        return;
+    }
+    if (!imageIdPrefsOpen) {
+        idPersistPending = false;  // fail-open: RAM-only for the boot
+        return;
+    }
+    // Wraparound-safe millis idiom; a NEWER allocation refreshes
+    // idPersistReqMs while pending stays set, so one write always persists
+    // the latest counter (NVS stores one value — committing lastImageId
+    // covers every earlier allocation).
+    if (millis() - idPersistReqMs < kImageIdPersistDelayMs) {
+        return;  // not due yet
+    }
+    idPersistPending = false;  // one-shot: a failed write degrades to
+                               // RAM-only for the boot (the 01-11 contract)
+
+    size_t written = imageIdPrefs.putUShort(kImageIdKey, lastImageId);
+
+    // [CAPWIN] deferred-commit bracket (flushed): the bench reads this line
+    // as the proof the REAL flash write now lands safely off the capture
+    // window. Removal: with the G-01-10 instrument family.
+    Serial.printf("[CAPWIN] deferred id-commit id=%u written=%u (G-01-10)\n",
+                  static_cast<unsigned>(lastImageId), static_cast<unsigned>(written));
+    Serial.flush();
 }
