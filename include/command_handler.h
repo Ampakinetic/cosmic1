@@ -100,6 +100,11 @@ private:
     // out-of-range values answer NACK_PARAM
     CommandResult handleSetEventThresholds(const CommandPacket& cmd);
 
+    // Image-transfer rework: FULL on request — 3-byte payload (imageId BE16 +
+    // reserved), validated via ImageTx().handleFullRequest and answered
+    // through the existing response machinery (ACK/NACK_INVALID/NACK_BUSY)
+    CommandResult handleImageFullRequest(const CommandPacket& cmd);
+
     // Response sending
     bool sendResponse(const ResponsePacket& response);
 

@@ -49,6 +49,13 @@ static uint32_t ackTimeoutFor(uint8_t commandType) {
         case CameraCommand::IMAGE_WINDOW_REQUEST:
             return CMD_ACK_TIMEOUT_WINDOW_MS;
 
+        // Image-transfer rework: the FULL-request ACK bounds only the arm
+        // handshake (validation + possible card re-admit reads); the manifest
+        // and chunk stream that follow are watched by the request retry
+        // driver (IMG_FULL_REQUEST_RETRY_MS) and the pull machinery.
+        case CameraCommand::IMAGE_FULL_REQUEST:
+            return CMD_ACK_TIMEOUT_SETTINGS_MS;
+
         default:
             return CMD_ACK_TIMEOUT_SETTINGS_MS;
     }
@@ -77,6 +84,7 @@ CommandSender::CommandSender()
     memset(pendingCommands, 0, sizeof(pendingCommands));
     memset(receiveBuffer, 0, sizeof(receiveBuffer));
     memset(&latestStatus, 0, sizeof(latestStatus));
+    memset(imageAckQueue, 0, sizeof(imageAckQueue));
 }
 
 CommandSender::~CommandSender() {
@@ -111,6 +119,7 @@ void CommandSender::end() {
 
     // Clear all pending commands
     memset(pendingCommands, 0, sizeof(pendingCommands));
+    memset(imageAckQueue, 0, sizeof(imageAckQueue));
     pendingCommandCount = 0;
 }
 
@@ -294,6 +303,11 @@ void CommandSender::process() {
             }
         }
     }
+
+    // IMAGE_ACK receipts (image-transfer rework): drained after the tracked
+    // command loop so a receipt never displaces a pending command's transmit
+    // slot — receipts are the lowest-priority traffic on the link.
+    processImageAckQueue();
 }
 
 // ===========================
@@ -631,6 +645,118 @@ bool CommandSender::transmitCommand(TrackedCommand* cmd) {
     Serial0.printf("[E32TX] cmd=%02X len=%u ok=%d\n",
                    (unsigned)cmd->packet.cmd, (unsigned)length, txOk ? 1 : 0);
     return txOk;
+}
+
+// ===========================
+// IMAGE_ACK Receipt Queue (image-transfer rework)
+// ===========================
+
+bool CommandSender::enqueueImageAck(const ImageAckBody& body) {
+    if (body.imageKind != static_cast<uint8_t>(ImageKind::THUMBNAIL) &&
+        body.imageKind != static_cast<uint8_t>(ImageKind::FULL_IMAGE)) {
+        return false;
+    }
+
+    // Kind-scoped verdicts zero the window fields on the wire; normalize the
+    // queued copy so the dedupe key and the wire always agree.
+    ImageAckBody normalized = body;
+    if (body.status >= static_cast<uint8_t>(ImageAckStatus::KIND_COMPLETE_CRC_OK)) {
+        normalized.windowBase = 0;
+        normalized.bitmap = 0;
+    }
+
+    // Dedupe key: (imageId, kind, windowBase, kind-scoped?). A newer receipt
+    // for the same key replaces the queued one — the newest bitmap is the
+    // truthful one. Kind-scoped verdicts never merge with window-scoped
+    // receipts even though both carry windowBase 0.
+    const bool kindScoped =
+        normalized.status >= static_cast<uint8_t>(ImageAckStatus::KIND_COMPLETE_CRC_OK);
+    for (uint8_t i = 0; i < IMG_ACK_TX_QUEUE_DEPTH; i++) {
+        QueuedImageAck& slot = imageAckQueue[i];
+        if (slot.used &&
+            slot.body.imageId == normalized.imageId &&
+            slot.body.imageKind == normalized.imageKind &&
+            slot.body.windowBase == normalized.windowBase &&
+            (slot.body.status >= static_cast<uint8_t>(ImageAckStatus::KIND_COMPLETE_CRC_OK)) == kindScoped) {
+            slot.body = normalized;
+            slot.enqueuedMs = millis();
+            return true;
+        }
+    }
+
+    // First free slot
+    for (uint8_t i = 0; i < IMG_ACK_TX_QUEUE_DEPTH; i++) {
+        if (!imageAckQueue[i].used) {
+            imageAckQueue[i].used = true;
+            imageAckQueue[i].enqueuedMs = millis();
+            imageAckQueue[i].body = normalized;
+            return true;
+        }
+    }
+
+    // Queue full: drop the OLDEST receipt — receipts supersede each other,
+    // so the oldest is the least valuable (PRI-03: never silently)
+    uint8_t oldest = 0;
+    for (uint8_t i = 1; i < IMG_ACK_TX_QUEUE_DEPTH; i++) {
+        if ((int32_t)(imageAckQueue[i].enqueuedMs - imageAckQueue[oldest].enqueuedMs) < 0) {
+            oldest = i;
+        }
+    }
+    Serial0.printf("[E32TX] image-ack queue full - dropped oldest (id=%u kind=%u win=%u) for id=%u kind=%u win=%u\n",
+                   imageAckQueue[oldest].body.imageId, imageAckQueue[oldest].body.imageKind,
+                   imageAckQueue[oldest].body.windowBase,
+                   normalized.imageId, normalized.imageKind, normalized.windowBase);
+    imageAckQueue[oldest].used = true;
+    imageAckQueue[oldest].enqueuedMs = millis();
+    imageAckQueue[oldest].body = normalized;
+    return true;
+}
+
+void CommandSender::processImageAckQueue() {
+    if (!initialized || !lora) {
+        return;
+    }
+
+    const uint32_t now = millis();
+
+    // Age out stale receipts first — the stream they described has moved on
+    for (uint8_t i = 0; i < IMG_ACK_TX_QUEUE_DEPTH; i++) {
+        QueuedImageAck& slot = imageAckQueue[i];
+        if (slot.used && (now - slot.enqueuedMs) >= IMG_ACK_TX_MAX_AGE_MS) {
+            Serial0.printf("[E32TX] image-ack stale - dropped (id=%u kind=%u win=%u st=%u)\n",
+                           slot.body.imageId, slot.body.imageKind,
+                           slot.body.windowBase, slot.body.status);
+            slot.used = false;
+        }
+    }
+
+    // At most ONE receipt transmit per pass, gated on the same channel-quiet
+    // rule as tracked commands — never transmit into a chunk stream the
+    // balloon is occupying (G-01-7 discipline)
+    for (uint8_t i = 0; i < IMG_ACK_TX_QUEUE_DEPTH; i++) {
+        QueuedImageAck& slot = imageAckQueue[i];
+        if (!slot.used) {
+            continue;
+        }
+        if (!channelQuietForTx()) {
+            return; // wait for the stream's natural pause
+        }
+
+        ImageAckPacket pkt = createImageAckPacket(slot.body);
+        uint8_t buffer[CMD_MAX_PACKET_SIZE];
+        size_t length = 0;
+        if (!CommandProtocol::serializeImageAck(pkt, buffer, length)) {
+            slot.used = false;
+            continue;
+        }
+        bool txOk = lora->transmit(buffer, length);
+        Serial0.printf("[E32TX] image-ack id=%u kind=%u win=%u bm=%08X st=%u len=%u ok=%d\n",
+                       slot.body.imageId, slot.body.imageKind, slot.body.windowBase,
+                       (unsigned)slot.body.bitmap, slot.body.status,
+                       (unsigned)length, txOk ? 1 : 0);
+        slot.used = false;
+        return; // one receipt per pass
+    }
 }
 
 void CommandSender::retryCommand(TrackedCommand* cmd) {

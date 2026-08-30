@@ -101,6 +101,11 @@ void ImageRxManager::process() {
         return;
     }
 
+    // Image-transfer rework: bounded retry/abandon driver for the user's
+    // outstanding FULL request — runs before the pull driver so a request
+    // keeps its own clock even while another pull is active.
+    processFullRequest();
+
     // D-21: drive the ONE active full-image pull. The base speaks only on
     // window completion, stall, or manifest-while-idle (Pitfall 5) — every
     // issueWindowRequest call below sits on one of those three triggers.
@@ -166,8 +171,52 @@ void ImageRxManager::process() {
                 }
             } else if (pull->windowActive && pull->passCount >= IMG_RETRANSMIT_MAX_PASSES) {
                 // D-24: bounded passes exhausted — finalize incomplete, keep
-                // what is on SD, free the slot for the next queued pull
+                // what is on SD, free the slot for the next queued pull.
+                // Checked BEFORE the re-arm branch below so the full-re-arm
+                // rescue can never ping-pong past the 3-pass bound.
                 finalizeIncomplete(*pull, "retransmit passes exhausted");
+            } else if (pull->userRequested && pull->windowActive &&
+                       pull->windowRequestSeq != 0 &&
+                       CmdSender().getCommandState(pull->windowRequestSeq) == CommandState::FAILED) {
+                // Image-transfer rework: the balloon REJECTED the window
+                // request for a user-requested pull — its RAM entry is gone
+                // (watchdog reset / TTL eviction; session 7, base7.log: the
+                // balloon reset mid-pull, three window re-requests burned the
+                // D-24 budget on NACK_INVALID, 20/23 finalized INCOMPLETE
+                // while the balloon held a perfectly servable THUMB_PUSHED
+                // entry + card record). Re-arm the FULL instead of re-asking
+                // for windows the balloon cannot serve: IMAGE_FULL_REQUEST
+                // makes the balloon re-announce (RAM re-arm or card re-admit),
+                // the duplicate manifest hits the startTransfer RESUME path —
+                // bitmap kept — and the pull continues from the first missing
+                // chunk. Bounded: this charges a D-24 pass like any other
+                // stall, and the exhaustion check above runs first, so a
+                // balloon that keeps refusing ends the pull honestly at the
+                // same 3-pass bound.
+                pull->passCount++;
+                uint8_t payload[3] = {0};
+                CommandProtocol::writeUint16(payload, pull->imageId);
+                uint16_t rearmSeq = CmdSender().sendCommand(CameraCommand::IMAGE_FULL_REQUEST,
+                                                            payload, 3);
+                if (rearmSeq != 0) {
+                    pendingFullRequest.valid = true;
+                    pendingFullRequest.imageId = pull->imageId;
+                    pendingFullRequest.requestedMs = millis();
+                    pendingFullRequest.attempts = 1;
+                    pendingFullRequest.seq = rearmSeq;
+                    Serial.printf("ImageRx: window request rejected for requested image %u - "
+                                  "re-arming full (seq %u, pass %u)\n",
+                                  pull->imageId, rearmSeq, pull->passCount);
+                } else {
+                    Serial.printf("ImageRx: full re-arm for image %u could not queue; "
+                                  "will retry on next stall\n", pull->imageId);
+                }
+                // The stall scope re-opens: the next stall pass (or the
+                // resumed manifest, which refreshes the stall clock) takes
+                // the NORMAL re-request path against the re-armed entry.
+                pull->windowActive = false;
+                pull->windowRequestSeq = 0;
+                pull->lastProgressMs = millis();
             } else {
                 if (pull->windowActive) {
                     // Defer-aware D-24 charge (01-15): reached only with a
@@ -543,16 +592,101 @@ void ImageRxManager::startTransfer(const ImageManifestBody& m) {
         return;
     }
 
-    // Same (id, kind) manifest again: restart that slot's reassembly (02-01
-    // semantics — a same-id re-push restarts cleanly; D-19 keeps OTHER
-    // transfers running: a new capture never abandons an in-progress pull)
+    // Same (id, kind) manifest again — three distinct cases (image-transfer
+    // rework). D-19 keeps OTHER transfers running either way: a new capture
+    // never abandons an in-progress pull.
     ImageRxTransfer* t = findTransfer(m.imageId, m.imageKind);
     if (t == nullptr) {
         t = allocateSlot(m.imageKind);
         if (t == nullptr) {
             return; // logged inside allocateSlot
         }
+    } else if (t->terminal && t->complete) {
+        // TERMINAL+COMPLETE: never restart, never touch the slot. The stored
+        // file is the delivered truth; the balloon's re-announce (boot
+        // rescan, heal) must not re-receive it. Reply one rate-limited
+        // KIND_COMPLETE receipt so a rebooted balloon marks the kind
+        // delivered and stops re-sending — this is the loop-killer for the
+        // crash-resume re-push class.
+        if (millis() - t->lastCompleteAckMs >= IMG_COMPLETE_REACK_RATE_MS) {
+            ImageAckBody ack = {};
+            ack.imageId = m.imageId;
+            ack.imageKind = m.imageKind;
+            ack.status = static_cast<uint8_t>(ImageAckStatus::KIND_COMPLETE_CRC_OK);
+            CmdSender().enqueueImageAck(ack);
+            t->lastCompleteAckMs = millis();
+            Serial.printf("ImageRx: manifest image %u kind %u for COMPLETE row — ignored, "
+                          "COMPLETE reply sent\n", m.imageId, m.imageKind);
+        } else {
+            Serial.printf("ImageRx: manifest image %u kind %u for COMPLETE row — ignored "
+                          "(reply rate-limited)\n", m.imageId, m.imageKind);
+        }
+        return;
+    } else if (t->totalSize == m.totalSize && t->chunkSize == m.chunkSize &&
+               t->totalChunks == m.totalChunks && t->crc32 == m.crc32) {
+        // NON-TERMINAL, IDENTICAL CONTENT: resume, never restart. The
+        // crash-loop duplicate is always byte-identical (the balloon's card
+        // archive is the manifest source), so the held bitmap/buffer/SD file
+        // stay valid — wiping them here is what made every balloon reboot
+        // re-receive entire images (base6.log). NO store calls on this path:
+        // the thumbnail file handle is already open, and writeChunk's
+        // non-truncating "r+" reopen covers a heal-closed handle.
+        t->lastProgressMs = millis();   // honest stall-clock activity
+        Serial.printf("ImageRx: re-manifest image %u kind %u — resuming (%u/%u held), "
+                      "state kept\n",
+                      m.imageId, m.imageKind,
+                      static_cast<unsigned>(t->receivedCount),
+                      static_cast<unsigned>(t->totalChunks));
+        // Image-transfer rework: a re-announce that answers a user request
+        // (the stall-driver's full re-arm) consumes the pending request —
+        // otherwise processFullRequest would re-send the 0x32 15 s later and
+        // buy nothing but a duplicate manifest.
+        if (m.imageKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) &&
+            pendingFullRequest.valid && pendingFullRequest.imageId == m.imageId) {
+            pendingFullRequest = PendingFullRequest{};
+            t->userRequested = true;
+        }
+        if (m.imageKind == static_cast<uint8_t>(ImageKind::THUMBNAIL) &&
+            t->chunkPresent != nullptr && t->receivedCount > 0) {
+            // Prefix WINDOW_COMPLETE receipts: the rebooted balloon's RAM
+            // bitmap is empty, so these ACKs (persisted via its META
+            // thumbAcked) drive its push-skip past everything already held.
+            // Walk 16-aligned windows from 0; stop at the first incomplete
+            // one (a prefix is all the balloon can skip past).
+            uint16_t winBase = 0;
+            while (winBase < t->totalChunks) {
+                uint16_t winEnd = winBase + IMG_WINDOW_MAX_CHUNKS;
+                if (winEnd > t->totalChunks) {
+                    winEnd = t->totalChunks;
+                }
+                bool full = true;
+                uint32_t mask = 0;
+                for (uint16_t i = winBase; i < winEnd; i++) {
+                    if (t->chunkPresent[i]) {
+                        mask |= (1UL << (i - winBase));
+                    } else {
+                        full = false;
+                        break;
+                    }
+                }
+                if (!full) {
+                    break;
+                }
+                ImageAckBody ack = {};
+                ack.imageId = m.imageId;
+                ack.imageKind = m.imageKind;
+                ack.windowBase = winBase;
+                ack.bitmap = mask;
+                ack.status = static_cast<uint8_t>(ImageAckStatus::WINDOW_COMPLETE);
+                CmdSender().enqueueImageAck(ack);
+                winBase = winEnd;
+            }
+        }
+        return;
     } else {
+        // Terminal-INCOMPLETE (content must be re-sent — truncate is correct
+        // here) or a genuinely different content tuple (new bytes under a
+        // recycled id): existing clean-restart semantics unchanged.
         Serial.printf("ImageRx: re-manifest for image %u kind %u — restarting reassembly "
                       "(had %u/%u chunks)\n",
                       m.imageId, m.imageKind,
@@ -586,6 +720,21 @@ void ImageRxManager::startTransfer(const ImageManifestBody& m) {
     t->exposure = m.exposure;
     t->wbMode = m.wbMode;
     t->lastProgressMs = millis();
+
+    // Image-transfer rework: a FULL manifest arriving while a user request
+    // for this id is pending consumes the request — that slot becomes the
+    // userRequested pull (the only kind of FULL slot that ever activates).
+    // Stamped on BOTH the fresh-allocate and clean-restart paths; the
+    // resume/COMPLETE paths return earlier with their state kept.
+    if (m.imageKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE)) {
+        t->userRequested =
+            (pendingFullRequest.valid && pendingFullRequest.imageId == m.imageId);
+        if (t->userRequested) {
+            pendingFullRequest.valid = false;
+            Serial.printf("ImageRx: FULL manifest for image %u matches pending user request - pull authorized\n",
+                          m.imageId);
+        }
+    }
 
     t->chunkPresent = (uint8_t*)calloc(m.totalChunks, 1);
     if (t->chunkPresent == nullptr) {
@@ -635,12 +784,17 @@ void ImageRxManager::startTransfer(const ImageManifestBody& m) {
     }
 
     if (m.imageKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) && !t->pullActive) {
-        // QUEUED (D-19 FIFO). If no pull is active this manifest arrived
-        // while idle — the one trigger that starts a pull immediately.
+        // QUEUED (D-19 FIFO). Image-transfer rework: the manifest-while-idle
+        // pull trigger now ALSO requires t->userRequested — a FULL manifest
+        // on its own never starts a pull; it queues a discovery row the
+        // "Fetch full" button can activate (the balloon no longer announces
+        // fulls unprompted except the no-thumbnail fallback, whose manifests
+        // land here as queued rows).
         // G-01-7 lever 1 (01-12): the trigger ALSO requires no pending
         // thumbnail heal (serialization hold) — a same-id or earlier holed
         // thumbnail completes before any full pull activates.
-        if (findActivePull() == nullptr && pendingHealThumbnail() == nullptr) {
+        if (t->userRequested &&
+            findActivePull() == nullptr && pendingHealThumbnail() == nullptr) {
             t->pullActive = true;
             // CR-01: the SD file opens HERE, at activation — a QUEUED
             // manifest must never touch the kind handle an active pull owns
@@ -709,6 +863,44 @@ bool ImageRxManager::acceptChunk(ImageRxTransfer& t, const ImageChunkBody& c) {
     // a failed pass, so cumulative healed stalls over a pull's lifetime can
     // no longer finalize it INCOMPLETE. This is the ONLY passCount zero-writer.
     t.passCount = 0;
+
+    // Per-window receipt (image-transfer rework): the moment a 16-chunk
+    // window's span is fully persisted, tell the balloon exactly which
+    // chunks the base holds. Keyed off acceptChunk (not windowSliceComplete)
+    // so the blind thumbnail push gets the same receipts as pulled windows.
+    // Skipped when this chunk completes the whole kind — finalizeTransfer's
+    // kind-scoped verdict follows immediately and supersedes any window
+    // receipt.
+    if (t.receivedCount < t.totalChunks) {
+        uint16_t winBase = (c.chunkIndex / IMG_WINDOW_MAX_CHUNKS) * IMG_WINDOW_MAX_CHUNKS;
+        uint16_t winEnd = winBase + IMG_WINDOW_MAX_CHUNKS;
+        if (winEnd > t.totalChunks) {
+            winEnd = t.totalChunks;
+        }
+        bool full = true;
+        uint32_t mask = 0;
+        for (uint16_t i = winBase; i < winEnd; i++) {
+            if (t.chunkPresent[i]) {
+                mask |= (1UL << (i - winBase));
+            } else {
+                full = false;
+                break;
+            }
+        }
+        if (full) {
+            ImageAckBody ack = {};
+            ack.imageId = t.imageId;
+            ack.imageKind = t.imageKind;
+            ack.windowBase = winBase;
+            ack.bitmap = mask;
+            ack.status = static_cast<uint8_t>(ImageAckStatus::WINDOW_COMPLETE);
+            CmdSender().enqueueImageAck(ack);
+            if (DEBUG_IMAGE_RX) {
+                Serial.printf("ImageRx: image %u kind %u window %u complete - ACK queued\n",
+                              t.imageId, t.imageKind, winBase);
+            }
+        }
+    }
 
     if (DEBUG_IMAGE_RX) {
         Serial.printf("ImageRx: image %u kind %u chunk %u/%u (%u B)\n",
@@ -781,6 +973,21 @@ void ImageRxManager::finalizeTransfer(ImageRxTransfer& t) {
     t.crcMismatch = crcMismatch;
     t.notStored = notStored;
 
+    // Kind-scoped receipt (image-transfer rework): the balloon's delivery
+    // state is ACK-CONFIRMED, so the verify verdict must reach it. notStored
+    // sends NOTHING — the chunks WERE received; only base persistence
+    // failed, and the balloon's receipt state must stay true to what the
+    // base actually holds.
+    if (complete || crcMismatch) {
+        ImageAckBody ack = {};
+        ack.imageId = t.imageId;
+        ack.imageKind = t.imageKind;
+        ack.status = static_cast<uint8_t>(
+            complete ? ImageAckStatus::KIND_COMPLETE_CRC_OK
+                     : ImageAckStatus::KIND_FAILED_CRC);
+        CmdSender().enqueueImageAck(ack);
+    }
+
     Serial.printf("ImageRx: image %u kind %u finalized %s (%u/%u chunks, %u B)%s\n",
                   t.imageId, t.imageKind,
                   complete ? "COMPLETE" : "INCOMPLETE",
@@ -820,7 +1027,8 @@ void ImageRxManager::finalizeTransfer(ImageRxTransfer& t) {
     }
 }
 
-void ImageRxManager::finalizeIncomplete(ImageRxTransfer& t, const char* reason) {
+void ImageRxManager::finalizeIncomplete(ImageRxTransfer& t, const char* reason,
+                                        bool crcRejected) {
     // D-24: bounded degradation — keep what is on SD, flag it in the
     // sidecar, free the transfer slot for the next queued pull. Never
     // loops forever (PRI-03).
@@ -828,6 +1036,18 @@ void ImageRxManager::finalizeIncomplete(ImageRxTransfer& t, const char* reason) 
     t.complete = false;
     t.crcMismatch = false;
     t.notStored = false;
+
+    // Image-transfer rework: only a CRC REJECTION invalidates the balloon's
+    // receipt state (the bytes the base holds are wrong). Pass exhaustion /
+    // stall / slot-pressure terminations leave the held chunks as true
+    // receipts — no KIND_FAILED_CRC is sent for them.
+    if (crcRejected) {
+        ImageAckBody ack = {};
+        ack.imageId = t.imageId;
+        ack.imageKind = t.imageKind;
+        ack.status = static_cast<uint8_t>(ImageAckStatus::KIND_FAILED_CRC);
+        CmdSender().enqueueImageAck(ack);
+    }
 
     Serial.printf("ImageRx: image %u kind %u finalized INCOMPLETE (%s): %u/%u chunks after %u passes\n",
                   t.imageId, t.imageKind, reason,
@@ -849,6 +1069,82 @@ void ImageRxManager::finalizeIncomplete(ImageRxTransfer& t, const char* reason) 
         t.pullActive = false;
         activateNextPull();
     }
+}
+
+// ===========================
+// User-Requested FULL Pull (image-transfer rework)
+// ===========================
+
+bool ImageRxManager::requestFullImage(uint16_t imageId) {
+    // Existing FULL slot?
+    ImageRxTransfer* t = findTransfer(imageId, static_cast<uint8_t>(ImageKind::FULL_IMAGE));
+    if (t != nullptr) {
+        if (t->terminal && t->complete) {
+            return false;   // the UI answers 409: already complete
+        }
+        if (!t->terminal) {
+            // Manifest already in hand — no wire traffic needed; flag the
+            // slot and the pull driver activates it FIFO (heal-hold rules
+            // unchanged).
+            t->userRequested = true;
+            pendingFullRequest = PendingFullRequest{};
+            Serial.printf("ImageRx: full image %u marked user-requested (queued slot)\n",
+                          static_cast<unsigned>(imageId));
+            return true;
+        }
+        // Terminal-INCOMPLETE: fall through — the slot's content must be
+        // re-pulled from the balloon (its duplicate manifest restarts the
+        // slot with userRequested stamped from the pending request).
+    }
+
+    uint8_t payload[3] = {0};
+    CommandProtocol::writeUint16(payload, imageId);
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::IMAGE_FULL_REQUEST, payload, 3);
+    pendingFullRequest.valid = true;
+    pendingFullRequest.imageId = imageId;
+    pendingFullRequest.requestedMs = millis();
+    pendingFullRequest.attempts = 1;
+    pendingFullRequest.seq = seq;   // 0 = command table was full; the retry driver re-sends
+    Serial.printf("ImageRx: full image %u requested via UI (seq %u)\n",
+                  static_cast<unsigned>(imageId), seq);
+    return true;
+}
+
+void ImageRxManager::processFullRequest() {
+    if (!pendingFullRequest.valid) {
+        return;   // consumed by startTransfer (manifest arrived) or abandoned below
+    }
+
+    if (millis() - pendingFullRequest.requestedMs < IMG_FULL_REQUEST_RETRY_MS) {
+        return;   // still inside the current attempt's window
+    }
+
+    if (pendingFullRequest.attempts >= IMG_FULL_REQUEST_MAX_ATTEMPTS) {
+        Serial.printf("ImageRx: full request for image %u abandoned after %u attempts - no FULL manifest\n",
+                      static_cast<unsigned>(pendingFullRequest.imageId),
+                      pendingFullRequest.attempts);
+        pendingFullRequest = PendingFullRequest{};
+        return;
+    }
+
+    // The request or its manifest may have air-lost — re-send (the balloon's
+    // handler is idempotent: an armed entry re-arms; a NACK just retries).
+    if (pendingFullRequest.seq != 0) {
+        CmdSender().cancelCommand(pendingFullRequest.seq);
+    }
+    uint8_t payload[3] = {0};
+    CommandProtocol::writeUint16(payload, pendingFullRequest.imageId);
+    uint16_t seq = CmdSender().sendCommand(CameraCommand::IMAGE_FULL_REQUEST, payload, 3);
+    if (seq != 0) {
+        pendingFullRequest.attempts++;
+        pendingFullRequest.seq = seq;
+        pendingFullRequest.requestedMs = millis();
+        Serial.printf("ImageRx: full request for image %u retried (attempt %u, seq %u)\n",
+                      static_cast<unsigned>(pendingFullRequest.imageId),
+                      pendingFullRequest.attempts, seq);
+    }
+    // seq == 0 (command table full): keep the pending request with its expired
+    // clock — the next process() pass retries the send immediately.
 }
 
 void ImageRxManager::writeSidecarFor(const ImageRxTransfer& t, bool complete,
@@ -898,7 +1194,9 @@ void ImageRxManager::activateNextPull() {
     ImageRxTransfer* best = nullptr;
     for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
         ImageRxTransfer& t = transfers[i];
-        if (t.used && !t.terminal && !t.pullActive &&
+        // Image-transfer rework: ONLY user-requested fulls are activatable —
+        // a queued, never-requested FULL manifest stays a discovery row.
+        if (t.used && !t.terminal && !t.pullActive && t.userRequested &&
             t.imageKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) &&
             (best == nullptr || t.arrivalSeq < best->arrivalSeq)) {
             best = &t;
@@ -1118,6 +1416,7 @@ uint8_t ImageRxManager::getTransferSnapshot(TransferRow* rows, uint8_t maxRows) 
                                 (static_cast<uint32_t>(best->receivedCount) * 100)
                                 / best->totalChunks)
                           : 0;
+        row.requested = best->userRequested;
 
         // Locked vocabulary, DERIVED from bitmap/pass/terminal truth only
         if (best->terminal) {

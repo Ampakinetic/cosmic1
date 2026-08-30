@@ -172,6 +172,11 @@ PersistOutcome BalloonSdStore::persistCapture(uint16_t imageId,
         return PersistOutcome::IO_ERROR;
     }
 
+    // Crash-fix cache interlock (session 8): a fresh capture is about to
+    // create files — drop any cached read handles so the cache never spans a
+    // write sequence (also covers any card-removal weirdness between mounts).
+    invalidateChunkReadCache();
+
     // Step 1 — free-space pre-check BEFORE any write (T-02.5-03), via the
     // SHARED gate: hasHeadroomFor is the SAME implementation the
     // CommandHandler and AutoCapture pre-capture gates call, so the gate
@@ -256,6 +261,15 @@ PersistOutcome BalloonSdStore::persistCapture(uint16_t imageId,
 // Chunk Serving (STORE-03)
 // ===========================
 
+void BalloonSdStore::invalidateChunkReadCache() {
+    for (uint8_t k = 0; k < 2; k++) {
+        if (chunkReadCache[k]) {
+            chunkReadCache[k].close();
+            chunkReadCache[k] = File();
+        }
+    }
+}
+
 bool BalloonSdStore::readChunk(uint16_t imageId, ImageKind kind, uint16_t chunkIndex,
                                uint8_t* out, size_t cap, size_t* outLen) {
     if (out == nullptr || outLen == nullptr || cap == 0) {
@@ -264,18 +278,32 @@ bool BalloonSdStore::readChunk(uint16_t imageId, ImageKind kind, uint16_t chunkI
     if (!available || status.initFailed) {
         return false;
     }
-
-    char path[32];
-    filePath(path, sizeof(path), imageId, kind);
-
-    // Per-call open is deliberate: one window services at a time, and a
-    // chunk transmit costs 250-400 ms at the 9.6 kbps air rate, so a 20 MHz
-    // open/seek/read is noise next to it. No cached handle to invalidate,
-    // no cross-image stale-cursor class.
-    File f = SD_MMC.open(path, FILE_READ);
-    if (!f) {
+    const uint8_t slot = static_cast<uint8_t>(kind);
+    if (slot >= 2) {
         return false;
     }
+
+    // Cached read handle (crash fix, session 8 — see the header comment):
+    // the per-chunk open was "deliberate" when airtime dominated (250-400 ms
+    // per chunk transmit); the watchdog-reset correlation with SD/ISR churn
+    // reversed that trade. Miss or stale id → one open here; the handle then
+    // persists across the image's whole push/pull. ANY failure closes +
+    // invalidates, so the next call starts fresh — no stale-cursor or
+    // stale-handle class survives an error.
+    if (!chunkReadCache[slot] || chunkReadCacheId[slot] != imageId) {
+        if (chunkReadCache[slot]) {
+            chunkReadCache[slot].close();
+            chunkReadCache[slot] = File();
+        }
+        char path[32];
+        filePath(path, sizeof(path), imageId, kind);
+        chunkReadCache[slot] = SD_MMC.open(path, FILE_READ);
+        if (!chunkReadCache[slot]) {
+            return false;
+        }
+        chunkReadCacheId[slot] = imageId;
+    }
+    File& f = chunkReadCache[slot];
 
     // Offset-past-EOF guard (T-02.5-02): the file size mirrors the length
     // this image's META record stores for the kind (both were written in the
@@ -285,16 +313,15 @@ bool BalloonSdStore::readChunk(uint16_t imageId, ImageKind kind, uint16_t chunkI
     // bounded, named skip). No fabricated chunk, no zero fill.
     const size_t offset = static_cast<size_t>(chunkIndex) * IMG_CHUNK_PAYLOAD_SIZE;
     if (offset >= f.size()) {
-        f.close();
         return false;
     }
     if (!f.seek(offset)) {
-        f.close();
+        invalidateChunkReadCache();
         return false;
     }
     const size_t got = f.read(out, cap);
-    f.close();
     if (got == 0) {
+        invalidateChunkReadCache();
         return false;   // IO failure at the offset — never an empty chunk
     }
     *outLen = got;   // the tail chunk's genuine partial length
@@ -304,6 +331,10 @@ bool BalloonSdStore::readChunk(uint16_t imageId, ImageKind kind, uint16_t chunkI
 // ===========================
 // Delivery Bookkeeping
 // ===========================
+
+// Forward declaration — defined just below the Boot Rescan section header,
+// shared by bootRescan's pass-1 and loadResumedRecord.
+static void fillResumedRecord(const BalloonCaptureRecord& rec, BalloonResumedRecord& rr);
 
 bool BalloonSdStore::markDelivered(uint16_t imageId, ImageKind kind) {
     if (!available || status.initFailed) {
@@ -348,6 +379,78 @@ bool BalloonSdStore::markDelivered(uint16_t imageId, ImageKind kind) {
                       path, static_cast<unsigned>(imageId));
     }
     return ok;
+}
+
+bool BalloonSdStore::persistThumbAcked(uint16_t imageId, uint64_t bitmap) {
+    if (!available || status.initFailed) {
+        return false;
+    }
+
+    char path[32];
+    metaPath(path, sizeof(path), imageId);
+    // "r+" — in-place bitmap update, never a truncate (keep-everything).
+    File f = SD_MMC.open(path, "r+");
+    if (!f) {
+        return false;
+    }
+
+    // Untrusted removable media (T-02.5-01): validate magic + id before any
+    // write back — a torn/hostile record is left untouched.
+    BalloonCaptureRecord rec{};
+    if (f.read(reinterpret_cast<uint8_t*>(&rec), sizeof(rec)) != sizeof(rec) ||
+        rec.magic != SD_STORE_META_MAGIC || rec.imageId != imageId) {
+        f.close();
+        return false;
+    }
+
+    // One-field update in place: seek to the bitmap and rewrite it
+    if (!f.seek(offsetof(BalloonCaptureRecord, thumbAcked))) {
+        f.close();
+        return false;
+    }
+    const bool ok = (f.write(reinterpret_cast<const uint8_t*>(&bitmap),
+                             sizeof(bitmap)) == sizeof(bitmap));
+    f.close();
+    if (!ok) {
+        status.writeFailed = true;
+        Serial.printf("SdStore: thumbAcked write FAILED for %s (image %u)\n",
+                      path, static_cast<unsigned>(imageId));
+    }
+    return ok;
+}
+
+bool BalloonSdStore::loadResumedRecord(uint16_t imageId, BalloonResumedRecord& out) {
+    if (!available || status.initFailed) {
+        return false;
+    }
+
+    // The full bootRescanValidateMeta check (META magic + id, referenced JPGs
+    // exist with matching sizes) is the trust boundary — a record that fails
+    // it is a torn capture, never a transferable one.
+    BalloonCaptureRecord rec{};
+    if (!bootRescanValidateMeta(imageId, rec)) {
+        return false;
+    }
+    out = BalloonResumedRecord{};
+    fillResumedRecord(rec, out);
+    return true;
+}
+
+// Walk-local record→resume-candidate fill, shared by bootRescan's pass-1
+// and loadResumedRecord (image-transfer rework): one place copies the
+// pinned field mapping so the two readers can never drift.
+static void fillResumedRecord(const BalloonCaptureRecord& rec, BalloonResumedRecord& rr) {
+    rr.imageId = rec.imageId;
+    rr.captureSource = rec.captureSource;
+    rr.captureTimeMs = rec.captureTimeMs;
+    rr.fullLength = rec.fullLength;
+    rr.fullCrc32 = rec.fullCrc32;
+    rr.thumbLength = rec.thumbLength;
+    rr.thumbCrc32 = rec.thumbCrc32;
+    memcpy(rr.settings, &rec.resolution, sizeof(rr.settings));
+    rr.thumbDelivered = (rec.flags & SD_ST_DELIV_THUMB) != 0;
+    rr.fullDelivered = (rec.flags & SD_ST_DELIV_FULL) != 0;
+    rr.thumbAcked = rec.thumbAcked;
 }
 
 // ===========================
@@ -487,16 +590,7 @@ uint8_t BalloonSdStore::bootRescan(BalloonResumedRecord* out, uint8_t cap) {
                     // trailer copies verbatim (pinned 7-byte ImageTxSettings
                     // layout, static_assert'd at the top of this file).
                     BalloonResumedRecord rr{};
-                    rr.imageId = rec.imageId;
-                    rr.captureSource = rec.captureSource;
-                    rr.captureTimeMs = rec.captureTimeMs;
-                    rr.fullLength = rec.fullLength;
-                    rr.fullCrc32 = rec.fullCrc32;
-                    rr.thumbLength = rec.thumbLength;
-                    rr.thumbCrc32 = rec.thumbCrc32;
-                    memcpy(rr.settings, &rec.resolution, sizeof(rr.settings));
-                    rr.thumbDelivered = (rec.flags & SD_ST_DELIV_THUMB) != 0;
-                    rr.fullDelivered = (rec.flags & SD_ST_DELIV_FULL) != 0;
+                    fillResumedRecord(rec, rr);
 
                     // Ascending-by-id insertion; over cap the NEWEST ids are
                     // kept (the oldest shift out — honest, named degradation).
@@ -598,6 +692,10 @@ uint16_t BalloonSdStore::clearAllImages(const char* confirmToken) {
         Serial.println("SdStore: manual clear skipped - no card mounted");
         return 0;
     }
+
+    // Crash-fix cache interlock (session 8): never hold a cached read handle
+    // across the archive's ONLY deletion surface.
+    invalidateChunkReadCache();
 
     File dir = SD_MMC.open(SD_STORE_DIR);
     if (!dir || !dir.isDirectory()) {

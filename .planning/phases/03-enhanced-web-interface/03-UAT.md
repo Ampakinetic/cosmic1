@@ -3,22 +3,24 @@ status: testing
 phase: 03-enhanced-web-interface
 source: [03-VERIFICATION.md]
 started: 2026-08-20T06:45:00Z
-updated: 2026-08-20T06:45:00Z
+updated: 2026-08-22T00:00:00Z
 ---
 
 ## Current Test
 
-number: 1
-name: Dashboard shows live temperature, altitude, GPS updating every 5 s (SC-1 / WEB-01 / WEB-03)
+number: 2
+name: OpenStreetMap displays balloon position with trajectory history (SC-2 / WEB-02)
 expected: |
-  Flash base + balloon, link radios; open the dashboard and watch the six-tile telemetry panel across ~30 s; then power the balloon off and watch poll backoff. Tiles update on each ~5 s poll from the 0x14 beacon; absent fields show em-dash/'No telemetry received yet'; after failures the amber stale badge appears with a live age count and the cadence backs off 5->15->30 s, snapping back to 5 s silently on recovery.
-awaiting: user response
+  Banded track (green/amber/red by altitude) plus circleMarker position; auto-follow cancels on drag and Recenter restores it; AP mode swaps to the offline canvas plot of the identical track with the offline chip, swapping back when tiles return.
+awaiting: user response (holding — balloon link down, see Gap G-03-1; tests 2/4/6 need balloon telemetry)
 
 ## Tests
 
 ### 1. Dashboard shows live temperature, altitude, GPS updating every 5 s (SC-1 / WEB-01 / WEB-03)
 expected: Tiles update on each ~5 s poll from the 0x14 beacon; absent fields show em-dash/'No telemetry received yet'; after failures the amber stale badge appears with a live age count and the cadence backs off 5->15->30 s, snapping back to 5 s silently on recovery.
-result: [pending]
+result: issue
+reported: "the base station seems to be working well, however no data is coming from the balloon. is it possible to show some state information on the OLED displays so it's easy to see if something is wrong?"
+severity: major
 
 ### 2. OpenStreetMap displays balloon position with trajectory history (SC-2 / WEB-02)
 expected: Banded track (green/amber/red by altitude) plus circleMarker position; auto-follow cancels on drag and Recenter restores it; AP mode swaps to the offline canvas plot of the identical track with the offline chip, swapping back when tiles return.
@@ -44,9 +46,18 @@ result: [pending]
 
 total: 6
 passed: 0
-issues: 0
-pending: 6
+issues: 1
+pending: 5
 skipped: 0
 blocked: 0
 
 ## Gaps
+
+- gap_id: G-03-1
+  truth: "Tiles update on each ~5 s poll from the 0x14 beacon; absent fields show em-dash/'No telemetry received yet'; stale badge + 5->15->30 s backoff"
+  status: failed
+  reason: "User reported: the base station seems to be working well, however no data is coming from the balloon."
+  severity: major
+  test: 1
+  artifacts: []
+  missing: []

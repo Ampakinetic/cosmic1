@@ -140,38 +140,20 @@ static AppState appState;
 // instrumentation after G-01-10 closes on bench evidence.
 static volatile uint32_t s_idle0TickCount = 0;
 
-// G-01-10 round #14 instrument [STACK] (01-32) per
-// .planning/debug/d1-crash-regression-push-start.md §10.5 item 1: IDLE0
-// stack-margin watch — the round's designed one-session discriminator for
-// the labeled stack-capacity hypothesis (§10.5: IDLE-stack breach under IRQ
-// pressure during heavy TX vs the scheduler/tick wedge). The hook executes
-// in IDLE0's context, so uxTaskGetStackHighWaterMark(NULL) samples IDLE0 —
-// the stack [MEM] does not monitor (loopTask stackHW stayed 5772 through
-// the session-10 canary). Throttled INSIDE the hook to every 1024 idle
-// ticks ((count & 0x3FF) == 0, ~1 s of IDLE0-run time at the 1000 Hz tick)
-// into a running minimum; 0 = no sample yet (the first sample sets it).
-// The print is new-low-latched from the loopTask 1 Hz block below — NEVER
-// from the hook and never per-sample: the [MEM] convention that keeps the
-// instrument from perturbing the timing it measures. G-01-10;
-// REMOVAL CONDITION: strips WITH the [MEM]/B1/B2 instrumentation after
-// G-01-10 closes on bench evidence.
-static volatile UBaseType_t s_idle0StackMinWords = 0;
-// WR-01 (01-REVIEW): has-sample latch split from the value — the old
-// zero-sentinel conflated "no sample yet" with a genuine 0-word watermark,
-// and 0 is EXACTLY the overflow signature this instrument exists to catch
-// (the loop-side `!= 0` print guard could never print it). No reset sites
-// existed for the old sentinel (declared once, never cleared), so none are
-// added for the latch — boot starts false via static init.
-static volatile bool s_idle0HasSample = false;
+// G-01-10 round #14 instrument [STACK] (01-32) — CRASH-FIX REVISION
+// (session 8): the watermark sampling previously ran INSIDE this hook
+// (uxTaskGetStackHighWaterMark(NULL) every 1024 idle ticks), putting debug
+// frames on the very 1024-word stack the instrument watches — the stack
+// that measured 244 words free AT BOOT (balloon7.log:146, balloon8.log:530)
+// and that level-1 ISRs stack their frames onto. The hook is now a bare
+// increment (smallest possible idle-resident frame); the watermark is
+// sampled from loopTask's 1 Hz block below via the IDLE0 task handle, so
+// the instrument costs IDLE0 nothing. Predicted signatures (§10.5) and the
+// REMOVAL CONDITION are unchanged; readings shift slightly UPWARD versus
+// the old in-hook numbers because the instrument's frames are GONE from the
+// idle stack — that shift is the fix working, not new headroom appearing.
 static bool idle0TickHook(void) {
     s_idle0TickCount++;
-    if ((s_idle0TickCount & 0x3FF) == 0) {
-        UBaseType_t idle0Watermark = uxTaskGetStackHighWaterMark(NULL);
-        if (!s_idle0HasSample || (idle0Watermark < s_idle0StackMinWords)) {
-            s_idle0StackMinWords = idle0Watermark;
-            s_idle0HasSample = true;
-        }
-    }
     return true;
 }
 
@@ -490,30 +472,31 @@ void loop() {
             lastIdle0SampleMs = millis();
         }
 
-        // G-01-10 round #14 instrument [STACK] (01-32) per
-        // .planning/debug/d1-crash-regression-push-start.md §10.5 item 1:
-        // the watermark's new-low print (loopTask side — the sample lives
-        // in the hook, throttled into s_idle0StackMinWords above). Prints
-        // ONLY when the running minimum improves; the first print is the
-        // boot baseline. Predicted signatures (§10.5, recorded in §11
-        // before the bench reads them): stack-capacity hypothesis → new
-        // lows accelerating toward 0 words under heavy TX ahead of a canary
-        // panic; wedge hypothesis → a healthy constant margin at the crash
-        // instant. G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2
-        // instrumentation after G-01-10 closes on bench evidence.
-        // WR-01 (01-REVIEW): the print guard keys on the has-sample latch
-        // plus a separate ever-printed flag / last-printed value instead of
-        // the old `!= 0` sentinel — a genuine 0-word watermark, the exact
-        // overflow signature the instrument exists to catch, is now
-        // printable and, once printed, stays latched (no per-second reprint).
+        // G-01-10 round #14 instrument [STACK] (01-32) — CRASH-FIX REVISION
+        // (session 8): sampled HERE (loopTask side) via the IDLE0 handle, not
+        // inside the idle hook — see the hook's comment above. The new-low
+        // latch + print vocabulary are unchanged; a genuine 0-word watermark
+        // stays printable and latched (WR-01 semantics preserved via
+        // idle0StackEverPrinted). Predicted signatures (§10.5): stack-
+        // capacity hypothesis → new lows accelerating toward 0 words under
+        // heavy TX ahead of a canary panic; wedge hypothesis → a healthy
+        // constant margin at the crash instant. G-01-10; REMOVAL CONDITION:
+        // strips WITH the [MEM]/B1/B2 instrumentation after G-01-10 closes
+        // on bench evidence.
+        static TaskHandle_t idle0Handle = nullptr;
+        if (idle0Handle == nullptr) {
+            idle0Handle = xTaskGetIdleTaskHandleForCore(0);
+        }
         static bool idle0StackEverPrinted = false;
-        static UBaseType_t idle0StackLastPrintedWords = 0;
-        if (s_idle0HasSample &&
-            (!idle0StackEverPrinted || s_idle0StackMinWords < idle0StackLastPrintedWords)) {
-            idle0StackEverPrinted = true;
-            idle0StackLastPrintedWords = s_idle0StackMinWords;
-            Serial0.printf("[IDLE0] stack watermark %u words free (new low, t=%lu ms) (G-01-10)\n",
-                           (unsigned)s_idle0StackMinWords, (unsigned long)millis());
+        static UBaseType_t idle0StackMinWords = 0;
+        if (idle0Handle != nullptr) {
+            UBaseType_t idle0Watermark = uxTaskGetStackHighWaterMark(idle0Handle);
+            if (!idle0StackEverPrinted || (idle0Watermark < idle0StackMinWords)) {
+                idle0StackMinWords = idle0Watermark;
+                idle0StackEverPrinted = true;
+                Serial0.printf("[IDLE0] stack watermark %u words free (new low, loop-side sample, t=%lu ms) (G-01-10)\n",
+                               (unsigned)idle0Watermark, (unsigned long)millis());
+            }
         }
         BalloonOledStatus oled{};
         oled.e32Ready = E32LoRaModule().isReady();

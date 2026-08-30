@@ -30,6 +30,26 @@ static constexpr uint32_t CMD_TX_CHANNEL_QUIET_MS = 750;
 // that attempt like any other.
 static constexpr uint32_t CMD_TX_CHANNEL_HOLD_MAX_MS = 30000;
 
+// IMAGE_ACK (0x15) receipt queue (image-transfer rework). Receipts are
+// UNTRACKED: no ACK of the ACK, no retry — a lost receipt is recovered by
+// the later receipts that supersede it (window-complete → kind-complete)
+// and, worst case, by the balloon's duplicate-manifest COMPLETE-reply loop
+// on the base side. Depth 8 covers a 225-chunk full (15 window ACKs +
+// verdicts) comfortably across the settle gaps they drain through.
+static constexpr uint8_t  IMG_ACK_TX_QUEUE_DEPTH = 8;
+
+// A receipt older than this is dropped, never transmitted — the stream it
+// described has moved on and a fresher receipt either sits newer in the
+// queue or will be enqueued by the next window/finalize event.
+static constexpr uint32_t IMG_ACK_TX_MAX_AGE_MS  = 10000;
+
+// Queued receipt slot (image-transfer rework)
+struct QueuedImageAck {
+    bool used;
+    uint32_t enqueuedMs;
+    ImageAckBody body;
+};
+
 // Command transmission state
 enum class CommandState : uint8_t {
     IDLE = 0,
@@ -79,6 +99,14 @@ public:
     // Command transmission
     uint16_t sendCommand(CameraCommand cmd, const void* payload = nullptr, size_t payloadSize = 0);
     bool cancelCommand(uint16_t sequenceNumber);
+
+    // IMAGE_ACK receipt enqueue (image-transfer rework): dedupes by
+    // (imageId, imageKind, windowBase, kind-scoped?) — a newer bitmap for
+    // the same window replaces the queued one, because the newest receipt
+    // is the truthful one. Returns false only when the arguments are
+    // invalid (never blocks; a full queue drops the OLDEST receipt with a
+    // named log — receipts supersede).
+    bool enqueueImageAck(const ImageAckBody& body);
 
     // Processing (call from main loop)
     void process();
@@ -156,6 +184,9 @@ private:
     ResponseStatusData latestStatus;
     bool hasStatusData;
 
+    // IMAGE_ACK receipt queue (image-transfer rework)
+    QueuedImageAck imageAckQueue[IMG_ACK_TX_QUEUE_DEPTH];
+
     // Private methods
     TrackedCommand* findTrackedCommand(uint16_t sequenceNumber);
     TrackedCommand* findOldestCommand();
@@ -166,6 +197,11 @@ private:
     bool canTransmitNow(TrackedCommand* cmd, uint32_t now);
     bool transmitCommand(TrackedCommand* cmd);
     void retryCommand(TrackedCommand* cmd);
+    // IMAGE_ACK receipt drain (image-transfer rework): at most ONE receipt
+    // transmit per process() pass, gated on channelQuietForTx() — a receipt
+    // must never be transmitted into an inbound chunk stream the balloon is
+    // occupying (same G-01-7 discipline as tracked commands).
+    void processImageAckQueue();
     void handleResponse(const ResponsePacket& response);
     void resetReceiveState();
     bool validatePacket(const uint8_t* buffer, size_t length);

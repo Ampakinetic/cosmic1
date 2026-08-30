@@ -223,6 +223,9 @@ CommandResult CommandHandler::executeCommand(const CommandPacket& cmd) {
         case CameraCommand::SET_EVENT_THRESHOLDS:
             return handleSetEventThresholds(cmd);
 
+        case CameraCommand::IMAGE_FULL_REQUEST:
+            return handleImageFullRequest(cmd);
+
         default:
             result.responseType = ResponseType::NACK_INVALID;
             strncpy(result.message, "Unknown command", sizeof(result.message) - 1);
@@ -802,6 +805,59 @@ CommandResult CommandHandler::handleImageWindowRequest(const CommandPacket& cmd)
     return result;
 }
 
+CommandResult CommandHandler::handleImageFullRequest(const CommandPacket& cmd) {
+    CommandResult result{};
+
+    // PayloadImageFullRequest: imageId BE16 + 1 reserved byte — 3 bytes
+    if (cmd.payloadLength < 3) {
+        result.responseType = ResponseType::NACK_PARAM;
+        strncpy(result.message, "Missing full-request params", sizeof(result.message) - 1);
+        commandsFailed++;
+        return result;
+    }
+
+    // All validation and arming lives in ImageTx; this handler only maps the
+    // outcome onto the existing response machinery (same shape as the window
+    // request handler above)
+    FullRequestResult outcome = ImageTx().handleFullRequest(cmd.payload, cmd.payloadLength);
+
+    switch (outcome) {
+        case FullRequestResult::ACCEPTED:
+            result.success = true;
+            result.responseType = ResponseType::ACK;
+            // Echo the request payload so the base can confirm exactly what
+            // was armed
+            memcpy(result.responseData, cmd.payload, 3);
+            result.responseLength = 3;
+            commandsExecuted++;
+
+            if (DEBUG_COMMAND_HANDLER) {
+                Serial.println("CommandHandler: IMAGE_FULL_REQUEST accepted");
+            }
+            break;
+
+        case FullRequestResult::UNKNOWN:
+            result.responseType = ResponseType::NACK_INVALID;
+            strncpy(result.message, "Unknown image", sizeof(result.message) - 1);
+            commandsFailed++;
+            break;
+
+        case FullRequestResult::NOT_ARMABLE:
+            result.responseType = ResponseType::NACK_INVALID;
+            strncpy(result.message, "Full not armable", sizeof(result.message) - 1);
+            commandsFailed++;
+            break;
+
+        case FullRequestResult::BUSY:
+            result.responseType = ResponseType::NACK_BUSY;
+            strncpy(result.message, "Thumbnail push in flight", sizeof(result.message) - 1);
+            commandsFailed++;
+            break;
+    }
+
+    return result;
+}
+
 // ===========================
 // Response Sending
 // ===========================
@@ -869,12 +925,22 @@ void CommandHandler::processIncomingByte(uint8_t byte) {
     }
 
     // WR-12 fix (Phase 2): dispatch on the packet-type byte BEFORE any body
-    // arithmetic. The balloon accepts COMMAND frames (0x10) only — a
-    // CRC-valid RESPONSE, manifest, chunk, or beacon heard by the balloon
-    // must never execute as a command, nor be parsed with command arithmetic.
-    switch (receiveBuffer[2]) {
+    // arithmetic. The balloon accepts COMMAND frames (0x10) and IMAGE_ACK
+    // receipts (0x15) only — a CRC-valid RESPONSE, manifest, chunk, or
+    // beacon heard by the balloon must never execute as a command, nor be
+    // parsed with command arithmetic.
+    const uint8_t frameType = receiveBuffer[2];
+    size_t bodyOverhead;    // per-type block between header and body
+    size_t bodyLenBound;    // per-type bound the announced bodyLen must respect
+    switch (frameType) {
         case static_cast<uint8_t>(PACKET_TYPE_COMMAND):
-            break; // the only frame type this receiver handles
+            bodyOverhead = 5; // cmd/sequence/payloadLength block
+            bodyLenBound = CMD_MAX_PAYLOAD_SIZE;
+            break;
+        case static_cast<uint8_t>(PACKET_TYPE_IMAGE_ACK):
+            bodyOverhead = 0; // fixed-size receipt body
+            bodyLenBound = IMG_ACK_BODY_SIZE;
+            break;
         default:
             resetReceiveState(); // foreign or unknown type — discard the frame
             return;
@@ -883,10 +949,9 @@ void CommandHandler::processIncomingByte(uint8_t byte) {
     // Big-endian body length from header offsets 4-5 (payloadLength for commands)
     size_t bodyLen = (static_cast<size_t>(receiveBuffer[4]) << 8) | receiveBuffer[5];
 
-    // Commands: header + cmd/sequence/payloadLength block (5) + payload + CRC/end (4)
-    size_t expectedTotal = CMD_HEADER_SIZE + 5 + bodyLen + 4;
+    size_t expectedTotal = CMD_HEADER_SIZE + bodyOverhead + bodyLen + 4;
 
-    if (expectedTotal > sizeof(receiveBuffer) || bodyLen > CMD_MAX_PAYLOAD_SIZE) {
+    if (expectedTotal > sizeof(receiveBuffer) || bodyLen > bodyLenBound) {
         resetReceiveState(); // Bogus header — lengths exceed protocol bounds
         return;
     }
@@ -900,19 +965,33 @@ void CommandHandler::processIncomingByte(uint8_t byte) {
     if (receiveBuffer[expectedTotal - 2] == CMD_END_BYTE1 &&
         receiveBuffer[expectedTotal - 1] == CMD_END_BYTE2) {
         if (validatePacket(receiveBuffer, expectedTotal)) {
-            CommandPacket cmd;
-            if (CommandProtocol::deserializeCommand(receiveBuffer, expectedTotal, cmd)) {
-                // WR-02: a second complete frame inside the same drain must
-                // never silently overwrite the un-executed pending command.
-                // Refuse it with a named drop; the base's D-05 timeout +
-                // D-07 retry re-deliver the dropped frame as a fresh
-                // command (no NACK, no counter change, no timing change).
-                if (!hasCommand) {
-                    pendingCommand.packet = cmd;
-                    pendingCommand.receivedTime = millis();
-                    hasCommand = true;
+            if (frameType == static_cast<uint8_t>(PACKET_TYPE_COMMAND)) {
+                CommandPacket cmd;
+                if (CommandProtocol::deserializeCommand(receiveBuffer, expectedTotal, cmd)) {
+                    // WR-02: a second complete frame inside the same drain must
+                    // never silently overwrite the un-executed pending command.
+                    // Refuse it with a named drop; the base's D-05 timeout +
+                    // D-07 retry re-deliver the dropped frame as a fresh
+                    // command (no NACK, no counter change, no timing change).
+                    if (!hasCommand) {
+                        pendingCommand.packet = cmd;
+                        pendingCommand.receivedTime = millis();
+                        hasCommand = true;
+                    } else {
+                        Serial.printf("CommandHandler: second command frame dropped - handler busy (sender will retry)\n");
+                    }
+                }
+            } else {
+                // IMAGE_ACK receipt (0x15): executed inline, never through the
+                // hasCommand latch — a receipt is not a command, consumes no
+                // handler slot, and needs no ACK of its own. The deserializer
+                // is the edge validation (exact length, kind enum, status
+                // bounds) before the transfer manager sees the body.
+                ImageAckPacket ack;
+                if (CommandProtocol::deserializeImageAck(receiveBuffer, expectedTotal, ack)) {
+                    ImageTx().handleImageAck(ack.body);
                 } else {
-                    Serial.printf("CommandHandler: second command frame dropped - handler busy (sender will retry)\n");
+                    Serial.printf("CommandHandler: malformed IMAGE_ACK dropped\n");
                 }
             }
         }

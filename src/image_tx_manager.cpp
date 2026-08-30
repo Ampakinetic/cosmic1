@@ -41,9 +41,6 @@ ImageTxManager::ImageTxManager()
     , firstBeaconLogged(false)
     , beaconsSent(0)
     , lastBeaconOk(false)
-    , lastInboundWindowRequestMs(0)
-    , reannounceHoldLogged(false)
-    , inboundWindowRequestSeen(false)
     , memDiagLastMs(0)
     , memDiagMinHeap(0)
     , memDiagMinStackHw(0)
@@ -98,21 +95,6 @@ bool ImageTxManager::begin(E32LoRa* lora) {
 
     this->lora = lora;
     initialized = true;
-
-    // G-01-7 lever 1 (01-21): clean receipt-evidence state at boot — no
-    // inbound request has ever been seen and no hold episode is open. Since
-    // the 01-25 receipt-ever flag the zero stamp is inert (the hold gate
-    // requires inboundWindowRequestSeen), so boot windows carry no phantom
-    // quiet floor from this gate; re-announce spacing at boot comes from the
-    // IMG_FULL_REANNOUNCE_IDLE_MS cadence alone.
-    lastInboundWindowRequestMs = 0;
-    reannounceHoldLogged = false;
-
-    // G-01-11 / WINDOWS 16 fix (01-25): the receipt-ever flag resets at
-    // begin() too, so the busy-hold gate cannot fire on the boot-epoch zero
-    // stamp after a re-begin. A hold episode requires genuine inbound window
-    // traffic first.
-    inboundWindowRequestSeen = false;
 
     // G-01-10 D1 fix, lever 1 (01-25) per
     // .planning/debug/d1-crash-regression-push-start.md §3: boot-time
@@ -219,7 +201,7 @@ void ImageTxManager::process() {
     // with NO preceding [LOOP] line = loopTask never stalled (the session-8
     // CPU0-side signature); [LOOP] lines before a reset = the stall caught
     // the loop too (a different, loop-visible class). One line per episode
-    // (the reannounceHoldLogged convention), re-armed on a normal pass.
+    // (log-once latch), re-armed on a normal pass.
     // REMOVAL CONDITION: strips WITH the [MEM] instrumentation after G-01-10
     // closes on bench evidence.
     if (lastProcessPassMs != 0) {
@@ -715,13 +697,18 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
 // Entry construction for boot-rescanned records — the PERSISTED branch of
 // enqueueCapture replayed from a validated META record instead of live
 // Camera() buffers: null buffers (the card is the byte source), META-derived
-// lengths/CRCs/chunk counts, state PUSH_THUMB_MANIFEST when the record
-// carries a thumbnail and ANNOUNCE_FULL/THUMB_PUSHED when it does not
-// (identical armability arithmetic — fullTransferArmable's file-backed rule).
-// Delivery bits ride the record as classification truth only: a HALF-delivered
-// record (e.g. thumb pushed before the crash, full never pulled) is admitted
-// whole — the EXISTING machinery re-announces both manifests and the base
-// re-pulls idempotently; no per-kind resume cursors exist on the wire.
+// lengths/CRCs/chunk counts.
+// Image-transfer rework (the balloon6.log crash-loop fix): the resume honors
+// the persisted receipt state —
+//   - thumbDelivered (SD_ST_DELIV_THUMB, set by handleImageAck's
+//     KIND_COMPLETE verdict): the record enters at THUMB_PUSHED and
+//     announces NOTHING — the base provably holds the verified thumbnail,
+//     so re-announcing would only restart its (kept) row for nothing;
+//   - thumb undelivered: PUSH_THUMB_MANIFEST as before, but the record's
+//     thumbAcked bitmap (base-confirmed chunks, persisted per receipt)
+//     makes the resumed push skip past everything the base already holds;
+//   - no thumbnail: ANNOUNCE_FULL/THUMB_PUSHED unchanged (its only
+//     discovery path).
 void ImageTxManager::admitRescannedFillEntry(ImageTxEntry& entry, const BalloonResumedRecord& rec) {
     entry = ImageTxEntry{};   // zero-init: null buffers, clean streaks/budgets
     entry.used = true;
@@ -736,11 +723,13 @@ void ImageTxManager::admitRescannedFillEntry(ImageTxEntry& entry, const BalloonR
     entry.fullLength = rec.fullLength;
     entry.fullCrc32 = rec.fullCrc32;
     entry.fullTotalChunks = chunksForSize(rec.fullLength);
+    entry.thumbAcked = rec.thumbAcked;   // base-confirmed bits survive the reboot
     if (rec.thumbLength > 0) {
         entry.thumbLength = rec.thumbLength;
         entry.thumbCrc32 = rec.thumbCrc32;
         entry.thumbTotalChunks = chunksForSize(rec.thumbLength);
-        entry.state = ImageTxEntryState::PUSH_THUMB_MANIFEST;
+        entry.state = rec.thumbDelivered ? ImageTxEntryState::THUMB_PUSHED
+                                         : ImageTxEntryState::PUSH_THUMB_MANIFEST;
     } else {
         // No thumbnail in the record (persist-time thumbnail failure, whose
         // vacuous thumb obligation was already retired in the META) — mirror
@@ -924,42 +913,10 @@ void ImageTxManager::pushPending() {
         return; // one transmit per pass
     }
 
-    // G-01-7 burst full-delivery, balloon lever 1 (01-21): known-busy hold on
-    // the re-announce drop-clock. An inbound window request younger than
-    // IMG_FULL_REANNOUNCE_BUSY_MS — any kind, any verdict, including the
-    // unknown/evicted rejects — means the base is still working this burst;
-    // the re-announce does not even look for a candidate this pass. The hold
-    // consumes NOTHING: no attempt, no idle-period advance, no drop (the
-    // 01-17 IMG_FULL_REANNOUNCE_IDLE_MS cadence and MAX bound resume
-    // unchanged 15 s after the last inbound request). One named log line per
-    // hold episode (reannounceHoldLogged latch, cleared whenever a re-announce
-    // actually transmits).
-    // G-01-11 / WINDOWS 16 fix (01-25): inboundWindowRequestSeen guards the
-    // boot-epoch zero stamp — the hold can engage only after a genuine
-    // inbound window request, so the :504-style phantom episode is impossible
-    // and the hold line below stays a truthful G-01-7 discriminator.
-    if (inboundWindowRequestSeen &&
-        (millis() - lastInboundWindowRequestMs) < IMG_FULL_REANNOUNCE_BUSY_MS) {
-        if (!reannounceHoldLogged) {
-            reannounceHoldLogged = true;
-            Serial.println("ImageTx: re-announce held - inbound window traffic active");
-        }
-        return;
-    }
-
-    // G-01-9 defect C (01-17): the channel's natural idle slot — no push
-    // work, no armed window. Re-announce an ANNOUNCED full whose FULL window
-    // never armed (receipt never observed) and which has been idle past
-    // IMG_FULL_REANNOUNCE_IDLE_MS, as this pass's single transmit. The
-    // re-announce thus NEVER competes with push work or window service, and
-    // the beacon early-return in process() still outranks it (PRI-01
-    // untouched); the first FULL window arm permanently stops the mechanism
-    // (fullWindowEverArmed), confining any duplicate manifests to the
-    // pre-first-arm phase where the base-side restart is benign (IN-08).
-    ImageTxEntry* lost = findReannounceCandidate();
-    if (lost != nullptr) {
-        reannounceFullManifest(*lost);
-    }
+    // Image-transfer rework: the idle-slot FULL re-announce (G-01-9 defect C)
+    // is REMOVED — FULL is request-driven (IMAGE_FULL_REQUEST) and the base
+    // re-requests what it wants; the balloon never volunteers manifests in
+    // idle slots anymore.
 }
 
 bool ImageTxManager::pushThumbManifest(ImageTxEntry& entry) {
@@ -1026,6 +983,26 @@ bool ImageTxManager::pushThumbManifest(ImageTxEntry& entry) {
 }
 
 bool ImageTxManager::pushThumbChunk(ImageTxEntry& entry) {
+    // Base-confirmed skip (image-transfer rework): leading chunks the base's
+    // IMAGE_ACK receipts already confirmed never re-transmit. This is what
+    // makes a reboot-resumed push converge in one pass: the base's resume
+    // prefix receipts fill thumbAcked, and this loop jumps the cursor past
+    // them (a full-kind COMPLETE verdict sets every bit, so the very next
+    // pass lands on the done-check below). u64 covers the thumbnail cap;
+    // bounds hold by construction (thumbTotalChunks <= 37 < 64).
+    {
+        uint8_t skipped = 0;
+        while (entry.nextThumbChunk < entry.thumbTotalChunks &&
+               entry.nextThumbChunk < 64 &&
+               ((entry.thumbAcked >> entry.nextThumbChunk) & 1ULL)) {
+            entry.nextThumbChunk++;
+            skipped++;
+        }
+        if (skipped > 0) {
+            Serial.printf("ImageTx: image %u resumed push - skipping %u base-confirmed chunk(s)\n",
+                          static_cast<unsigned>(entry.imageId), skipped);
+        }
+    }
     if (entry.nextThumbChunk >= entry.thumbTotalChunks) {
         entry.state = completedThumbState(entry);
         return true;
@@ -1104,27 +1081,11 @@ bool ImageTxManager::pushThumbChunk(ImageTxEntry& entry) {
     if (ok) {
         entry.thumbChunkFailStreak = 0;
         entry.nextThumbChunk++;
-        // 02.5-02 Task 1 (STORE-02): the thumbnail DELIVERY moment for a
-        // file-backed entry — this successful transmit was the push's final
-        // chunk (nextThumbChunk just reached thumbTotalChunks), the same
-        // success-gated moment completedThumbState is consulted below. The
-        // META delivery bit persists it, so a later boot's rescan does not
-        // re-announce a delivered thumbnail. Volatile-fallback entries have
-        // no record — they never touch the store. WR-08 symmetry: a final
-        // chunk skipped after the bound takes the else branch and never marks
-        // delivered — bytes never offered are never delivered.
-        if (!entry.volatileFallback &&
-            entry.nextThumbChunk >= entry.thumbTotalChunks) {
-            if (!BalloonSdStoreTx().markDelivered(entry.imageId, ImageKind::THUMBNAIL)) {
-                // Named, non-fatal (T-02.5-07): the wire work finishes; the
-                // consequence — a later boot may re-announce this already-
-                // delivered thumbnail — is benign, the base re-pulls
-                // idempotently.
-                Serial.printf("SdStore: delivery flag update failed for image %u kind %u\n",
-                              static_cast<unsigned>(entry.imageId),
-                              static_cast<unsigned>(ImageKind::THUMBNAIL));
-            }
-        }
+        // Image-transfer rework: the DELIVERY moment is no longer "the balloon
+        // transmitted it" — it is the base's ACK-confirmed verdict
+        // (handleImageAck KIND_COMPLETE / WINDOW_COMPLETE receipts, persisted
+        // via META). A TX-success mark here would un-anchor the receipt state:
+        // TX success says nothing about what the base actually holds.
     } else {
         entry.thumbChunkFailStreak++;
         if (entry.thumbChunkFailStreak >= IMG_CHUNK_TX_RETRY_MAX) {
@@ -1159,12 +1120,15 @@ bool ImageTxManager::pushThumbChunk(ImageTxEntry& entry) {
     return ok;
 }
 
-// Where an entry lands once its thumbnail push completes: armable fulls
-// proceed to the one-time FULL_IMAGE announcement (D-17 ordering), everything
-// else parks until eviction.
+// Where an entry lands once its thumbnail push completes (image-transfer
+// rework): ALWAYS THUMB_PUSHED — the thumbnail is the delivery, not the
+// prelude. FULL never announces automatically; it announces only when the
+// base explicitly asks via IMAGE_FULL_REQUEST (handleFullRequest sets
+// ANNOUNCE_FULL on the parked entry). fullTransferArmable is therefore no
+// longer consulted here.
 ImageTxEntryState ImageTxManager::completedThumbState(const ImageTxEntry& entry) const {
-    return fullTransferArmable(entry) ? ImageTxEntryState::ANNOUNCE_FULL
-                                      : ImageTxEntryState::THUMB_PUSHED;
+    (void)entry;
+    return ImageTxEntryState::THUMB_PUSHED;
 }
 
 // ===========================
@@ -1244,93 +1208,6 @@ bool ImageTxManager::announceFullManifest(ImageTxEntry& entry) {
     return ok;
 }
 
-// G-01-9 defect C (01-17): the earliest (lowest enqueueSeq) ANNOUNCED full
-// that has NEVER had a FULL window armed (the receipt signal) and has been
-// idle past IMG_FULL_REANNOUNCE_IDLE_MS — the air-lost-manifest class the
-// TX-verdict-gated 01-14 bound structurally cannot see (balloon5.log:274:
-// TX-success accounting, zero base receipts, silent full loss). A thumb
-// heal alone never disqualifies the entry (image-15 class).
-ImageTxEntry* ImageTxManager::findReannounceCandidate() {
-    ImageTxEntry* best = nullptr;
-    for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
-        // Full-bytes truth (STORE-03): a file-backed entry's full lives on
-        // the card — its persist-derived length is the truth, not a buffer.
-        const bool haveFullBytes = entries[i].volatileFallback
-            ? (entries[i].fullBuffer != nullptr)
-            : (entries[i].fullLength > 0);
-        if (!entries[i].used ||
-            entries[i].state != ImageTxEntryState::ANNOUNCED ||
-            !haveFullBytes ||
-            entries[i].fullWindowEverArmed) {
-            continue;
-        }
-        if ((millis() - entries[i].lastActivityMs) < IMG_FULL_REANNOUNCE_IDLE_MS) {
-            continue;
-        }
-        if (best == nullptr || entries[i].enqueueSeq < best->enqueueSeq) {
-            best = &entries[i];
-        }
-    }
-    return best;
-}
-
-// Bounded idle re-announce (G-01-9 defect C / PRI-03): retransmits the FULL
-// manifest for an announced-but-never-pulled full, via the SAME body
-// construction as the one-shot announce. Each transmit attempt is one
-// bounded attempt AND one idle period (reannounceAttempts and
-// lastActivityMs advance on every verdict — air loss is the class being
-// treated, so a TX-successful re-announce that still draws no window must
-// consume budget). At IMG_FULL_REANNOUNCE_MAX the full is dropped with a
-// named log — park-and-free exactly like the announce-bound branch in
-// announceFullManifest (thumbBuffer kept so THUMBNAIL window heals keep
-// working on the parked entry).
-void ImageTxManager::reannounceFullManifest(ImageTxEntry& entry) {
-    // G-01-7 lever 1 (01-21): a re-announce actually running closes any open
-    // hold episode — the next busy-hold (if inbound window traffic resumes)
-    // prints its own named line.
-    reannounceHoldLogged = false;
-
-    ImageManifestBody body = fillFullManifestBody(entry);
-    ImageManifestPacket pkt = createManifestPacket(body); // factory owns the 0x12 type byte
-
-    uint8_t buffer[CMD_MAX_PACKET_SIZE];
-    size_t length = 0;
-    bool ok = CommandProtocol::serializeManifest(pkt, buffer, length) && lora->transmit(buffer, length);
-
-    entry.reannounceAttempts++;
-    if (ok) {
-        Serial.printf("ImageTx: FULL manifest(image %u, %u B, %u chunks) re-announced (%u/%u) - no window armed since announce\n",
-                     entry.imageId,
-                     static_cast<unsigned>(entry.fullLength),
-                     static_cast<unsigned>(entry.fullTotalChunks),
-                     static_cast<unsigned>(entry.reannounceAttempts),
-                     static_cast<unsigned>(IMG_FULL_REANNOUNCE_MAX));
-    } else {
-        Serial.printf("ImageTx: FULL manifest(image %u, %u B, %u chunks) re-announce FAILED (%u/%u) - no window armed since announce\n",
-                     entry.imageId,
-                     static_cast<unsigned>(entry.fullLength),
-                     static_cast<unsigned>(entry.fullTotalChunks),
-                     static_cast<unsigned>(entry.reannounceAttempts),
-                     static_cast<unsigned>(IMG_FULL_REANNOUNCE_MAX));
-    }
-    if (entry.reannounceAttempts >= IMG_FULL_REANNOUNCE_MAX) {
-        Serial.printf("ImageTx: image %u full dropped - no FULL window armed after %u re-announces\n",
-                     entry.imageId,
-                     static_cast<unsigned>(IMG_FULL_REANNOUNCE_MAX));
-        // Park-and-free at the bound (PRI-03 honest degradation, mirroring
-        // the announce-bound branch): the base degrades to thumbnail-only
-        // for this capture — bounded, logged, never silent. thumbBuffer
-        // stays owned so THUMBNAIL window heals keep working.
-        free(entry.fullBuffer);
-        entry.fullBuffer = nullptr;
-        entry.fullLength = 0;
-        entry.fullCrc32 = 0;
-        entry.fullTotalChunks = 0;
-        entry.state = ImageTxEntryState::THUMB_PUSHED;
-    }
-    entry.lastActivityMs = millis();
-}
-
 // ===========================
 // Window Servicing (D-21 pull half, Pitfall 5)
 // ===========================
@@ -1349,11 +1226,9 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     // never used for content decisions (T-01-21-01); the per-entry receipt
     // stamp further below is reachable only after full untrusted-input
     // validation (kind enum + entry match + per-kind range bounds — WR-02).
-    lastInboundWindowRequestMs = millis();
-    // G-01-11 / WINDOWS 16 (01-25): first genuine receipt arms the busy-hold
-    // gate — same trust-boundary position as the stamp (before kind
-    // validation, write-only liveness data, never a content decision).
-    inboundWindowRequestSeen = true;
+    // Image-transfer rework: the inbound-window-stamp/busy-hold pair fed the
+    // (now removed) idle re-announce; lastWindowRequestMs below keeps its
+    // eviction-evidence duty (G-01-7 lever 1), so only that stamp remains.
 
     // PayloadImageWindowRequest: imageId BE16, imageKind u8, startChunk BE16,
     // count u8 — 6 bytes (Pitfall 9: decode via the big-endian helpers, never
@@ -1441,19 +1316,9 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     // (01-REVIEW): the stamp sits AFTER full validation — in its original
     // pre-validation position a CRC-valid but malformed request (count 0 /
     // out-of-bounds startChunk) stamped receipt evidence onto an entry,
-    // pinning it in the protected eviction class and re-arming the bounded
-    // re-announce budget indefinitely. Stamp it, and re-arm the bounded
-    // re-announce budget: a manifest the base is demonstrably still working
-    // must not age out at the IMG_FULL_REANNOUNCE_MAX bound while the base
-    // keeps asking for the entry (session-6 images 25/26 — base held their
-    // manifests 3x/4x while the bound expired, balloon11.log:553/:575).
+    // pinning it in the protected eviction class indefinitely. The stamp's
+    // standing duty is eviction evidence only (G-01-7 class ranking).
     target->lastWindowRequestMs = millis();
-    if (target->state == ImageTxEntryState::ANNOUNCED &&
-        !target->fullWindowEverArmed && target->reannounceAttempts > 0) {
-        target->reannounceAttempts = 0;
-        Serial.printf("ImageTx: re-announce budget re-armed - window request received for image %u\n",
-                     imageId);
-    }
 
     if (!thumbWindow) {
         // FIFO pull order (D-19): the base asking for this ID means it has
@@ -1506,14 +1371,9 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
     target->windowArmed = true;
     target->windowKind = imageKind;
     target->windowEverArmed = true;
-    // G-01-9 defect C (01-17): a FULL window arm is the receipt signal that
-    // permanently stops the FULL-manifest re-announce — set ONLY for
-    // non-thumb windows. A THUMBNAIL heal arm must NOT stop it: image 15's
-    // exact shape is thumb-healed-COMPLETE with the FULL manifest air-lost,
-    // and that entry still needs its full re-announced.
-    if (!thumbWindow) {
-        target->fullWindowEverArmed = true;
-    }
+    // Image-transfer rework: the G-01-9 fullWindowEverArmed receipt latch is
+    // removed with the idle re-announce it stopped. windowEverArmed above
+    // keeps its eviction-evidence duty.
     target->windowStart = startChunk;
     target->windowCount = count;
     target->windowNextIndex = startChunk;
@@ -1526,6 +1386,214 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
                      imageId, startChunk, static_cast<unsigned>(startChunk) + count - 1);
     }
     return WindowRequestResult::ARMED;
+}
+
+bool ImageTxManager::handleImageAck(const ImageAckBody& ack) {
+    // Receipt dispatch (image-transfer rework): find the entry by id — ids
+    // are unique per entry (AutoCap monotonic sequence), so the kind byte
+    // only names which of the entry's two kinds the receipt covers.
+    ImageTxEntry* entry = nullptr;
+    for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+        if (entries[i].used && entries[i].imageId == ack.imageId) {
+            entry = &entries[i];
+            break;
+        }
+    }
+    if (entry == nullptr) {
+        Serial.printf("ImageTx: image ACK for unknown image %u kind %u ignored\n",
+                      static_cast<unsigned>(ack.imageId), ack.imageKind);
+        return false;   // idempotent: nothing to merge into
+    }
+
+    // RX events never consume the TX budget: lastActivityMs is untouched —
+    // the preempt/stall clocks measure the balloon's own transmit cadence.
+    const bool thumbReceipt =
+        (ack.imageKind == static_cast<uint8_t>(ImageKind::THUMBNAIL));
+    const bool kindScoped =
+        (ack.status >= static_cast<uint8_t>(ImageAckStatus::KIND_COMPLETE_CRC_OK));
+
+    if (!kindScoped) {
+        // Window-scoped receipt: merge the bitmap into the entry's
+        // thumbAcked. FULL receipts are log-only — FULL is base-pulled (the
+        // base re-requests exactly what it wants), so the balloon keeps no
+        // full bitmap; the thumbnail is balloon-PUSHED, so this bitmap is
+        // the push-skip + boot-resume truth.
+        if (thumbReceipt) {
+            uint8_t newlySet = 0;
+            for (uint8_t b = 0; b < 32; b++) {
+                if ((ack.bitmap & (1UL << b)) == 0) {
+                    continue;
+                }
+                const uint16_t chunk = ack.windowBase + b;
+                if (chunk >= entry->thumbTotalChunks || chunk >= 64) {
+                    continue;   // bounds: thumbnail cap and bitmap width
+                }
+                const uint64_t bit = (1ULL << chunk);
+                if ((entry->thumbAcked & bit) == 0) {
+                    entry->thumbAcked |= bit;
+                    newlySet++;
+                }
+            }
+            if (newlySet > 0) {
+                // Persist at most once per receipt (≤3 windows per thumb) —
+                // never inside the per-chunk loop. Volatile-fallback entries
+                // have no record; their merge stays RAM-only.
+                if (!entry->volatileFallback &&
+                    !BalloonSdStoreTx().persistThumbAcked(entry->imageId, entry->thumbAcked)) {
+                    Serial.printf("SdStore: thumbAcked persist failed for image %u (receipt kept in RAM)\n",
+                                  static_cast<unsigned>(entry->imageId));
+                }
+                Serial.printf("ImageTx: image %u thumbnail ACK(id=%u win=%u bm=%08X) - %u chunk(s) base-confirmed\n",
+                              static_cast<unsigned>(entry->imageId),
+                              static_cast<unsigned>(ack.imageId),
+                              static_cast<unsigned>(ack.windowBase),
+                              (unsigned)ack.bitmap, newlySet);
+            }
+        } else {
+            Serial.printf("ImageTx: image %u FULL window receipt (win=%u bm=%08X st=%u)\n",
+                          static_cast<unsigned>(entry->imageId),
+                          static_cast<unsigned>(ack.windowBase),
+                          (unsigned)ack.bitmap, ack.status);
+        }
+        return true;
+    }
+
+    // Kind-scoped verdicts
+    if (ack.status == static_cast<uint8_t>(ImageAckStatus::KIND_COMPLETE_CRC_OK)) {
+        if (thumbReceipt) {
+            // The verdict covers every chunk: fold a full mask into the
+            // bitmap so an in-flight push terminates through the skip loop
+            // on its next pass, and persist the delivery bit.
+            for (uint16_t c = 0; c < entry->thumbTotalChunks && c < 64; c++) {
+                entry->thumbAcked |= (1ULL << c);
+            }
+            if (!entry->volatileFallback) {
+                BalloonSdStoreTx().persistThumbAcked(entry->imageId, entry->thumbAcked);
+                BalloonSdStoreTx().markDelivered(entry->imageId, ImageKind::THUMBNAIL);
+            }
+            Serial.printf("ImageTx: image %u thumbnail base-confirmed COMPLETE - delivery persisted\n",
+                          static_cast<unsigned>(entry->imageId));
+        } else {
+            if (!entry->volatileFallback) {
+                BalloonSdStoreTx().markDelivered(entry->imageId, ImageKind::FULL_IMAGE);
+            }
+            Serial.printf("SdStore: image %u fully delivered (base-confirmed) - RAM index slot released (files kept on card)\n",
+                          static_cast<unsigned>(entry->imageId));
+            freeEntry(*entry);
+        }
+        return true;
+    }
+
+    // KIND_FAILED_CRC: the base held the bytes up to its verify and rejected
+    // them — the receipt state for this kind is invalid.
+    if (thumbReceipt) {
+        entry->thumbAcked = 0;
+        if (!entry->volatileFallback) {
+            BalloonSdStoreTx().persistThumbAcked(entry->imageId, 0);
+        }
+        Serial.printf("ImageTx: image %u thumbnail CRC rejected by base - receipt state cleared (heal re-pushes)\n",
+                      static_cast<unsigned>(entry->imageId));
+    } else {
+        Serial.printf("ImageTx: image %u FULL CRC rejected by base - entry kept (base re-pulls)\n",
+                      static_cast<unsigned>(entry->imageId));
+    }
+    return true;
+}
+
+FullRequestResult ImageTxManager::handleFullRequest(const uint8_t* payload, size_t len) {
+    if (!initialized || payload == nullptr || len < 2) {
+        return FullRequestResult::UNKNOWN;
+    }
+    // PayloadImageFullRequest shape: imageId BE16 + 1 reserved byte (send 0,
+    // ignored on receipt — decode via the big-endian helper, Pitfall 9)
+    const uint16_t imageId = CommandProtocol::readUint16(payload);
+
+    // RAM entry first
+    ImageTxEntry* entry = nullptr;
+    for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+        if (entries[i].used && entries[i].imageId == imageId) {
+            entry = &entries[i];
+            break;
+        }
+    }
+
+    if (entry != nullptr) {
+        // A mid-push entry answers BUSY: the thumbnail obligation runs first
+        // (thumb-first is the delivery contract); the base's request retry
+        // re-arms once the push drains.
+        if (entry->state == ImageTxEntryState::PUSH_THUMB_MANIFEST ||
+            entry->state == ImageTxEntryState::PUSH_THUMB_CHUNKS) {
+            Serial.printf("ImageTx: FULL request for image %u deferred - thumbnail push in flight\n",
+                          static_cast<unsigned>(imageId));
+            return FullRequestResult::BUSY;
+        }
+        // THUMB_PUSHED (the normal park), ANNOUNCE_FULL (a request already
+        // armed — idempotent re-arm), ANNOUNCED/SERVED (base lost its row —
+        // re-announce; mirrors the tail-heal re-open semantics): arm the
+        // announce with a fresh manifest budget. Armability is checked for
+        // every state — a parked oversize entry refuses honestly.
+        if (!fullTransferArmable(*entry)) {
+            Serial.printf("ImageTx: FULL request for image %u refused - full not armable (no bytes or above cap)\n",
+                          static_cast<unsigned>(imageId));
+            return FullRequestResult::NOT_ARMABLE;
+        }
+        entry->manifestAttempts = 0;   // CR-02/WR-01: a fresh request starts a fresh announce budget
+        entry->state = ImageTxEntryState::ANNOUNCE_FULL;
+        entry->lastActivityMs = millis();
+        Serial.printf("ImageTx: FULL request for image %u accepted - announcing on next pass\n",
+                      static_cast<unsigned>(imageId));
+        return FullRequestResult::ACCEPTED;
+    }
+
+    // No RAM entry (TTL-evicted / fresh boot): card re-admit through the
+    // SAME validated fill the boot rescan uses — the card archive is the
+    // truth, so a request for any archived image works far beyond the
+    // depth-5 RAM queue's horizon.
+    BalloonResumedRecord rec{};
+    if (!BalloonSdStoreTx().loadResumedRecord(imageId, rec)) {
+        Serial.printf("ImageTx: FULL request for image %u refused - no record on card\n",
+                      static_cast<unsigned>(imageId));
+        return FullRequestResult::UNKNOWN;
+    }
+
+    // An outstanding thumbnail obligation answers BUSY with the record
+    // admitted: the push starts now, and the base's retry lands after it.
+    const bool thumbOwed = (rec.thumbLength > 0) && !rec.thumbDelivered;
+    if (rec.fullLength == 0 || rec.fullLength > IMG_MAX_IMAGE_SIZE) {
+        Serial.printf("ImageTx: FULL request for image %u refused - card full bytes %u B not armable\n",
+                      static_cast<unsigned>(imageId),
+                      static_cast<unsigned>(rec.fullLength));
+        return FullRequestResult::NOT_ARMABLE;
+    }
+
+    ImageTxEntry* slot = nullptr;
+    for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+        if (!entries[i].used) {
+            slot = &entries[i];
+            break;
+        }
+    }
+    if (slot == nullptr) {
+        Serial.printf("ImageTx: FULL request for image %u deferred - queue full (depth %u)\n",
+                      static_cast<unsigned>(imageId),
+                      static_cast<unsigned>(QUEUE_DEPTH));
+        return FullRequestResult::BUSY;   // TTL drains; the base retries
+    }
+    admitRescannedFillEntry(*slot, rec);
+    slot->manifestAttempts = 0;
+    slot->state = ImageTxEntryState::ANNOUNCE_FULL;   // the request IS the announce trigger
+    if (thumbOwed) {
+        // The record's thumb bit was cleared (or never set): admitRescannedFillEntry
+        // put a thumb obligation in the META-derived state — restore it so the
+        // push runs BEFORE the requested announce (thumb-first contract).
+        slot->state = ImageTxEntryState::PUSH_THUMB_MANIFEST;
+        Serial.printf("ImageTx: FULL request for image %u deferred - card thumb undelivered; push admitted first, retry after\n",
+                      static_cast<unsigned>(imageId));
+        return FullRequestResult::BUSY;
+    }
+    Serial.printf("ImageTx: FULL request for image %u accepted from card - announcing on next pass\n",
+                  static_cast<unsigned>(imageId));
+    return FullRequestResult::ACCEPTED;
 }
 
 bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
@@ -1555,7 +1623,8 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
     // default, no PSRAM image copy exists) reads the armed kind's card file
     // at chunkIndex * IMG_CHUNK_PAYLOAD_SIZE into a stack buffer; a volatile-
     // fallback entry slices the selected PSRAM buffer as before (offset math
-    // identical for both kinds: chunk index * 200, tail-clamped by the
+    // identical for both kinds: chunk index * IMG_CHUNK_PAYLOAD_SIZE (223),
+    // tail-clamped by the
     // selected byte length; bounds hold by construction: windowNextIndex <
     // windowStart + windowCount <= the armed kind's totalChunks). Only the
     // byte SOURCE changes — the settle gate above, WR-08 retry/skip, and the
@@ -1680,33 +1749,15 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
         if (!finalChunkSkipped &&
             entry.windowKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) &&
             static_cast<uint32_t>(entry.windowStart) + entry.windowCount >= entry.fullTotalChunks) {
+            // Image-transfer rework: the SERVED transition itself is kept
+            // (tail-heal semantics unchanged — a tail re-request re-opens
+            // service), but the delivery mark + RAM-slot release that used to
+            // ride TX success are GONE. Delivery is now the base's
+            // ACK-confirmed verdict (handleImageAck KIND_COMPLETE_CRC_OK),
+            // which persists the META bit and frees the slot only when the
+            // base proved it holds verified bytes. The entry survives SERVED
+            // so a later FULL request can still find it.
             entry.state = ImageTxEntryState::SERVED;
-            // 02.5-02 Task 1 (STORE-02): the full-image DELIVERY moment — the
-            // WR-08 guard above precedes it, so a final chunk skipped after
-            // the bound never marks delivered (bytes never offered are never
-            // delivered; finalChunkSkipped keeps the entry at ANNOUNCED).
-            // Persisting the bit here is what lets a later boot's rescan
-            // retire the re-announce obligation for delivered history.
-            // Volatile-fallback entries have no record — they never touch the
-            // store; their bookkeeping stays TTL-only.
-            if (!entry.volatileFallback) {
-                if (BalloonSdStoreTx().markDelivered(entry.imageId, ImageKind::FULL_IMAGE)) {
-                    // RAM-slot release: with the full delivery moment provably
-                    // persisted (the thumbnail moment ran at push completion,
-                    // which precedes full service by construction), the
-                    // entry's index duty ends — the RAM index holds only
-                    // undelivered work. The card files remain (keep-everything
-                    // archive). A failed flag write above keeps the entry for
-                    // the TTL sweep instead.
-                    Serial.printf("SdStore: image %u fully delivered - RAM index slot released (files kept on card)\n",
-                                  static_cast<unsigned>(entry.imageId));
-                    freeEntry(entry);
-                } else {
-                    Serial.printf("SdStore: delivery flag update failed for image %u kind %u\n",
-                                  static_cast<unsigned>(entry.imageId),
-                                  static_cast<unsigned>(ImageKind::FULL_IMAGE));
-                }
-            }
         }
     }
     return ok;
@@ -1907,11 +1958,10 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     entry.thumbCrc32 = 0;
     entry.thumbTotalChunks = 0;
     entry.nextThumbChunk = 0;
+    entry.thumbAcked = 0;             // image-transfer rework: a recycled slot carries no base-confirmed bits
     entry.manifestAttempts = 0;   // CR-02/WR-01: a recycled slot starts with a clean manifest budget
     entry.thumbChunkFailStreak = 0;   // WR-08: a recycled slot starts with clean fail streaks
     entry.windowChunkFailStreak = 0;
-    entry.fullWindowEverArmed = false;   // G-01-9 defect C: a recycled slot re-opens the re-announce gate
-    entry.reannounceAttempts = 0;
     entry.lastWindowRequestMs = 0;   // G-01-7 lever 1 (01-21): a recycled slot starts with no receipt evidence
     entry.windowArmed = false;
     entry.windowKind = 0;

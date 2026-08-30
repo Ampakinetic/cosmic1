@@ -119,8 +119,12 @@ enum class PersistOutcome : uint8_t {
 // never mounts the balloon card in v1), so the layout is packed
 // little-endian native. The plan spec's "32 bytes" was arithmetically
 // impossible — the named fields alone total 33 bytes (2+2+1+1 + 5x4 + 7) —
-// so the record pins at 36 bytes: all specified fields plus the specified
-// 3 pad bytes (02.5-01 execution deviation, documented in the plan SUMMARY).
+// so the record pinned at 36 bytes (02.5-01 execution deviation). The
+// image-transfer rework appended thumbAcked (image-transfer rework Task 5):
+// 33 + 8 field bytes + the 3 pad bytes = 44. A pre-rework 36-byte record
+// reads as SHORT on this firmware, fails validation, and is classified torn
+// exactly once — the base's duplicate-manifest COMPLETE-reply loop heals the
+// re-admission; SDCLEAR on bench cards removes the migration entirely.
 struct __attribute__((packed)) BalloonCaptureRecord {
     uint16_t magic;          // SD_STORE_META_MAGIC — validated on read
     uint16_t imageId;        // AutoCap-assigned id (matches the file names)
@@ -142,9 +146,14 @@ struct __attribute__((packed)) BalloonCaptureRecord {
     int8_t   exposure;
     uint8_t  wbMode;
     uint8_t  pad[3];         // reserved (0) — keeps the record word-multiple
+    uint64_t thumbAcked;     // IMAGE_ACK bitmap (image-transfer rework): bit i
+                             // set = thumbnail chunk i base-confirmed persisted
+                             // on the base's card. persistThumbAcked updates it
+                             // in place; a boot resume skips past these bits
+                             // instead of re-pushing delivered thumbnail bytes.
 };
-static_assert(sizeof(BalloonCaptureRecord) == 36,
-              "BalloonCaptureRecord must stay 36 bytes (33 field bytes + 3 pad) — "
+static_assert(sizeof(BalloonCaptureRecord) == 44,
+              "BalloonCaptureRecord must stay 44 bytes (33 + 8 field bytes + 3 pad) — "
               "see the card-format note above");
 
 // RAM index bound for the boot rescan (02.5-02, T-02.5-06): at most this many
@@ -173,6 +182,8 @@ struct BalloonResumedRecord {
     uint8_t  settings[7];    // ImageTxSettings layout verbatim (the manifest's 7-byte trailer)
     bool     thumbDelivered;
     bool     fullDelivered;
+    uint64_t thumbAcked;     // base-confirmed thumbnail chunk bitmap (image-
+                             // transfer rework) — a resumed push skips these
 };
 
 // Honest module state (IN-03 discipline: computed truth, never a hardcoded
@@ -255,6 +266,14 @@ public:
     // rides the existing same-index retry/skip path; no fabricated chunk,
     // no cursor advance on unread bytes). The tail chunk returns its genuine
     // partial length via *outLen. Read failure or zero bytes -> false.
+    //
+    // Crash fix (session 8): the image file is opened ONCE per (kind, image)
+    // and kept cached — the per-chunk open/seek/read/close cost ~6 SDMMC
+    // transactions per chunk (~600 per 104-chunk pull), each stacking ISR
+    // frames on CPU0's 1024-word IDLE0 stack (244 words free at boot,
+    // balloon7/balloon8) — the pressure correlated with the watchdog resets.
+    // The cache is invalidated on any read failure, on persistCapture, and on
+    // clearAllImages (never holds a handle across a delete or a fresh write).
     bool readChunk(uint16_t imageId, ImageKind kind, uint16_t chunkIndex,
                    uint8_t* out, size_t cap, size_t* outLen);
 
@@ -263,6 +282,23 @@ public:
     // place (one-byte update, no record rewrite). Bookkeeping for plan
     // 02.5-02's boot rescan.
     bool markDelivered(uint16_t imageId, ImageKind kind);
+
+    // Persist the base-confirmed thumbnail chunk bitmap (image-transfer
+    // rework) — same in-place discipline as markDelivered: "r+" open,
+    // validate magic + id, seek to the thumbAcked field, one 8-byte write.
+    // Called per WINDOW_COMPLETE thumbnail receipt (≤3 per thumb at the
+    // 223-byte chunk size), never inside the per-chunk loop.
+    bool persistThumbAcked(uint16_t imageId, uint64_t bitmap);
+
+    // Load one validated record for a specific id (image-transfer rework):
+    // the FULL_REQUEST card re-admit path and boot-resume consumers share
+    // bootRescanValidateMeta's checks (META magic + id, JPG files exist with
+    // matching sizes), then fill `out` exactly as bootRescan's resume
+    // candidates are filled. Returns false when the record does not validate
+    // (no META / torn / size mismatch) — the caller treats the image as
+    // unknown. Delivery state is NOT filtered: the caller decides what an
+    // already-delivered kind means for it.
+    bool loadResumedRecord(uint16_t imageId, BalloonResumedRecord& out);
 
     // Boot-time rescan (02.5-02, STORE-02): ONE bounded openNextFile() walk
     // of SD_STORE_DIR collecting IMG_%05u.META commit records (the base's
@@ -308,6 +344,17 @@ public:
 private:
     bool available;
     BalloonSdStoreStatus status;
+
+    // Per-kind cached chunk-read handles (crash fix, session 8 — see
+    // readChunk). Index = ImageKind value (THUMBNAIL 0 / FULL_IMAGE 1);
+    // chunkReadCache[k] false = no cached handle. Single-flight per kind by
+    // construction (one thumb push / one window service at a time).
+    File chunkReadCache[2];
+    uint16_t chunkReadCacheId[2] = {0, 0};
+
+    // Close + clear both cache slots (persistCapture / clearAllImages / any
+    // read failure path)
+    void invalidateChunkReadCache();
 
     // Paths built ONLY from the %05u-formatted numeric id (T-02.5-04, the
     // T-02-08 discipline carried from the base's SdStorage::imagePath — no

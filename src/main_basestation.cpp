@@ -157,6 +157,7 @@ void handleSetEventThresholds();
 void handleSetAlertThresholds();
 void handleAlertAck();
 void handleWifiSwitch();
+void handleRequestFull();
 void handleApiState();
 void handleLeafletJs();
 void handleLeafletCss();
@@ -1128,11 +1129,28 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
         }
 
         let lastTransferSig = null;
+        // Image-transfer rework: "Fetch full" — the balloon never sends a
+        // full image unprompted; this asks it to (IMAGE_FULL_REQUEST)
+        function requestFull(id, btn) {
+            if (btn) btn.disabled = true;
+            fetch('/request-full?id=' + id, { method: 'POST' })
+                .then(function (r) {
+                    return r.text().then(function (t) { return { ok: r.ok, body: t }; });
+                })
+                .then(function (res) {
+                    if (!res.ok) console.warn('request-full:', res.body);
+                    if (galleryDetailId === id) openGalleryDetail(id);   // refresh the detail view
+                })
+                .catch(function (err) {
+                    console.error(err);
+                    if (btn) btn.disabled = false;
+                });
+        }
         function renderTransfers(data) {
             const transfers = data.transfers || [];
             const sig = transfers.map(function (t) {
                 return t.id + '|' + t.kind + '|' + t.chunksReceived + '|' + t.chunksTotal
-                    + '|' + t.percent + '|' + t.state;
+                    + '|' + t.percent + '|' + t.state + '|' + (t.requested ? 1 : 0);
             }).join(';');
             if (sig === lastTransferSig) return;
             lastTransferSig = sig;
@@ -1196,6 +1214,20 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                 row.appendChild(track);
                 row.appendChild(chunks);
                 row.appendChild(state);
+
+                // Image-transfer rework: a FULL row the user has not fetched
+                // yet offers the "Fetch full" action (thumb-first default —
+                // fulls never arrive unprompted)
+                if (t.kind === 'FULL' && t.state !== 'COMPLETE') {
+                    const act = document.createElement('button');
+                    act.type = 'button';
+                    act.className = 'fetch-full-btn';
+                    act.textContent = t.requested ? 'requested…' : 'Fetch full';
+                    act.disabled = !!t.requested;
+                    act.addEventListener('click', function () { requestFull(t.id, act); });
+                    row.appendChild(act);
+                }
+
                 tlist.appendChild(row);
             });
         }
@@ -1811,6 +1843,19 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             detailRow(list, 'Status', d.complete ? 'Complete' : 'Incomplete');
             card.appendChild(list);
 
+            // Image-transfer rework: no full bytes yet → the "Fetch full
+            // image" action (thumb-first default; the balloon sends the full
+            // only when asked)
+            if (!(d.complete && d.hasFull)) {
+                const fetchBtn = document.createElement('button');
+                fetchBtn.type = 'button';
+                fetchBtn.style.marginRight = '8px';
+                fetchBtn.textContent = d.fullRequested ? 'Full requested…' : 'Fetch full image';
+                fetchBtn.disabled = !!d.fullRequested;
+                fetchBtn.addEventListener('click', function () { requestFull(d.id, fetchBtn); });
+                card.appendChild(fetchBtn);
+            }
+
             const back = document.createElement('button');
             back.type = 'button';
             back.textContent = 'Back to Gallery';
@@ -2166,6 +2211,9 @@ void initWebServer() {
     // WiFi mode switching (WEB-05/D-40): base-local NVS write + radio
     // state machine — no LoRa traffic
     server.on("/wifi", HTTP_POST, handleWifiSwitch);
+    // Image-transfer rework: FULL on request — the "Fetch full" button asks
+    // the balloon to announce a specific image's FULL manifest
+    server.on("/request-full", HTTP_POST, handleRequestFull);
     server.on("/api/state", HTTP_GET, handleApiState);
     server.on("/status", HTTP_GET, handleApiState);  // legacy alias — same serializer
     server.on("/gallery", HTTP_GET, handleGalleryList);  // /gallery/{id} rides handleNotFound (parameter)
@@ -2628,6 +2676,37 @@ void handleCapture() {
     } else {
         sendResponse(500, "Error", "Failed to send capture command");
         Serial.println("  ERROR: Failed to send capture command");
+    }
+}
+
+// Image-transfer rework: "Fetch full" — ask the balloon to announce the
+// named image's FULL manifest (IMAGE_FULL_REQUEST 0x32). The balloon is the
+// ONLY announcement trigger; the pull driver handles everything after the
+// manifest lands. 409 answers an already-complete full (the button should
+// not be clickable then, but the endpoint stays honest).
+void handleRequestFull() {
+    if (!server.hasArg("id")) {
+        sendResponse(400, "Error", "Missing id parameter");
+        return;
+    }
+    String idStr = server.arg("id");
+    for (unsigned int i = 0; i < idStr.length(); i++) {
+        if (!isDigit(idStr.charAt(i))) {
+            sendResponse(400, "Error", "Invalid id parameter");
+            return;
+        }
+    }
+    long id = strtol(idStr.c_str(), nullptr, 10);
+    if (id <= 0 || id > 0xFFFF) {
+        sendResponse(400, "Error", "Invalid id parameter");
+        return;
+    }
+
+    if (ImageRx().requestFullImage(static_cast<uint16_t>(id))) {
+        sendResponse(200, "OK", "Full image request sent");
+        Serial.printf("Full image request sent (id=%ld)\n", id);
+    } else {
+        sendResponse(409, "Already Complete", "Full image already complete");
     }
 }
 
@@ -3317,9 +3396,22 @@ void handleApiState() {
         json += "\"chunksReceived\":" + String(rows[i].receivedChunks) + ",";
         json += "\"chunksTotal\":" + String(rows[i].totalChunks) + ",";
         json += "\"percent\":" + String(rows[i].percent) + ",";
-        json += "\"state\":\"" + String(transferStateToString(rows[i].state)) + "\"}";
+        json += "\"state\":\"" + String(transferStateToString(rows[i].state)) + "\",";
+        json += "\"requested\":" + String(rows[i].requested ? "true" : "false") + "}";
     }
     json += "],";
+
+    // Image-transfer rework: the outstanding user FULL request (null when
+    // none) — the UI shows its progress alongside the transfer rows
+    {
+        const PendingFullRequest& pfr = ImageRx().getPendingFullRequest();
+        if (pfr.valid) {
+            json += "\"fullReq\":{\"id\":" + String(pfr.imageId) + ",";
+            json += "\"attempts\":" + String(pfr.attempts) + "},";
+        } else {
+            json += "\"fullReq\":null,";
+        }
+    }
 
     // Storage (IMG-05): honest computed state — OK / UNAVAILABLE (no card,
     // mount failed) / FULL (mid-flight write failure, storing stopped);
@@ -3619,11 +3711,33 @@ void handleGalleryDetail(const String& uri) {
 
     bool complete = fromFull && (meta.present & SD_SC_PRESENT_COMPLETE) && meta.complete;
 
+    // Image-transfer rework: "Fetch full" button state — requested when the
+    // user's pending request names this id, or a queued FULL slot for this
+    // id is already flagged userRequested
+    bool fullRequested = false;
+    {
+        const PendingFullRequest& pfr = ImageRx().getPendingFullRequest();
+        fullRequested = (pfr.valid && pfr.imageId == imageId);
+        if (!fullRequested) {
+            TransferRow trows[ImageRxManager::RX_TRANSFER_SLOTS];
+            uint8_t tn = ImageRx().getTransferSnapshot(trows, ImageRxManager::RX_TRANSFER_SLOTS);
+            for (uint8_t i = 0; i < tn; i++) {
+                if (trows[i].imageId == imageId &&
+                    trows[i].kind == static_cast<uint8_t>(ImageKind::FULL_IMAGE) &&
+                    trows[i].requested) {
+                    fullRequested = true;
+                    break;
+                }
+            }
+        }
+    }
+
     String json;
     json.reserve(512);
     json += "{\"id\":" + String(static_cast<unsigned long>(imageId));
     json += ",\"complete\":" + String(complete ? "true" : "false");
     json += ",\"hasFull\":" + String((haveEntry && entry.hasFull) ? "true" : "false");
+    json += ",\"fullRequested\":" + String(fullRequested ? "true" : "false");
     if (haveEntry && entry.hasFull) {
         json += ",\"fullBytes\":" + String(static_cast<unsigned long>(entry.fullSize));
     }

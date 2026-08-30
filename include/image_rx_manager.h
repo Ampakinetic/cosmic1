@@ -44,17 +44,41 @@ enum class TransferDisplayState : uint8_t {
 const char* transferStateToString(TransferDisplayState state);
 
 // G-01-7 burst full-delivery (01-22, base RX half): bound on the 01-12
-// serialization hold. A queued FULL manifest must not wait behind burst
+// serialization hold. A user-requested FULL pull must not wait behind burst
 // thumbnail serialization longer than this before it activates (arms a FULL
-// window on the balloon) — arming is the single base-side action that stops
-// the balloon's re-announce clock (IMG_FULL_REANNOUNCE_IDLE_MS 10000 x
-// IMG_FULL_REANNOUNCE_MAX 3 attempts, image_protocol.h) AND promotes the
-// entry to the protected eviction class (fullWindowEverArmed). 20 s fires
-// with 10 s margin on the unheld re-announce clock, more once 01-21's
-// balloon-side busy-hold extends the balloon's tolerance — the deadline
-// composes with those levers, it does not duplicate them. Outside this bound
-// the heal-before-pull ordering is unchanged (the 01-12 hold stands).
+// window on the balloon) — arming promotes the entry to the protected
+// eviction class (windowEverArmed/lastWindowRequestMs). Image-transfer
+// rework: the balloon re-announce clock this deadline once coordinated is
+// gone (FULL is request-driven); the deadline survives as the heal-before-
+// pull ordering bound. Outside this bound the 01-12 hold stands.
 static constexpr uint32_t IMG_FULL_ARM_DEADLINE_MS = 20000;
+
+// Duplicate-manifest COMPLETE reply rate (image-transfer rework): when a
+// re-manifest names a row that is already terminal+complete, the base
+// ignores it and answers one rate-limited KIND_COMPLETE_CRC_OK IMAGE_ACK so
+// a rebooted balloon can learn the kind is delivered and skip re-pushing
+// it. 30 s bounds the reply cadence against a pathological announce storm
+// while staying far below any plausible re-boot interval.
+static constexpr uint32_t IMG_COMPLETE_REACK_RATE_MS = 30000;
+
+// User-requested FULL pull (image-transfer rework): an IMAGE_FULL_REQUEST
+// (0x32) that has produced no FULL manifest within this window re-sends
+// (bounded), because the request or its manifest may have air-lost.
+static constexpr uint32_t IMG_FULL_REQUEST_RETRY_MS    = 15000;
+// Abandon the request after this many sends — the UI shows the honest
+// failure (PRI-03: never a silent dead button).
+static constexpr uint8_t  IMG_FULL_REQUEST_MAX_ATTEMPTS = 3;
+
+// Outstanding user FULL request (image-transfer rework): set by
+// requestFullImage, consumed by startTransfer when the matching FULL
+// manifest arrives (that slot becomes the userRequested pull).
+struct PendingFullRequest {
+    bool     valid;
+    uint16_t imageId;
+    uint32_t requestedMs;   // millis() of the last send
+    uint8_t  attempts;      // sends so far
+    uint16_t seq;           // tracked-command seq of the last send (0 = none)
+};
 
 // D-20 progress row — every field derives from real chunk-bitmap accounting
 struct TransferRow {
@@ -64,6 +88,9 @@ struct TransferRow {
     uint16_t totalChunks;
     uint8_t  percent;         // receivedChunks * 100 / totalChunks (bitmap truth)
     TransferDisplayState state;
+    bool     requested;       // image-transfer rework: FULL slot marked
+                              // userRequested (drives the UI's Fetch-full
+                              // button state)
 };
 
 // In-flight or terminal transfer: one manifest + its exact accounting.
@@ -121,6 +148,14 @@ struct ImageRxTransfer {
     bool     notStored;       // terminal, incomplete because SD was degraded
                               // (chunks received, but no stored bytes exist
                               // to verify — never reported complete)
+
+    // Image-transfer rework: a FULL slot only ever activates its pull when
+    // the user asked for it (requestFullImage stamps this; "Fetch full" in
+    // the UI). Non-requested FULL manifests stay QUEUED discovery rows.
+    bool     userRequested;
+    // millis() of the last rate-limited KIND_COMPLETE reply sent for a
+    // duplicate manifest on this row (IMG_COMPLETE_REACK_RATE_MS)
+    uint32_t lastCompleteAckMs;
 };
 
 // Snapshot of the newest verified 0x14 telemetry beacon. Absent telemetry is
@@ -168,6 +203,22 @@ public:
     const uint8_t* getLatestThumbData() const { return latestThumbBuffer; }
     size_t getLatestThumbLength() const { return latestThumbLength; }
 
+    // User-requested FULL pull (image-transfer rework — the "Fetch full"
+    // button). Returns false ONLY when the full is already terminal+complete
+    // (the UI answers 409): an existing non-terminal slot is marked
+    // userRequested in place (no wire traffic — its manifest is in hand),
+    // anything else sends IMAGE_FULL_REQUEST (0x32) to the balloon.
+    bool requestFullImage(uint16_t imageId);
+
+    // Bounded retry/abandon driver for the pending request — call from
+    // process(). startTransfer consumes the pending request when the
+    // matching FULL manifest arrives.
+    void processFullRequest();
+
+    // Live pending-request view for /api/state (invalid → the UI shows no
+    // outstanding request).
+    const PendingFullRequest& getPendingFullRequest() const { return pendingFullRequest; }
+
     // Telemetry beacon state (absent telemetry reported as absent)
     const TelemetrySnapshot& getTelemetrySnapshot() const { return telemetry; }
 
@@ -198,6 +249,9 @@ private:
     uint8_t* latestThumbBuffer;
     size_t   latestThumbLength;
 
+    // Outstanding user FULL request (image-transfer rework)
+    PendingFullRequest pendingFullRequest{};
+
     TelemetrySnapshot telemetry;
 
     // Slot handling
@@ -221,7 +275,12 @@ private:
     void startTransfer(const ImageManifestBody& m);
     bool acceptChunk(ImageRxTransfer& t, const ImageChunkBody& c);
     void finalizeTransfer(ImageRxTransfer& t);  // all chunks present: verify
-    void finalizeIncomplete(ImageRxTransfer& t, const char* reason); // D-24
+    // D-24. crcRejected (image-transfer rework): true ONLY when the
+    // termination was a CRC rejection — the one case where a KIND_FAILED_CRC
+    // receipt must invalidate the balloon's persisted ACK state. Stall /
+    // pass-exhaustion terminations leave held chunks as true receipts.
+    void finalizeIncomplete(ImageRxTransfer& t, const char* reason,
+                            bool crcRejected = false);
     void writeSidecarFor(const ImageRxTransfer& t, bool complete,
                          bool crcMismatch, bool notStored);
 

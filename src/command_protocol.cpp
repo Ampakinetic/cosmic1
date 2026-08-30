@@ -557,6 +557,86 @@ bool CommandProtocol::deserializeTelemetryBeacon(const uint8_t* buffer, size_t l
     return true;
 }
 
+bool CommandProtocol::serializeImageAck(const ImageAckPacket& pkt, uint8_t* buffer, size_t& length) {
+    if (!buffer) {
+        return false;
+    }
+
+    size_t packetLength = CMD_HEADER_SIZE + IMG_ACK_BODY_SIZE + 4; // 7 + 10 + 4 = 21
+    if (packetLength > CMD_MAX_PACKET_SIZE) {
+        return false;
+    }
+
+    size_t offset = 0;
+
+    // Header — bodyLen carries the fixed ACK body size
+    buffer[offset++] = CMD_START_BYTE1;
+    buffer[offset++] = CMD_START_BYTE2;
+    buffer[offset++] = static_cast<uint8_t>(pkt.type);
+    buffer[offset++] = static_cast<uint8_t>(pkt.body.imageId & 0xFF); // header seq echo: imageId low byte
+    writeUint16(buffer + offset, static_cast<uint16_t>(IMG_ACK_BODY_SIZE));
+    offset += 2;
+    buffer[offset++] = 0x00; // CRC8 pad byte
+
+    // Body — 10 bytes, field-by-field
+    writeUint16(buffer + offset, pkt.body.imageId); offset += 2;
+    buffer[offset++] = pkt.body.imageKind;
+    writeUint16(buffer + offset, pkt.body.windowBase); offset += 2;
+    writeUint32(buffer + offset, pkt.body.bitmap); offset += 4;
+    buffer[offset++] = pkt.body.status;
+
+    // CRC16 + end bytes
+    uint16_t crc16 = calculateCRC16(buffer, offset);
+    writeUint16(buffer + offset, crc16);
+    offset += 2;
+    buffer[offset++] = CMD_END_BYTE1;
+    buffer[offset++] = CMD_END_BYTE2;
+
+    length = offset;
+    return true;
+}
+
+bool CommandProtocol::deserializeImageAck(const uint8_t* buffer, size_t length, ImageAckPacket& pkt) {
+    if (!buffer || length != CMD_HEADER_SIZE + IMG_ACK_BODY_SIZE + 4) {
+        return false;
+    }
+
+    if (buffer[0] != CMD_START_BYTE1 || buffer[1] != CMD_START_BYTE2) {
+        return false;
+    }
+
+    if (buffer[length - 2] != CMD_END_BYTE1 || buffer[length - 1] != CMD_END_BYTE2) {
+        return false;
+    }
+
+    if (!validateCRC(buffer, length)) {
+        return false;
+    }
+
+    pkt.type = static_cast<PacketType>(buffer[2]);
+
+    size_t off = CMD_HEADER_SIZE;
+    pkt.body.imageId = readUint16(buffer + off); off += 2;
+    pkt.body.imageKind = buffer[off++];
+
+    // Untrusted-RF defense in depth (mirrors deserializeChunk's kind check):
+    // a frame naming a non-kind is dropped before any routing consumes it.
+    if (pkt.body.imageKind != static_cast<uint8_t>(ImageKind::THUMBNAIL) &&
+        pkt.body.imageKind != static_cast<uint8_t>(ImageKind::FULL_IMAGE)) {
+        return false;
+    }
+
+    pkt.body.windowBase = readUint16(buffer + off); off += 2;
+    pkt.body.bitmap = readUint32(buffer + off); off += 4;
+    pkt.body.status = buffer[off++];
+
+    if (pkt.body.status > static_cast<uint8_t>(ImageAckStatus::KIND_FAILED_CRC)) {
+        return false;
+    }
+
+    return true;
+}
+
 // ===========================
 // Debug Helpers
 // ===========================
@@ -576,6 +656,7 @@ const char* CommandProtocol::commandToString(CameraCommand cmd) {
         case CameraCommand::GET_STATUS: return "GET_STATUS";
         case CameraCommand::IMAGE_WINDOW_REQUEST: return "IMAGE_WINDOW_REQUEST";
         case CameraCommand::SET_EVENT_THRESHOLDS: return "SET_EVENT_THRESHOLDS";
+        case CameraCommand::IMAGE_FULL_REQUEST: return "IMAGE_FULL_REQUEST";
         default: return "UNKNOWN";
     }
 }
@@ -688,6 +769,14 @@ ImageChunkPacket createChunkPacket(uint16_t imageId, uint8_t imageKind, uint16_t
 TelemetryBeaconPacket createTelemetryBeaconPacket(const TelemetryBeaconBody& body) {
     TelemetryBeaconPacket packet{};
     packet.type = PACKET_TYPE_TELEMETRY_BEACON; // CR-01 lesson: the factory owns the wire type byte — FIRST field assigned
+    packet.body = body;
+
+    return packet;
+}
+
+ImageAckPacket createImageAckPacket(const ImageAckBody& body) {
+    ImageAckPacket packet{};
+    packet.type = PACKET_TYPE_IMAGE_ACK; // CR-01 lesson: the factory owns the wire type byte — FIRST field assigned
     packet.body = body;
 
     return packet;

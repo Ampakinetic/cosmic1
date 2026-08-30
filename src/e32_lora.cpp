@@ -232,7 +232,7 @@ bool E32LoRa::transmit(const uint8_t* data, size_t length) {
     // BOUNDED TX-drain replacing serial->flush(). The arduino core's flush
     // (uartFlushTxOnly, esp32-hal-uart.c:1474-1486) is a bare
     // `while(!uart_ll_is_tx_idle(...))` busy-spin with NO yield and NO
-    // timeout — at 9600 baud a 217-byte chunk frame spins loopTask ~226 ms
+    // timeout — at 9600 baud a 240-byte chunk frame spins loopTask ~250 ms
     // per transmit, and a UART that never goes idle would hang it forever.
     // This drain polls the same hardware condition (TX fully shifted out)
     // with delay(1) yields, bounded at 1000 ms (worst legitimate drain at

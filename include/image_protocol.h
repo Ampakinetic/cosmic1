@@ -23,6 +23,11 @@
 static constexpr PacketType PACKET_TYPE_IMAGE_MANIFEST   = static_cast<PacketType>(0x12);
 static constexpr PacketType PACKET_TYPE_IMAGE_CHUNK      = static_cast<PacketType>(0x13);
 static constexpr PacketType PACKET_TYPE_TELEMETRY_BEACON = static_cast<PacketType>(0x14);
+// Base→balloon receipt frame (image-transfer rework): the per-window bitmap
+// ACK that ends the guess-everything push/pull era. The balloon persists
+// these as delivery state so a watchdog reset + boot rescan can never
+// re-send content the base already holds.
+static constexpr PacketType PACKET_TYPE_IMAGE_ACK        = static_cast<PacketType>(0x15);
 
 // ===========================
 // Enums
@@ -45,13 +50,29 @@ enum class CaptureSource : uint8_t {
     EVENT_PHASE = 4
 };
 
+// IMAGE_ACK (0x15) status byte. PROGRESS/WINDOW_COMPLETE are WINDOW-scoped
+// (windowBase+bitmap name exactly which chunks sit on the base's card);
+// KIND_COMPLETE_CRC_OK / KIND_FAILED_CRC are KIND-scoped verdicts (the
+// windowBase/bitmap fields are zeroed on the wire — the verdict speaks for
+// the whole kind).
+enum class ImageAckStatus : uint8_t {
+    PROGRESS            = 0,  // window-scoped partial bitmap
+    WINDOW_COMPLETE     = 1,  // window-scoped: every chunk of this window persisted
+    KIND_COMPLETE_CRC_OK = 2, // kind-scoped: base CRC-verified the whole kind
+    KIND_FAILED_CRC     = 3   // kind-scoped: finalized with a CRC mismatch
+};
+
 // ===========================
 // Transfer Constants
 // ===========================
 
-// Chunk framing budget: 7 header + 6 chunk overhead + 200 payload + 4 trailer
-// = 217 <= CMD_MAX_PACKET_SIZE (240)
-static constexpr uint8_t  IMG_CHUNK_PAYLOAD_SIZE     = 200;
+// Chunk framing budget: 7 header + 6 chunk overhead + 223 payload + 4 trailer
+// = 240 == CMD_MAX_PACKET_SIZE (240) — the payload fills the frame exactly.
+// The bound holds by construction: both framers' receive buffers
+// (base receiveBuffer[CMD_MAX_PACKET_SIZE], balloon receiveBuffer[256])
+// accept a total of exactly 240, and serializeChunk's "> CMD_MAX_PACKET_SIZE"
+// boundary check passes at equality.
+static constexpr uint8_t  IMG_CHUNK_PAYLOAD_SIZE     = 223;
 
 // D-21 suggested window (chunks requested per pull round)
 static constexpr uint8_t  IMG_WINDOW_MAX_CHUNKS      = 16;
@@ -95,38 +116,11 @@ static constexpr uint8_t  IMG_CHUNK_TX_RETRY_MAX     = 3;
 // full-only) with a named log — never silent (PRI-03).
 static constexpr uint8_t  IMG_MANIFEST_MAX_ATTEMPTS = 3;
 
-// G-01-9 defect C (01-17): receipt-informed FULL-manifest re-announce. The
-// 01-14 announce bound is TX-verdict-gated and structurally cannot see a
-// manifest that left with TX success but never arrived (balloon5.log:274 —
-// image 15's full silently lost). After the announce succeeds, the only
-// receipt signal the balloon can observe is the base arming its first FULL
-// window (window-arm IS the receipt). While an ANNOUNCED full sits with no
-// FULL window ever armed, a re-announce fires only in the channel's idle
-// slot (no push work, no armed window) after this idle bound. The bound
-// sits above every legitimate pre-pull quiet period — base inter-window
-// gap ~1-2 s, IMG_WINDOW_RX_SETTLE_MS 500 ms, thumb-heal-to-full-pull
-// handoff ~1-2 s — and delays nothing it must not: a base that received
-// the manifest arms its first FULL window within seconds of the
-// serialization hold releasing, which permanently stops the mechanism.
-static constexpr uint32_t IMG_FULL_REANNOUNCE_IDLE_MS = 10000;
-
-// Re-announce attempt bound — mirrors IMG_MANIFEST_MAX_ATTEMPTS so a
-// dead-link full can never spin re-announces: at the bound the full is
-// dropped with a named log (park at THUMB_PUSHED, full buffers freed,
-// thumbBuffer kept so THUMBNAIL window heals keep working) — never
-// silently (PRI-03).
-static constexpr uint8_t  IMG_FULL_REANNOUNCE_MAX    = 3;
-
-// G-01-7 burst full-delivery, balloon lever 1 (01-21): known-busy hold on the
-// re-announce drop-clock. While inbound IMAGE_WINDOW_REQUEST frames keep
-// arriving at least this often — any kind, any verdict, including the
-// unknown/evicted rejects (session-6 images 25/26: the base's post-drop
-// window requests were exactly that liveness evidence, balloon11.log:680/
-// :702/:729/:751) — the idle-slot re-announce is HELD: no attempt consumed,
-// no idle period advanced, no drop fired. 15 s covers the base's 8 s D-24
-// stall cadence plus window service with margin; the 01-17 cadence resumes
-// 15 s after the last inbound request.
-static constexpr uint32_t IMG_FULL_REANNOUNCE_BUSY_MS  = 15000;
+// Image-transfer rework: the G-01-9 idle FULL-manifest re-announce
+// (IMG_FULL_REANNOUNCE_IDLE_MS / _MAX / _BUSY_MS, 01-17/01-21) is REMOVED —
+// FULL is now request-driven (IMAGE_FULL_REQUEST 0x32): the balloon
+// announces a full ONLY when the base asks, and a lost announce is healed by
+// the base's bounded request retry, not by balloon-side volunteering.
 
 // G-01-10 D1 round #12 (01-28) per
 // .planning/debug/d1-crash-regression-push-start.md §7.6 discriminator B2:
@@ -198,6 +192,10 @@ static constexpr size_t   IMG_MANIFEST_BODY_SIZE     = 27;
 // Fixed telemetry beacon body size on the wire (see TelemetryBeaconBody)
 static constexpr size_t   IMG_TELEMETRY_BEACON_BODY_SIZE = 19;
 
+// Fixed IMAGE_ACK body size on the wire (see ImageAckBody):
+// 2 + 1 + 2 + 4 + 1 = 10; total frame 7 + 10 + 4 = 21 bytes.
+static constexpr size_t   IMG_ACK_BODY_SIZE          = 10;
+
 // ===========================
 // Wire Bodies
 // ===========================
@@ -257,6 +255,22 @@ struct TelemetryBeaconBody {
     uint16_t batteryMilliV; // BE16 — battery voltage in millivolts (valid iff bit1)
 };
 
+// 0x15 body — fixed 10 bytes: the base's receipt of image chunk(s).
+// Bitmap windows are IMG_WINDOW_MAX_CHUNKS (16) chunks, so the u32 bitmap
+// always covers a whole window with room to spare (16 <= 32). The balloon
+// merges these into per-kind delivery state and persists them — after an
+// ACK, a reboot can never re-send what the base already holds.
+struct ImageAckBody {
+    uint16_t imageId;     // BE16 — the image the receipt names
+    uint8_t  imageKind;   // ImageKind: THUMBNAIL or FULL_IMAGE
+    uint16_t windowBase;  // BE16 — first chunk index this bitmap describes
+                          // (0 for kind-scoped statuses)
+    uint32_t bitmap;      // BE32 — bit i set = chunk windowBase+i is persisted
+                          // on the base's SD card (zeroed for kind-scoped
+                          // statuses)
+    uint8_t  status;      // ImageAckStatus
+};
+
 // ===========================
 // Command Payloads (ride PACKET_TYPE_COMMAND frames)
 // ===========================
@@ -301,6 +315,11 @@ struct ImageChunkPacket {
 struct TelemetryBeaconPacket {
     PacketType type;        // PACKET_TYPE_TELEMETRY_BEACON (0x14) — factory-assigned
     TelemetryBeaconBody body; // fixed 19 bytes on the wire
+};
+
+struct ImageAckPacket {
+    PacketType type;        // PACKET_TYPE_IMAGE_ACK (0x15) — factory-assigned
+    ImageAckBody body;      // fixed 10 bytes on the wire
 };
 
 #endif // IMAGE_PROTOCOL_H

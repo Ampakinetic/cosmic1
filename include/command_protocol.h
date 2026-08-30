@@ -48,7 +48,11 @@ enum class CameraCommand : uint8_t {
 
     // Image transfer (Phase 2) — payloads defined in image_protocol.h
     IMAGE_WINDOW_REQUEST = 0x30,     // base pulls a window of chunks (PayloadImageWindowRequest)
-    SET_EVENT_THRESHOLDS = 0x31      // event-trigger thresholds (PayloadSetEventThresholds)
+    SET_EVENT_THRESHOLDS = 0x31,     // event-trigger thresholds (PayloadSetEventThresholds)
+    // Image-transfer rework: FULL is request-driven — the balloon never
+    // announces a FULL manifest on its own; this asks it to. Payload:
+    // imageId BE16 + 1 reserved byte (send 0, ignored on receipt).
+    IMAGE_FULL_REQUEST = 0x32
 };
 
 // White balance modes
@@ -264,6 +268,10 @@ public:
     static bool serializeTelemetryBeacon(const TelemetryBeaconPacket& pkt, uint8_t* buffer, size_t& length);
     static bool deserializeTelemetryBeacon(const uint8_t* buffer, size_t length, TelemetryBeaconPacket& pkt);
 
+    // Image ACK (0x15): header bodyLen = 10 — the base's receipt frame
+    static bool serializeImageAck(const ImageAckPacket& pkt, uint8_t* buffer, size_t& length);
+    static bool deserializeImageAck(const uint8_t* buffer, size_t length, ImageAckPacket& pkt);
+
     // Create ACK response
     static ResponsePacket createACK(uint16_t refSequence, const uint8_t* data = nullptr, uint16_t dataLen = 0);
 
@@ -315,5 +323,9 @@ ImageChunkPacket createChunkPacket(uint16_t imageId, uint8_t imageKind, uint16_t
 // (0x14) as the FIRST field (CR-01 lesson: the factory owns the wire type
 // byte; callers never assign packet.type by hand)
 TelemetryBeaconPacket createTelemetryBeaconPacket(const TelemetryBeaconBody& body);
+
+// Create an image ACK packet — assigns PACKET_TYPE_IMAGE_ACK (0x15) as the
+// FIRST field (CR-01 lesson: the factory owns the wire type byte)
+ImageAckPacket createImageAckPacket(const ImageAckBody& body);
 
 #endif // COMMAND_PROTOCOL_H

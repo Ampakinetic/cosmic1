@@ -71,6 +71,17 @@ enum class WindowRequestResult : uint8_t {
     BUSY                      // another entry's window is mid-service
 };
 
+// Outcome of an IMAGE_FULL_REQUEST (0x32, image-transfer rework) — mapped by
+// CommandHandler to the same ACK/NACK machinery (ACK; NACK_INVALID for
+// UNKNOWN/NOT_ARMABLE; NACK_BUSY for BUSY). The base's request-level retry
+// (15 s x 3) re-arms after a BUSY/UNKNOWN once the condition drains.
+enum class FullRequestResult : uint8_t {
+    ACCEPTED = 0,   // entry armed to ANNOUNCE_FULL (RAM entry or card re-admit)
+    UNKNOWN,        // no such image (no RAM entry, no card record)
+    NOT_ARMABLE,    // full bytes absent or above IMG_MAX_IMAGE_SIZE
+    BUSY            // thumbnail push in flight, or queue full
+};
+
 // Camera-settings snapshot copied from CameraManager cached getters at
 // enqueue time (the manifest's 7-byte trailer)
 struct ImageTxSettings {
@@ -115,6 +126,14 @@ struct ImageTxEntry {
     uint32_t thumbCrc32;      // esp_rom_crc32_le over thumbBuffer
     uint16_t thumbTotalChunks;
 
+    // Base-confirmed thumbnail chunk bitmap (image-transfer rework): bit i
+    // set = the base's IMAGE_ACK receipts say thumbnail chunk i is persisted
+    // on its card. Merged from 0x15 frames, persisted to the META record
+    // (persistThumbAcked) — a boot resume skips past these bits instead of
+    // re-pushing delivered thumbnail bytes. u64 covers the 8192-byte
+    // thumbnail cap (37 chunks at 223 B) with margin.
+    uint64_t thumbAcked;
+
     ImageTxEntryState state;
     uint16_t nextThumbChunk;  // 0-based index of the next chunk to push
     // WR-08 (01-17): consecutive same-index transmit failures in the push
@@ -134,12 +153,6 @@ struct ImageTxEntry {
     bool windowArmed;
     uint8_t  windowKind;      // ImageKind the armed window serves
     bool windowEverArmed;     // any window (either kind) has armed on this entry — marks the active-pull context, the LAST-resort overflow-eviction class (02-05 / CR-03 fix c)
-    // G-01-9 defect C (01-17): a FULL window has armed on this entry — the
-    // receipt signal that permanently stops FULL-manifest re-announces.
-    // Distinct from windowEverArmed (which THUMBNAIL heals also set): a
-    // thumb-healed entry whose FULL manifest was air-lost (image-15 class)
-    // must KEEP re-announcing, so only a non-thumb arm sets this.
-    bool fullWindowEverArmed;
     uint16_t windowStart;     // first chunk index of the armed window
     uint16_t windowCount;     // chunks in the armed window
     uint16_t windowNextIndex; // next chunk index to transmit
@@ -165,20 +178,12 @@ struct ImageTxEntry {
     // honestly (buffer freed, named log).
     uint8_t manifestAttempts;
 
-    // G-01-9 defect C (01-17): FULL-manifest re-announces issued while the
-    // entry is ANNOUNCED with no FULL window ever armed; reset in freeEntry.
-    // Bounded by IMG_FULL_REANNOUNCE_MAX — each transmit attempt counts
-    // regardless of TX verdict (air loss is the class being treated); at the
-    // bound the full is dropped with a named log (park at THUMB_PUSHED
-    // keeping thumbBuffer for heals).
-    uint8_t reannounceAttempts;
-
     // G-01-7 burst full-delivery, balloon lever 1 (01-21): receipt-evidence
     // stamp — an inbound window request that MATCHED this entry (either kind:
     // proof the base demonstrably holds at least one of its manifests and is
-    // asking). Nonzero re-arms the bounded re-announce budget and ranks the
-    // entry in the protected last-resort eviction class alongside
-    // windowEverArmed; 0 = never requested. Reset in freeEntry.
+    // asking). Ranks the entry in the protected last-resort eviction class
+    // alongside windowEverArmed; 0 = never requested. Reset in freeEntry.
+    // Image-transfer rework: the re-announce budget it once re-armed is gone.
     uint32_t lastWindowRequestMs;
 };
 
@@ -216,6 +221,25 @@ public:
     // Re-arming the same window is idempotent (Pitfall 10).
     WindowRequestResult handleWindowRequest(const uint8_t* payload, size_t len);
 
+    // IMAGE_ACK (0x15) receipt handler: consumes the base's parsed 10-byte
+    // body — per-window chunk bitmap (PROGRESS/WINDOW_COMPLETE) or
+    // kind-scoped verdict (KIND_COMPLETE_CRC_OK / KIND_FAILED_CRC).
+    // Idempotent by construction: unknown (imageId, kind) is ignored with a
+    // named log, duplicate bit-merges are no-ops. Executed inline by the
+    // balloon framer on a CRC-valid frame — never queued through the
+    // command path (receipts are not commands).
+    bool handleImageAck(const ImageAckBody& ack);
+
+    // IMAGE_FULL_REQUEST (0x32, image-transfer rework): the ONLY trigger for
+    // a FULL manifest announce. Decodes imageId (BE16; reserved byte
+    // ignored), validates BEFORE arming, and accepts from three sources: a
+    // parked/announced RAM entry (re-armed to ANNOUNCE_FULL — idempotent,
+    // manifestAttempts resets), or — when the RAM entry is gone (TTL
+    // eviction / fresh boot) — a validated card record re-admitted through
+    // the SAME fill the boot rescan uses. An outstanding thumbnail
+    // obligation answers BUSY: the thumb pushes first, the base retries.
+    FullRequestResult handleFullRequest(const uint8_t* payload, size_t len);
+
     // 02.5-02 crash-resume (STORE-02): admit boot-rescanned undelivered
     // records into the EXISTING pipeline. Each becomes the IDENTICAL entry
     // shape enqueueCapture's PERSISTED branch builds (state
@@ -248,28 +272,6 @@ private:
     uint32_t beaconsSent;    // successful transmits (OLED diagnostics)
     bool lastBeaconOk;       // last attempt's transmit result
 
-    // G-01-7 burst full-delivery, balloon lever 1 (01-21): receipt-informed
-    // re-announce gating. lastInboundWindowRequestMs is the channel-liveness
-    // stamp — EVERY inbound window request refreshes it, any kind, any verdict
-    // including the unknown/evicted rejects (session-6's rejects were exactly
-    // the evidence that the base was still working the burst while the
-    // drop-clock expired). Write-only timing data, never used for content
-    // decisions (T-01-21-01). While it is younger than
-    // IMG_FULL_REANNOUNCE_BUSY_MS the idle-slot re-announce is HELD (nothing
-    // consumed); reannounceHoldLogged is the one-shot latch printing one hold
-    // line per episode, cleared whenever a re-announce actually transmits.
-    uint32_t lastInboundWindowRequestMs;
-    bool reannounceHoldLogged;
-
-    // G-01-11 / WINDOWS 16 fix (01-25): receipt-ever flag — true only after a
-    // GENUINE inbound window request has been observed since boot. The zero
-    // stamp alone let the busy-hold gate fire once per boot window
-    // (millis() - 0 < IMG_FULL_REANNOUNCE_BUSY_MS, balloon.log:504), polluting
-    // the G-01-7 discriminator with a phantom "inbound window traffic active"
-    // episode before any traffic existed. The flag makes the zero stamp inert;
-    // the hold line itself is NOT muted — it keeps its evidentiary meaning.
-    bool inboundWindowRequestSeen;
-
     // G-01-10 D1 debug instrumentation (01-25), lever 2 per
     // .planning/debug/d1-crash-regression-push-start.md §3: bounded memory
     // state. logMemDiagnostic() prints at each enqueueCapture (the exact
@@ -286,7 +288,7 @@ private:
     // watch state. lastProcessPassMs stamps every process() entry (0 = no
     // prior pass — the gap check is skipped once); loopSlowPassLogged is the
     // one-shot latch printing one [LOOP] line per slow-pass episode, re-armed
-    // on a normal pass (the reannounceHoldLogged convention). REMOVAL
+    // on a normal pass (log-once latch). REMOVAL
     // CONDITION: strips WITH the [MEM] instrumentation after G-01-10 closes
     // on bench evidence.
     uint32_t lastProcessPassMs;
@@ -307,9 +309,6 @@ private:
     void pushPending();
     ImageTxEntry* findActiveEntry();          // earliest entry with push work (thumb or full announcement)
     ImageTxEntry* findWindowServiceEntry();   // earliest entry with an armed, incomplete window (ANNOUNCED, or THUMB_PUSHED with a heal window armed)
-    // G-01-9 defect C (01-17): earliest ANNOUNCED full with no FULL window
-    // ever armed (receipt never observed) idle past IMG_FULL_REANNOUNCE_IDLE_MS
-    ImageTxEntry* findReannounceCandidate();
 
     // Eviction policy (bounded memory)
     // G-01-7 round #14 (01-33, 01-G01-7-LEVER.md section 4 option a): the
@@ -328,12 +327,7 @@ private:
     bool pushThumbManifest(ImageTxEntry& entry);
     bool pushThumbChunk(ImageTxEntry& entry);
     bool announceFullManifest(ImageTxEntry& entry);
-    // G-01-9 defect C (01-17): bounded idle FULL-manifest re-announce with a
-    // named drop at the bound (park-and-free mirroring the 01-14 announce
-    // bound); fires only in pushPending's idle slot
-    void reannounceFullManifest(ImageTxEntry& entry);
-    // Shared 0x12 FULL body construction — the one-shot announce and the
-    // re-announce call the same helper (one construction site, no wire change)
+    // Shared 0x12 FULL body construction (one construction site, no wire change)
     static ImageManifestBody fillFullManifestBody(const ImageTxEntry& entry);
     bool serviceWindowChunk(ImageTxEntry& entry);
     void freeEntry(ImageTxEntry& entry);
