@@ -183,6 +183,39 @@ static RTC_NOINIT_ATTR uint32_t s_rtcStampMagic;
 static RTC_NOINIT_ATTR uint32_t s_rtcLoopLastPassMs;
 static RTC_NOINIT_ATTR uint32_t s_rtcIdle0LastTickMs;
 
+// G-01-10 round-#18 instrument [TICKSTAMP] (§18.4 routing item 1, session-17
+// follow-up): the [STAMP] pattern moved to the TICK side. balloon14's
+// dual-core dump showed the complementary halves of one event — CPU0 alive
+// mid-tick-hook-dispatch while CPU1 sat parked with INTLEVEL 4 and dead
+// tick service — but a dump only samples the instant; the silent TG0WDT
+// family samples nothing. These two RTC_NOINIT words record WHICH CORE'S
+// TICKS died first and how long the survivor kept running: the hook below
+// is registered for BOTH cores and each core stamps its own word every
+// tick; the readout at the next boot prints both t values and the gap.
+// Reading the gap (core0 minus core1):
+//   ~0 (< a few ms) -> both cores ticked to the end (whole-CPU death at
+//      the tick layer — the balloon14 CPU1-only reading would be WRONG);
+//   positive        -> core0's ticks SURVIVED longer (core1's tick service
+//      died first — the balloon14 shape);
+//   negative        -> core0's ticks died first (the balloon8 shape, whose
+//      CPU0 was wedged mid-spinlock-acquire).
+// Combined with the [STAMP] task words this gives a four-point picture of
+// every death: loopTask, IDLE0, tick-core0, tick-core1. The stamp freezes
+// at the last COMPLETED hook dispatch — a core wedging at the tick
+// handler's post-hook critical section (port_systick.c, the kernel-lock
+// take) still leaves a fresh stamp; the ordering data survives. The hook
+// is IRAM and lock-free (millis() is an esp_timer register read, legal at
+// ISR level), registered AFTER the boot readout re-arms the words.
+// G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2 instrumentation
+// after G-01-10 closes on bench evidence.
+#define RTC_TICKSTAMP_MAGIC 0x71C67A9Du
+static RTC_NOINIT_ATTR uint32_t s_rtcTickMagic;
+static RTC_NOINIT_ATTR uint32_t s_rtcTickStamp[2];
+
+static void IRAM_ATTR tickStampHook(void) {
+    s_rtcTickStamp[xPortGetCoreID()] = millis();
+}
+
 // G-01-10 round #14 instrument [STACK] (01-32) — CRASH-FIX REVISION
 // (session 8): the watermark sampling previously ran INSIDE this hook
 // (uxTaskGetStackHighWaterMark(NULL) every 1024 idle ticks), putting debug
@@ -340,6 +373,23 @@ void setup() {
     s_rtcStampMagic = RTC_STAMP_MAGIC;
     s_rtcLoopLastPassMs = 0;
     s_rtcIdle0LastTickMs = 0;
+
+    // [TICKSTAMP] (see the declaration block): read out the PREVIOUS boot's
+    // per-core tick stamps, re-arm, and only then register the hook so the
+    // stamps are never a mix of this boot's writes and the previous boot's.
+    if (s_rtcTickMagic == RTC_TICKSTAMP_MAGIC) {
+        Serial0.printf("[TICKSTAMP] prev boot: core0 last tick t=%lu ms, core1 last tick t=%lu ms, gap %ld ms (core0 minus core1) (G-01-10)\n",
+                       static_cast<unsigned long>(s_rtcTickStamp[0]),
+                       static_cast<unsigned long>(s_rtcTickStamp[1]),
+                       static_cast<long>(static_cast<int32_t>(s_rtcTickStamp[0] - s_rtcTickStamp[1])));
+    } else {
+        Serial0.println("[TICKSTAMP] no prev-boot tick stamps (POWERON or RTC-domain reset) (G-01-10)");
+    }
+    s_rtcTickMagic = RTC_TICKSTAMP_MAGIC;
+    s_rtcTickStamp[0] = 0;
+    s_rtcTickStamp[1] = 0;
+    esp_err_t tickHookErr = esp_register_freertos_tick_hook(tickStampHook);
+    Serial0.printf("[TICKSTAMP] hook registered=%d (G-01-10)\n", tickHookErr == ESP_OK ? 1 : 0);
 
     delay(SETUP_DELAY_MS);
     
