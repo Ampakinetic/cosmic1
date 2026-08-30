@@ -2630,3 +2630,73 @@ The JTAG-vs-electrical split inside the confirmed class (does the card's
 CLK on MTCK latch the TAP, or is it local rail/ground interaction?) is
 decidable later by option 1 alone: a rewire that eliminates the deaths
 closes the class. (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 24 — SESSION-21 (balloon18 bench, 2026-08-30): the gate fix works card-less — and a NEW death signature appears: 12 silent `rst:0x8 TG1WDT_SYS_RST`, every one AT THE CAMERA CAPTURE MOMENT — the SDMMC-claim vs camera discrimination wired as the next A/B
+
+### 24.1 Provenance + the session's two findings
+
+`balloon18.log` (2,773 lines, 13 boots: 1 POWERON + 12 `rst:0x8
+TG1WDT_SYS_RST`) / `base18.log` (478 lines), 2026-08-30, build `69fad61`
+(the capture-gate fix), card still out (mount fails 0x107 as designed).
+FINDING 1 — the gate fix VERIFIED card-less: `Captured image ID 71` →
+`enqueued image 71 (full 7738 B, thumb 1113 B / 5 chunks)` → thumbnail
+**base-confirmed COMPLETE** and the base finalized thumb (5/5) AND full
+(35/35) (base18.log:98/:315) — the capture→push→ACK→deliver chain ran
+end-to-end with no card, for the first time. FINDING 2 — a NEW death
+signature: **`rst:0x8 TG1WDT_SYS_RST` ×12, never before seen in the
+campaign** — the INT-WDT's hardware stage-2 reset WITHOUT its panic ever
+printing (the panic interrupt could not run: the wedge context sat at or
+above the int-wdt's level — cf. balloon14's CPU1 parked at INTLEVEL 4,
+§18.2, whose full expression this may be).
+
+### 24.2 The deaths track the CAMERA CAPTURE MOMENT
+
+Four of four sampled TG1WDT deaths show the same last lines:
+`CommandHandler: CAPTURE_NOW` → `Camera: Image captured, size: 6xxx
+bytes, duration: 0 ms` → **instant reset**, nothing between — the wedge
+hits in the post-capture processing before the next Serial line. [STAMP]
+gaps −3/−4/−6 ms with both cores' tick stamps within 1–3 ms — the whole
+system, all the way down, in the same instant. Boot lifetimes mixed
+(2.9 s/3.0 s short deaths at captures; 102 s/138 s long boots too —
+image 71's boot survived its capture and delivered).
+
+**This re-frames balloon17's zero-death verdict (§23.1), recorded as the
+correction it is**: balloon17's captures were REFUSED by the gate bug —
+the camera never ran — so "card-less = crash-free" was confounded with
+"card-less AND camera-idle". The confirmed statement is now narrower and
+sharper: **the deaths require the SDMMC subsystem to have CLAIMED the
+JTAG-domain pins (39/38/40 muxed, controller clocked — even a failed
+begin does that) AND camera captures to run.** Card-in sessions
+(balloon6-16): SDMMC claimed + bus traffic + camera → the TG0WDT/int-wdt
+families. Card-less with camera idle (balloon17): alive. Card-less with
+captures (balloon18): the new TG1WDT family.
+
+### 24.3 The discrimination wired (the code commit beside this record)
+
+`G01_SDMMC_BEGIN_DISABLED` (build flag, balloon env): skips
+`BalloonSdStoreTx().begin()` ENTIRELY — the SDMMC controller stays
+unclaimed, pins 39/38/40 never muxed, MTCK silent — while everything
+else runs IDENTICALLY (volatile-fallback captures ON via the gate fix,
+all instruments armed; the arm prints `[SDMMC] begin DISABLED for A/B`
+on the console; both arms compile-verified). The reading rules,
+pre-written:
+
+- **Card-less + flag + captures → deaths STOP**: the SDMMC
+  claiming/clocking of the JTAG-domain pins is REQUIRED for the wedge —
+  the JTAG/electrical family stands, the camera capture is the tripwire,
+  and the fix ladder (§23.3 rewire / disarm) targets the right thing.
+- **Card-less + flag + captures → deaths CONTINUE**: the camera alone is
+  the trigger — a plain camera-driver bug (an entirely different, much
+  simpler world: the esp32-camera DMA/interrupt path, XCLK GPIO15, PCLK
+  GPIO13 — no JTAG-domain involvement), and the SD-era correlation was
+  SDMMC-claim + camera coincidence.
+
+Either branch is another campaign-level answer for one build flag.
+
+### 24.4 Open operator question
+
+Was the SD CARD PHYSICALLY IN THE SOCKET during balloon18? The failed
+begin (0x107 timeout) reads identically for absent, dead, and badly-
+seated cards — and the answer changes the card-in-residue reading (a
+seated-but-dead card's bus behavior differs from an empty socket's
+floating D0). (01-UAT.md G-01-10, WINDOWS 15.)
