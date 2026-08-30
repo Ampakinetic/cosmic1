@@ -842,12 +842,29 @@ bool initializeSubsystems() {
     // mount degrades to the volatile fallback rather than aborting boot
     // (1223f46 lesson: boot never halts on peripheral failure); the module
     // prints its own "SdStore:" verdict line alongside this one.
+    //
+    // G01_SDMMC_BEGIN_DISABLED (the session-21 A/B arm, §24.2): skipping
+    // begin() leaves the SDMMC controller UNCLAIMED — pins 39/38/40 never
+    // muxed, never clocked, MTCK (GPIO39) silent — while everything else
+    // (volatile-fallback captures, the gate fix, all instruments) runs
+    // IDENTICALLY. Discriminates the confirmed SD-line class's two worlds:
+    // deaths continue card-less with the controller unclaimed → the CAMERA
+    // alone is the trigger (a plain camera-driver bug, an entirely
+    // different and much simpler world); deaths STOP → the SDMMC
+    // clocking/claiming of the JTAG-domain pins is required for the wedge
+    // (the JTAG/electrical family), and the camera capture is only the
+    // tripwire. Identify the arm on the console: this line replaces the
+    // module's own verdict line.
+#ifdef G01_SDMMC_BEGIN_DISABLED
+    Serial0.println("[SDMMC] begin DISABLED for A/B - controller unclaimed (G-01-10)");
+#else
     BalloonSdStoreTx().begin();
     if (BalloonSdStoreTx().isAvailable()) {
         SYS_INFO("SD card store mounted (/images ready)");
     } else {
         SYS_WARNING("SD card store unavailable - captures take the volatile fallback");
     }
+#endif
 
     // Phase 2: image transfer push module (thumbnail stream after each capture)
     if (!ImageTx().begin(&E32LoRaModule())) {
