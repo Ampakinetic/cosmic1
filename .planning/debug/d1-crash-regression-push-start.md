@@ -1724,3 +1724,229 @@ round #15's cheapest discriminator is the §11.4 A/B hook-unregistered build,
 one session, with the ladder's heavy tail re-run on the same firmware. The
 G-01-7 over-rejection fix (capacity-aware supersede admission) is the
 companion lever round — the two share the next bench session.
+
+## 12 — SESSION-12 (balloon8+balloon9 bench, 2026-08-30 morning): the SD-store-era recurrence — silent TG0WDT crash-loop, the delivery livelock, ONE int-wdt PANIC ON CPU1 WITH DUMP, the Saved-PC census, and the crash-loop gate decision
+
+### 12.1 Provenance
+
+- `balloon8.log` (3,141 lines, 11 boots), written 2026-08-30 09:58, build
+  banner `Build: Aug 29 2026 13:36:40` (balloon8.log:24) — the image-transfer
+  receipt rework content, now committed as `e73d051`. `balloon9.log` (2,455
+  lines, 7 boots), written 11:43, banner `Build: Aug 30 2026 10:41:32` — the
+  same content plus the [STACK] loop-side sampling revision (the watermark
+  line reads `new low, loop-side sample` from balloon9 on). Companion
+  consoles `base8.log`/`base9.log`.
+- `balloon6.log` (2026-08-29 09:02, rst:0x7 ×10) and `balloon7.log` (17:13,
+  rst:0x7 ×1) are the recurrence's FIRST sessions — recorded here by census
+  only (the deep record starts at balloon8). Session 11 (balloon5, §11.6,
+  zero crashes) predates the 02.5 SD-store code (12d85a1..8c41585, committed
+  08-29 03:09–04:47); the correlation is recorded, NOT read as causation —
+  §12.5 shows the family predates the store.
+- ELF provenance is banner+content only: both builds' ELFs were replaced
+  on-disk by later builds before this record was written.
+
+### 12.2 Event maps
+
+- **balloon8**: POWERON boot + 10 reboots, each living minutes (setup
+  `Uptime` ≈ 2.5 s in every banner — the deaths are NOT at fixed uptime).
+  The reboots re-announce `FULL manifest(image 51, 23151 B, 104 chunks)`
+  (balloon8.log:582+:1066+:1283+:1520+:1771+:1976) and die during window
+  service of the card-served FULL chunks. The era's ONE non-silent death:
+  `Guru Meditation Error: Core 1 panic'ed (Interrupt wdt timeout on CPU1)`
+  (balloon8.log:837) MID-WINDOW (`window chunk(image 51 kind 1, 9/16)` at
+  :835), with a FULL DUMP — PC `esp_cpu_wait_for_intr` (cpu.c:64, the IDLE1
+  wait loop), PS INTLEVEL nibble nonzero, `EXCCAUSE 6` read as a stale
+  register of the interrupted context, the header line authoritative.
+  Reset as `rst:0xc (RTC_SW_CPU_RST)` — the panic path's own restart.
+- **balloon9**: boot A runs CLEAN ~5 min (6,021 loop counts, ZERO image
+  activity) then dies silently (rst at balloon9.log:1516). Boots B–G are
+  the DETERMINISTIC CRASH-LOOP: `Uptime: 2537 ms` in every banner (B: 2498),
+  each death after the thumbnail-manifest send — B sent thumb chunks 1–7/8
+  then died before the 177 B tail; C sent 7/8 + 8/8 (base received and
+  finalized COMPLETE, base9.log:145-148) and died before processing the
+  verdict; D–G died between `manifest(image 52 ...) sent` and the first
+  chunk print.
+- **The delivery livelock (base9.log)**: the base holds thumbnail 52
+  finalized COMPLETE and persisted (:147-148), keeps queuing
+  IMAGE_FULL_REQUEST (seq 24/25/26, :164/:189/:212), and answers every boot's
+  re-manifest with `COMPLETE row — ignored, COMPLETE reply sent`
+  (:171/:198/:223). Balloon-side IMAGE_ACK processing for the whole log:
+  **grep = 0** — the balloon died before every COMPLETE reply landed, so the
+  delivered bit was never persisted, so the next boot re-announced. Boot
+  rescan (4190ef0) turned every silent crash into an immediate re-entry into
+  the crash-correlated push path.
+
+### 12.3 Crash-signature census (executor-grepped, corrected raw-byte mojibake method)
+
+| Log | rst:0x7 | rst:0xc | Guru | canary | mojibake | i2cWrite E |
+|---|---|---|---|---|---|---|
+| balloon6 | 10 | 0 | — | — | — | — |
+| balloon7 | 1 | 0 | — | — | — | — |
+| balloon8 | 9 | 1 | 1 | 0 | 0 | 0 |
+| balloon9 | 6 | 0 | 0 | 0 | 0 | 1 |
+
+(The mojibake + i2cWrite columns are grepped 0/1 for balloon8/9 only; 6/7
+were counted for rst lines only. balloon9's single i2cWrite
+ESP_ERR_INVALID_STATE line is the §10.4 non-fatal class, NOT crash-adjacent.)
+
+### 12.4 Saved-PC census (15 samples across both logs, symbolated against the balloon9 10:41 ELF — xtensa-esp-elf-addr2line)
+
+| PC | Symbol |
+|---|---|
+| 0x4037c87d / 0x4037c87f | `esp_vApplicationTickHook` freertos_hooks.c:35 (session 9's was :34 — same function) |
+| 0x4037d8ef | `xPortEnterCriticalTimeout` port.c:490 — **NEW family member: the cross-core spinlock-acquire spin path** |
+| 0x4037dad0 | `_frxt_setup_switch` portasm.S:101 (context switch) |
+| 0x4037df0e | `xPortSysTickHandler` port_systick.c:223 |
+| 0x4037df91 | `SysTickIsrHandler` port_systick.c:149 |
+| 0x4037e991 / 0x4037ea4f | `xTaskIncrementTick` tasks.c:3207/3375 |
+| 0x4201cadf | `uart_ll_set_baudrate` ← `system_early_init` cpu_start.c:811 (boot-time — reset racing early init) |
+| 0x400478a5/0x400478b7/0x400478f0/0x4004795f/0x400559cc/0x40001c38 | ROM region (unsymbolated — S3 ROM ELFs not on the bench toolchain; the CLUSTERING itself is the fact) |
+
+Reading: **zero app-code PCs across 15 silent resets** — every sample lands
+in the 1 ms-hot kernel tick/switch/lock paths. The distribution is "the CPU
+was alive and servicing ticks at the reset instant", combined with the
+lock-path members (`xPortEnterCriticalTimeout` spins WITH INTS MASKED).
+
+### 12.5 What session-12 discriminates + the gate decision
+
+- **[STACK] re-refuted a third time**: balloon9 floors 236 words (loop-side
+  method), balloon8 244 — constant, no acceleration toward 0, no canary
+  whole-era. The §11.3 wedge-side reading repeats.
+- **The balloon8 dump NAMES the mechanism class**: `Interrupt wdt timeout on
+  CPU1` = CPU1 held interrupts masked (or sat above maskable level) past the
+  300 ms INT-WDT bound. The SAME class on CPU0 — where the TWDT lives —
+  produces exactly the era's dominant expression: stage-0's TIMG0 interrupt
+  cannot fire through a masked INTLEVEL, so no "Task watchdog got triggered"
+  print, and MWDT0's stage-1 resets SILENTLY at 10 s (§7.1/§11.2 topology).
+  §10.5's labeled one-family hypothesis ("visible signature depends on where
+  the damage lands") now has a WITH-DUMP member: CPU1 bites → int-wdt panic
+  with dump; CPU0 bites → silent TG0WDT stage-1.
+- **Honest scope**: this is a mechanism CLASS, not a located bug. What
+  masks INTLEVEL on either CPU remains open (driver critical sections,
+  spinlock wedge — cf. the `xPortEnterCriticalTimeout`/CAS census members —
+  or an ISR storm at level ≥ the WDT's). H-lull stays dead (§12.2 deaths are
+  mid-service AND post-completion); H-phase-independent (§9.3) WEAKENED by
+  §10 is UNWEAKENED here: balloon9 boot A died in a five-minute telemetry
+  lull with zero push activity.
+- **FIX SHAPE SELECTED (the crash-loop, not D1)**: reset-cause-gated
+  boot-rescan — after a crash-class reset (TASK_WDT/INT_WDT/WDT/PANIC/
+  CPU_LOCKUP) the 02.5-02 auto-resume is SKIPPED for that boot (no rescan
+  card-walk, no admission); base pull via IMAGE_FULL_REQUEST stays served
+  (handleFullRequest's card re-admit); a clean boot re-arms. Implemented as
+  `e9400b9` (`feat(02.5-02): reset-cause-gated boot-rescan resume`).
+  MITIGATION-labeled in source and ledger — it buys uptime and breaks the
+  delivery livelock; it is NOT the D1 lever and its fate rides G-01-10's
+  outcome.
+
+## 13 — SESSION-13 (balloon10 bench, 2026-08-30 12:58): the gate VERIFIED (9/9), image data delivered through 9 silent resets, deaths NOT synchronous with SD calls, the census grows (int_wdt + usb-serial-jtag tick hooks + CAS), and the [STAMP] instrument wired
+
+### 13.1 Provenance
+
+`balloon10.log` (2,772 lines, 10 boots) / `base10.log` (900 lines), written
+2026-08-30 12:58, banner `Build: Aug 30 2026 12:22:00` (balloon10.log:23) =
+`e9400b9` content (the gate). ELF provenance by banner + content only — the
+on-disk ELF was rebuilt with the [STAMP] instrument before this record.
+ACTIVE bench: operator commands include CAPTURE_NOW (balloon10.log:472) and
+window arming (:556); the base pulled FULLs via IMAGE_FULL_REQUEST retries.
+
+### 13.2 The gate's bench verdict: 9/9
+
+First boot POWERON → rescan ran normally, admitted 2 (balloon10.log:115).
+All NINE subsequent boots read TASK_WDT and printed
+`SdStore: boot-rescan skipped - crash-class reset TASK_WDT (…)` (:285, :926,
+:1101, :1346, :1596, :1897, :2149, :2390, :2594). The balloon9 2537 ms
+crash-loop is GONE; boot uptima lengthened; and the livelock is broken in
+the rescan arm — though §13.4 records the base-pull arm re-exposing the push
+path (by design, the no-strand trade).
+
+### 13.3 Data delivered THROUGH the crashes
+
+Base finalized image 53 thumbnail COMPLETE (base10.log:120) AND full 27/27
+COMPLETE (:215); image 54 thumbnail COMPLETE (:274) with its full pull IN
+FLIGHT at session end (95-chunk manifest, windows armed, 4/95 held,
+base10.log:329/:332/:386). The receipts + keep-everything archive carried
+real transfer through nine resets — the 02.5 design worked as drawn even
+with the underlying D1 family still firing.
+
+### 13.4 Death-context map (the session's central discriminate)
+
+All nine silent rst:0x7 deaths, last firmware line before each ROM banner:
+
+- Post-completion: boot 1 — thumb 8/8 INCLUDING the 177 B tail sent
+  (balloon10.log:181, the exact chunk that killed balloon9's boot 2), death
+  ~2 telemetry lines later — the completion/ACK-arrival moment again.
+- Mid-window-service: resets at :1247 (13/16), :1798 (4/16), :2050 (15/16),
+  :2291 (15/16 re-armed), :2495 (3/16).
+- **IN-LULL**: resets at :827, :1002, :1497 — last line
+  `E32: Transmitted 30 bytes` (plain beacon/telemetry TX), minutes of lull
+  after the boot's last card access.
+
+Conclusions drawn honestly: (1) deaths are NOT co-located with SD calls —
+three landed in lulls after plain transmits, matching session 9's
+inter-window-lull pattern (§8.2); (2) SD-NECESSITY REMAINS OPEN, not
+refuted — no card-free boot existed (the operator's CAPTURE_NOW and the
+base's FULL_REQUEST card re-admits touched the card on every boot), so the
+weak form "SD work is sufficient-but-not-necessary trigger vs unrelated" is
+undecided; (3) H-phase-independent (§9.3) is RE-STRENGTHENED toward the
+session-12 reading: lull deaths in two eras.
+
+### 13.5 Census + the census growth
+
+Whole-log greps: rst:0x7 = 9, rst:0xc = 0, Guru = 0, canary = 0, mojibake
+(raw-byte method) = 0, i2cWrite E = 0. [STACK] floors 244 ×10 / 356 ×4 —
+constant, no canary, fourth consecutive refutation. Saved PCs (9 samples,
+symbolated against the [STAMP] build's ELF — kernel addresses stable across
+these builds):
+
+| PC | Symbol |
+|---|---|
+| 0x40376478 | `tick_hook` int_wdt.c:125 — **the INT-WDT's own tick hook (session 8's :111 sibling)** |
+| 0x40377801 | `usb_serial_jtag_sof_tick_hook` usb_serial_jtag_connection_monitor.c:46 — **NEW: the console's USB-SJ monitor** |
+| 0x40379519 | `esp_cpu_compare_and_set` (xt_utils.h:235 inline chain) — **the spinlock CAS acquire primitive** |
+| 0x4037c87d | `esp_vApplicationTickHook` freertos_hooks.c:35 (repeat) |
+| 0x4037e9b1 | `xTaskIncrementTick` tasks.c:3227 (repeat) |
+| 0x400478a5/0x400478db/0x40047a68/0x400559cc | ROM cluster (grows: a5, db, a68) |
+
+The tick-hook cluster (int_wdt, usb-sj monitor, dispatcher) + the lock
+primitives + the balloon8 CPU1 dump keep the §12.5 class reading standing:
+interrupts masked too long on whichever CPU bites. The console's presence
+(usb-sj monitor hook; UART0-bridge console under `ARDUINO_USB_CDC_ON_BOOT=0`
+with `USB_MODE=1`) is RECORDED as a candidate surface, not ranked — the
+session-7-era mojibake class did NOT recur here (0 hits).
+
+### 13.6 Secondary findings (named, not actioned here)
+
+- **Heap low-water drift**: balloon10's `[MEM] minHeap` declines monotonically
+  ~143 KB across an active boot (8467364 → ~8323820) at a roughly steady
+  drip through BOTH active and lull stretches; instant `heap=` bounces back
+  between samples. Unproven between slow leak and fragmentation drift —
+  watch on the [STAMP] session before spending a round on it.
+- **NVS id-sequence quirk**: gated boot 2 printed
+  `image 52 has no valid full buffer; nothing to enqueue` (balloon10.log:130)
+  — an enqueue attempt carrying a stale id (card holds 53/54). Benign
+  (debug-only line; nothing enqueued; no state disturbed), logged for the
+  02.5 ledger's next pass.
+
+### 13.7 ROUND-#15 ROUTING (recorded, not speculated)
+
+The round-#15 bench package, riding one session:
+
+1. **[STAMP] RTC starvation stamps** — wired this round in main_balloon.cpp
+   (the code commit beside this doc): loopTask stamps every loop() pass
+   entry, the IDLE0 hook stamps every idle tick, both into RTC_DATA_ATTR
+   words that SURVIVE the stage-1 reset; one boot-time readout line.
+   Predicted readings: gap (loop minus idle) < ~1 s → both tasks froze
+   together (the whole-CPU masked/storm family); gap ≥ ~5 s → IDLE0 starved
+   alone while loopTask passed — which, under §7.1's armed-interrupt
+   premise, makes a SILENT stage-0 a contradiction worth re-opening §7 for.
+   The t values read as the previous boot's age at each task's last progress.
+2. The **§11.4 A/B hook-unregistered arm** (still pending, unchanged).
+3. Optional console A/B: route the bench console to native USB-SJ
+   (`ARDUINO_USB_CDC_ON_BOOT=1`) for one session to priced the console's
+   surface (§13.5) — run only if 1+2 answer insufficiently.
+4. The ladder heavy tail (≥7-window SVGA service, 3-minute dwell) re-run,
+   unchanged from §11.6.
+
+D1 stays OPEN; the mechanism class (interrupts masked too long, one CPU at
+a time) is the recorded working theory; the [STAMP] gap is its next
+discriminator. (01-UAT.md G-01-10, WINDOWS 15.)
