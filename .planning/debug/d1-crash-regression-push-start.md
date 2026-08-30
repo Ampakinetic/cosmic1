@@ -2224,3 +2224,81 @@ unchanged.
 The latch is 02.5-side resume POLICY (labeled MITIGATION in source, per
 the §14.4 guard): it buys session uptime and breaks the 52 loop; it makes
 no D1 claim.
+
+## 18 — SESSION-17 (balloon14 bench, 2026-08-30): the latch HOLDS (best session of the campaign: three images fully delivered, boots to 139 s) and a SECOND dual-core dump — CPU0 healthy in the tick-hook dispatch while CPU1's tick service is dead
+
+### 18.1 Provenance + session stats
+
+`balloon14.log` (2,826 lines, 8 boots: 1 POWERON + 6 silent rst:0x7 + 1
+rst:0xc panic) / `base14.log` (1,015 lines), 2026-08-30, = `57c3d5e`
+content (the resume latch). **The latch held exactly as §17.3 predicted**:
+boot 1 (POWERON) printed four per-id withhold lines — images 49/52/56/58
+(balloon14.log:113-116) — and `rescan withheld 4 resume-latched record(s)
+...` + `rescan found 0 undelivered image(s), admitted 0` (:118-119); 52
+NEVER pushed again (no completion-moment death this session; the withhold
+lines print only at rescan time, i.e. boot 1 — crash-class boots skip the
+rescan via the gate). [STAMP] ×7, gaps −158/−27/−655/−489/−507/−521/−468 ms
+— the whole-CPU-freeze reading repeats; boot ages 23–139 s. One death's
+ROM banner carries console corruption (`∩┐╜∩┐╜∩┐╜ESP-ROM`, :1607) — third
+corruption-at-death observation. **Delivery: the campaign's best — images
+59 (thumb + full 28/28), 60 (thumb + full 105/105 chunks, 23,239 B — the
+largest yet), 61 (thumb + full 28/28) ALL finalized COMPLETE
+(base14.log:70/:276/:329/:773/:817/:991); zero INCOMPLETE rows.**
+
+### 18.2 The second dual-core dump (balloon14.log:1557-1597) — and a decoder exoneration
+
+`Guru Meditation Error: Core 1 panic'ed (Interrupt wdt timeout on CPU1)`
+mid-window (image 60 kind 1, 9/16, :1556). Both cores:
+
+- **CPU1**: PC `esp_cpu_wait_for_intr`, backtrace idle-hook ← prvIdleTask,
+  **PS 0x00060b34 → INTLEVEL 4** — parked in the idle wait with its
+  level-1..4 interrupts (SysTick among them) MASKED. Its tick service had
+  stopped; the INT-WDT (which preempts at higher level) panicked it.
+- **CPU0**: PC `usb_serial_jtag_sof_tick_hook` (connection_monitor.c:38),
+  backtrace `xPortSysTickHandler port_systick.c:199` ← SysTickIsrHandler ←
+  `_xt_lowint1`, interrupted context IDLE0 — **CPU0 was ALIVE and
+  servicing a SysTick, inside the tick-hook dispatch**.
+
+The backtrace decoder's frame #0 named `esp_psram_check_ptr_addr` —
+EXONERATED by the symbol table: that function spans 0x403777c4–~0x403777e9
+and `usb_serial_jtag_sof_tick_hook` starts at EXACTLY the register-dump PC
+0x403777ec (nm on the deployed ELF); the checker is a pure pointer-range
+compare (esp_psram.c:525-549, no PSRAM access) and the backtrace's
+0x403777e9 is a 3-byte-earlier misattribution across the adjacent IRAM
+boundary. The call site is verified in the pinned IDF 5.5.4 source:
+`xPortSysTickHandler` calls `esp_vApplicationTickHook()` at that line —
+the dispatcher that walks the registered tick hooks (int_wdt's, the USB-SJ
+monitor's, the project's idle-hook sibling family — the entire Saved-PC
+census).
+
+### 18.3 What the two dumps say TOGETHER (the working theory, refined)
+
+Balloon8's dump: CPU0 stuck in `xPortEnterCriticalTimeout` (spinlock
+acquire, ints masked) while CPU1 starved. Balloon14's dump: CPU0 healthy
+in the pre-lock phase of its tick (the hook dispatch runs BEFORE the tick
+handler's critical section — verified in the local IDF source) while CPU1
+is ALREADY parked with ticks masked. The pinned kernel's tick path takes
+the KERNEL SPINLOCK on BOTH cores every tick
+(`taskENTER_CRITICAL_FROM_ISR()` in xPortSysTickHandler; on the SMP
+kernel only core 0 increments). Unified mechanism (labeled hypothesis,
+strongest on record): **a kernel/driver spinlock becomes permanently
+held; whichever core's tick or switch next needs it wedges inside its own
+ISR/switch path — ints masked at that level, so the TWDT stage-0 cannot
+print (the silent TG0WDT family, Saved PCs = tick/switch/lock code), the
+MWDT stage-1 resets silently; the other core continues briefly and
+expresses the int-wdt panic with a dump (balloon8/14) or starves next.**
+§15.3's "CPU0 spinning" reading is corrected to "WHICHEVER core takes the
+dead lock" — the census's mixed-core PCs now read as samples of both
+roles. The lock's OWNER remains unnamed — the one question left.
+
+### 18.4 Routing
+
+(1) **[TICKSTAMP] candidate (recorded, not actioned)**: register a project
+tick hook stamping a per-core last-tick RTC_NOINIT word (the [STAMP]
+pattern, tick side) — the next silent reset would read out WHICH core's
+ticks died first and how long the survivor kept ticking, hardening the
+ordering data the two dumps only sample. (2) Mine every future dual-core
+dump. (3) The kernel-lock provenance question is now a pinned-IDF-source
+reading task (which locks the balloon's hot path takes: UART console
+writes, SDMMC, heap) — recorded, not speculated. (01-UAT.md G-01-10,
+WINDOWS 15.)
