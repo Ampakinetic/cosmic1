@@ -2122,3 +2122,53 @@ cluster PCs (§12.4) can be symbolated against Espressif's published
 esp-rom-elfs (a network fetch — the operator's call); (3) the §14.4
 52-row POWERON livelock candidate stays recorded-not-actioned. (01-UAT.md
 G-01-10, WINDOWS 15.)
+
+## 16 — SESSION-16 (balloon13 bench, 2026-08-30): the family unchanged — [STAMP] confirms the freeze three more times, image 57 fully delivered through all three crashes, the heal fix unexercised, image 52's completion-moment death (fifth consecutive)
+
+### 16.1 Provenance
+
+`balloon13.log` (996 lines, 4 boots: 1 POWERON + 3 rst:0x7) / `base13.log`
+(257 lines), 2026-08-30 = `515d38c` content (the thumbnail-heal fix; banner
+not re-cited — ELF provenance by content only, the on-disk ELF moves with
+every rebuild). Census: rst:0x7 = 3, Guru = 0, canary = 0, mojibake
+(raw-byte AND replacement-char greps) = 0, i2cWrite E = 0. [STACK] floor
+244 words ×4 — the refutation repeats. Gate 3/3 (balloon13.log:282/:516/
+and the third).
+
+### 16.2 [STAMP]: three more freeze confirmations, no drift
+
+gap (loop − idle) = **−439 ms** (freeze at boot-age 9.3 s), **−39 ms**
+(45.5 s), **−445 ms** (53.6 s) — the §15.2 whole-CPU freeze class repeats
+exactly: IDLE0's last tick within milliseconds of loopTask's last pass,
+every time. No new timing structure; the instrument is stable across
+sessions.
+
+### 16.3 The session's events
+
+- Boot 1: rescan admitted 3 undelivered (balloon13.log:117); image 52's
+  thumb pushed 1–7 then the boot died at the **completion moment for the
+  FIFTH consecutive session** (:179 → rst at :182). The base is silent
+  about image 52 all session (base13.log has zero 52 lines): its row has
+  been COMPLETE-finalized since base9 (:147) — the balloon's card bit can
+  never set because the verdict is rate-limited/dropped on re-manifests,
+  so every POWERON re-push burns the completion moment again. §14.4's
+  relaxation candidate stays the right 02.5-side fix shape.
+- Boot 2: CAPTURE_NOW → image 57 (balloon13.log:573); thumb 6/6 COMPLETE
+  (base13.log:91-92); the base's UI full pull then hit the crash mid-window
+  and the EXISTING rescue fired end-to-end: `window request rejected for
+  requested image 57 - re-arming full` (base13.log:211) → re-manifest →
+  `resuming (23/27 held)` → **27/27 COMPLETE** (:239-240). Second
+  consecutive session the delivery machinery converged through the crash
+  family.
+- Boot 3 death: mid-window-service (image 57 full, 8/11, balloon13.log —
+  the usual class). Boot 2's death was lull (last line BMP280).
+- **The thumbnail-heal fix (§15.5) was unexercised** — no thumbnail ended
+  the session incomplete, so no `card re-admitted` line exists. The fix's
+  first field trial is still owed; nothing in this session disturbs it.
+
+### 16.4 Round-#15 verdict unchanged
+
+[STAMP] answered (§15.2/§16.2); the open question is unchanged and narrow:
+NAME THE LOCK whose acquire never completes on CPU0 (§15.3). No new dump,
+no new census members, no new candidates this session. Routing unchanged
+(§15.6). (01-UAT.md G-01-10, WINDOWS 15.)
