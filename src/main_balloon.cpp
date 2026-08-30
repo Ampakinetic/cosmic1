@@ -211,9 +211,25 @@ static RTC_NOINIT_ATTR uint32_t s_rtcIdle0LastTickMs;
 #define RTC_TICKSTAMP_MAGIC 0x71C67A9Du
 static RTC_NOINIT_ATTR uint32_t s_rtcTickMagic;
 static RTC_NOINIT_ATTR uint32_t s_rtcTickStamp[2];
+static RTC_NOINIT_ATTR uint32_t s_rtcTickCcount[2];
 
 static void IRAM_ATTR tickStampHook(void) {
-    s_rtcTickStamp[xPortGetCoreID()] = millis();
+    const uint32_t core = xPortGetCoreID();
+    // SYSTIMER-BASED stamp — deliberately the wedge PROBE: session-18's
+    // seven dumps proved CPU1's last tick dies INSIDE this millis() call,
+    // spinning in systimer_hal_get_counter_value's unbounded
+    // while(!timer_unit_value_valid) loop (systimer_hal.c:51) — the wedge
+    // caught here converts a silent TG0WDT death into an int-wdt PANIC WITH
+    // A DUMP naming the systimer. With the hook registered on BOTH cores
+    // (see the registration below — session-18's version only reached the
+    // calling core), every stall-side wedge should produce a dump.
+    s_rtcTickStamp[core] = millis();
+    // CCOUNT-BASED stamp — the INDEPENDENT clock (CPU cycle counter, a
+    // register read, no systimer involvement, 240 MHz per the boot banner).
+    // If at the next boot a core's tick stamp froze while its ccount stamp
+    // ADVANCED, that core was alive and running with the systimer DEAD —
+    // the stall named even for the silent-reset deaths that leave no dump.
+    s_rtcTickCcount[core] = (uint32_t)(esp_cpu_get_cycle_count() / 240000u);
 }
 
 // G-01-10 round #14 instrument [STACK] (01-32) — CRASH-FIX REVISION
@@ -375,21 +391,29 @@ void setup() {
     s_rtcIdle0LastTickMs = 0;
 
     // [TICKSTAMP] (see the declaration block): read out the PREVIOUS boot's
-    // per-core tick stamps, re-arm, and only then register the hook so the
-    // stamps are never a mix of this boot's writes and the previous boot's.
+    // per-core tick stamps (systimer-based AND ccount-based), re-arm, and
+    // only then register the hook — on BOTH cores via the ForCPU variant,
+    // fixing session-18's registration gap (the plain variant registers on
+    // the CALLING core only, and setup() runs on CPU1: every core0 stamp
+    // read t=0 all session).
     if (s_rtcTickMagic == RTC_TICKSTAMP_MAGIC) {
-        Serial0.printf("[TICKSTAMP] prev boot: core0 last tick t=%lu ms, core1 last tick t=%lu ms, gap %ld ms (core0 minus core1) (G-01-10)\n",
+        Serial0.printf("[TICKSTAMP] prev boot: core0 tick t=%lu ms (ccount %lu ms), core1 tick t=%lu ms (ccount %lu ms) (G-01-10)\n",
                        static_cast<unsigned long>(s_rtcTickStamp[0]),
+                       static_cast<unsigned long>(s_rtcTickCcount[0]),
                        static_cast<unsigned long>(s_rtcTickStamp[1]),
-                       static_cast<long>(static_cast<int32_t>(s_rtcTickStamp[0] - s_rtcTickStamp[1])));
+                       static_cast<unsigned long>(s_rtcTickCcount[1]));
     } else {
         Serial0.println("[TICKSTAMP] no prev-boot tick stamps (POWERON or RTC-domain reset) (G-01-10)");
     }
     s_rtcTickMagic = RTC_TICKSTAMP_MAGIC;
     s_rtcTickStamp[0] = 0;
     s_rtcTickStamp[1] = 0;
-    esp_err_t tickHookErr = esp_register_freertos_tick_hook(tickStampHook);
-    Serial0.printf("[TICKSTAMP] hook registered=%d (G-01-10)\n", tickHookErr == ESP_OK ? 1 : 0);
+    s_rtcTickCcount[0] = 0;
+    s_rtcTickCcount[1] = 0;
+    esp_err_t tickHookErr0 = esp_register_freertos_tick_hook_for_cpu(tickStampHook, 0);
+    esp_err_t tickHookErr1 = esp_register_freertos_tick_hook_for_cpu(tickStampHook, 1);
+    Serial0.printf("[TICKSTAMP] hooks registered cpu0=%d cpu1=%d (G-01-10)\n",
+                   tickHookErr0 == ESP_OK ? 1 : 0, tickHookErr1 == ESP_OK ? 1 : 0);
 
     delay(SETUP_DELAY_MS);
     
