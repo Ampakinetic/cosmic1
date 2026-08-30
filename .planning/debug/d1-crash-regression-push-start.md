@@ -2903,3 +2903,119 @@ no second frame to be stale).
   the quiet world that §28.3's first reading opens would make the check
   academic (the whole family fixed), and it runs anyway on the next
   card-in session. (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 29 — SESSION-26 (balloon23 bench, 2026-08-31): the QQVGA retire did NOT stop it — §28.3's persist branch taken — and the FIRST Saved-PC decode of the TG1WDT era names a new expression: the fault machinery itself (double exception, panic spin, one unmapped PC); the death window is bisected to three statements and the [CAPWIN] instrument + NVS-off A/B are wired
+
+### 29.1 The verdict and the window, after the retire
+
+`balloon23.log` (1,101 lines, 7 boots: 1 POWERON + 6 `rst:0x8 TG1WDT_SYS_RST`),
+2026-08-31 08:24, card out, SDMMC arm still on
+(`[SDMMC] begin DISABLED for A/B` every boot). **Six deaths, all at
+`Camera: Image captured, size: 6128-6391 B, duration: 0 ms` → instant reset,
+byte-identical to balloon18-22. The session-25 QQVGA retire (cfb1ca5) is
+provably IN the deployed image** (the `exceeds thumbnail budget` string is in
+the flashed firmware.bin) and **unexercised by the deaths**: the manual
+CAPTURE_NOW path (command_handler.cpp handleCaptureNow) never calls
+captureThumbnail at all — the retire removed a sequence the manual path did
+not run. §28.3's persist branch: the remaining window shrinks to project code.
+
+Provenance resolution (recorded because the banner misleads): every boot
+prints `Build: Aug 30 2026 22:25:37`, yet the binary contains cfb1ca5 code —
+the banner is `__DATE__ " " __TIME__` (main_balloon.cpp:73) and
+main_balloon.o was not recompiled after 22:25:37 (only camera_manager.cpp /
+auto_capture-side files changed since), so pio's incremental link reused the
+stale banner. The on-disk ELF (mtime Aug 31 00:10, SHA256 `b2b11394…`) IS the
+deployed build; the decode below is against it.
+
+### 29.2 THE DECODE: the TG1WDT era dies in the fault machinery — a new expression
+
+First Saved-PC decode of the whole TG1WDT era (38 samples, balloon18-23,
+addr2line `-pfiaC` against the deployed ELF; the era's logs were never decoded
+before this round):
+
+| PC (count) | Symbol |
+|---|---|
+| 0x403743c0/c3/c5/c8 (20) | `_DoubleExceptionVector` (xtensa_vectors.S:564-568) |
+| 0x40378218/1a/20 (7) | `_xt_panic` (panic_handler_asm.S:28-30 — the panic spin loop) |
+| 0x403782a6/ac (6) | `rtc_cntl_ll_disable_tagmem_retention` (inlined `rtc_cntl_hal.c:144` — the cold-restart/panic HAL path) |
+| 0x40377ab1 (1) | `_xt_handle_exc` (xtensa_vectors.S:725) |
+| 0x403ea61c (4 — balloon19 ×1, balloon23 ×3) | **UNRESOLVABLE — beyond all linked IRAM** (`.iram0` ends 0x40386300; the address sits in the unmapped cache-window region) |
+
+**Zero project frames, zero kernel tick-chain PCs** — the exact OPPOSITE of
+the SD-era censuses (§12.4/§13.5: tick_hook, xPortEnterCriticalTimeout,
+xTaskIncrementTick, SysTickIsrHandler — a CPU ALIVE in the tick/lock paths).
+The TG1WDT-era CPU is photographed ALREADY INSIDE THE FAULT PATH: exception
+#1 fired, the handler context faulted AGAIN (double exception — the classic
+cause: a fetch from flash while the flash cache is suspended, or a wild
+jump from corrupted control flow), the panic machinery spun at a level the
+INT-WDT could not preempt, and MWDT1's stage-2 reset silently at ~600 ms —
+which is why nothing ever prints and the reset lands 300-600 ms class after
+the freeze. The `0x403ea61c` samples add the wild-PC reading: at least
+sometimes the CPU JUMPED TO AN UNMAPPED ADDRESS — control-flow corruption.
+
+### 29.3 The window, bisected from code
+
+With the QQVGA switch gone, the manual path between the last console line
+and the never-printed `CommandHandler: Captured image ID N` is exactly three
+statements (command_handler.cpp handleCaptureNow + auto_capture.cpp):
+
+1. `AutoCap().allocateImageId()` → `imageIdPrefs.putUShort(kImageIdKey, …)` —
+   **Preferences.putUShort = nvs_set_u16 + nvs_commit: a REAL flash write
+   (cache suspension + other-core stall), the only heavyweight in the
+   window**;
+2. `AutoCap().markCaptureBaseline()` → `millis()` (trivial);
+3. the `Serial.printf("CommandHandler: Captured image ID %d\n", …)` itself.
+
+Corroborating context, recorded as hypothesis not fact: the NVS partition is
+the minimal 20 KB (partitions.csv `nvs,0x9000,0x5000`); ~24 bench sessions of
+per-capture u16 writes (each changed value = new entry + old garbage) put the
+partition deep into garbage-collection territory, where a write can carry a
+4 KB sector erase (a tens-of-ms cache-suspended window) — consistent with
+both the era boundary (balloon4/5-era captures ran clean at the same NVS
+call) and "crashing every time NOW". The wild-PC/corruption reading (§29.2)
+stays the competing hypothesis: an LCD_CAM DMA scribble consuming a return
+address would land its death at the next call boundary — the same window —
+and the bisector cannot distinguish location-of-death from
+cause-of-corruption when the death is between two flushed lines. Both
+readings predict DIFFERENT bench signatures (below).
+
+### 29.4 The round's package (committed beside this record)
+
+1. **[CAPWIN] bisector** — latch-free flushed lines bracketing the window:
+   `[CAPWIN] pre-id id=%u` / `[CAPWIN] post-id` inside allocateImageId (both
+   capture paths covered), `[CAPWIN] post-baseline` after markCaptureBaseline
+   in handleCaptureNow. Flush guarantee: a printed line is ON THE WIRE before
+   execution proceeds, so presence proves reach; silence names the step.
+   Removal: with the G-01-10 instrument family.
+2. **`G01_CAPWIN_NVS_ID_DISABLED` A/B arm** (platformio.ini, balloon env,
+   removal comment in-source): begin() forces the EXISTING fail-open path
+   (`imageIdPrefsOpen = false`) — RAM-only IDs, zero flash writes anywhere in
+   the capture window, capture flow otherwise byte-identical. Console marker:
+   `[CAPWIN] NVS id-commit DISABLED for A/B - RAM-only IDs this session`.
+
+Pre-written readings (one session answers):
+
+- **Deaths STOP with the A/B armed** → the NVS flash write in the capture
+  window is NAMED as the death interaction (§29.3 hypothesis 1). Fix shape:
+  move the id-commit OUT of the capture window (queued commit from the 1 Hz
+  loop block, RAM-authoritative ID handed out immediately) — behavior-preserving,
+  the overwrite bug stays fixed (RAM advances instantly; a crash loses at
+  most the last ID's persistence).
+- **Deaths CONTINUE with the A/B armed** → the flash write is exonerated in
+  this window; the [CAPWIN] lines then say WHERE it dies: between
+  `Image captured` and `pre-id` → the millis/printf/handler-entry path —
+  pointing at async/corruption origin (§29.3 hypothesis 2, the DMA-scribble
+  class); between `pre-id` and `post-id` (NVS skipped — near-empty interval) →
+  an async event landing in a µs-scale window = corruption, not code;
+  between `post-id`/`post-baseline` and the ID print → the printf path.
+- **The bisector prints never appear at all** → the death moves BEFORE the
+  id allocation — i.e. inside captureImage()'s tail — contradicting the
+  "Image captured" print's presence; record and re-read (would itself be a
+  new fact).
+- Companion one-shot (operator's call, hardware-only): `esptool erase_flash`
+  then re-flash — if deaths drop from every-capture to rare WITH NVS writes
+  re-enabled, the §29.3 GC-frequency correlation is independently confirmed.
+
+The SD-era honest remainder (capture-coverage cross-check of balloon11/13)
+is unchanged; the SDMMC arm stays on until G-01-10 closes. (01-UAT.md
+G-01-10, WINDOWS 15.)

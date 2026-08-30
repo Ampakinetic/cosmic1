@@ -293,6 +293,16 @@ CommandResult CommandHandler::handleCaptureNow(const CommandPacket& cmd) {
         // ID allocation).
         AutoCap().markCaptureBaseline();
 
+        // [CAPWIN] bisector tail (D1 round #16, debug doc section 29): the
+        // manual path's death window ends at this line's print — balloon23
+        // never printed the image-ID line below, and with the QQVGA switch
+        // retired the steps between the capture print and here are exactly
+        // [millis, NVS commit (bracketed inside allocateImageId), this line].
+        // Flushed so a silent death cannot swallow it. Removal: with the
+        // G-01-10 instrument family after the campaign closes.
+        Serial.println("[CAPWIN] post-baseline (G-01-10)");
+        Serial.flush();
+
         commandsExecuted++;
 
         if (DEBUG_COMMAND_HANDLER) {

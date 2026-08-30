@@ -73,6 +73,18 @@ bool AutoCapture::begin(CameraManager* camera) {
     // stored value) or an NVS failure degrades to the old RAM-only behavior
     // — a capture is never blocked by the persistence layer.
     imageIdPrefsOpen = imageIdPrefs.begin(kImageIdNamespace, false);
+
+    // A/B arm (D1 session-26, balloon23 verdict): RAM-only IDs for one bench
+    // session — removes the ONLY flash write from the capture death window so
+    // the [CAPWIN] bisector can name or exonerate it. Reuses the existing
+    // fail-open path (imageIdPrefsOpen == false, the line below prints the
+    // honest degradation), so a capture is never blocked and no other code
+    // changes. REMOVE together with the platformio.ini flag after the test.
+#ifdef G01_CAPWIN_NVS_ID_DISABLED
+    imageIdPrefsOpen = false;
+    Serial.println("[CAPWIN] NVS id-commit DISABLED for A/B - RAM-only IDs this session (G-01-10)");
+#endif
+
     if (imageIdPrefsOpen) {
         lastImageId = imageIdPrefs.getUShort(kImageIdKey, 0);
         if (DEBUG_AUTO_CAPTURE && lastImageId > 0) {
@@ -327,6 +339,20 @@ uint16_t AutoCapture::allocateImageId() {
     // wraps at 65535 (Phase 2 image sequencing owns durable IDs)
     ++lastImageId;
 
+    // [CAPWIN] bisector (D1 round #16, debug doc section 29): every TG1WDT-era
+    // death since balloon18 lands AFTER the "Image captured" print and BEFORE
+    // the caller's image-ID print — and after the session-25 QQVGA retire the
+    // only heavyweight left in that window is THIS function's NVS commit (a
+    // flash write with cache suspension; the balloon23 Saved-PC census decodes
+    // to the double-exception/panic machinery, the fetch-from-flash-while-
+    // cache-suspended signature). These latch-free lines bracket the flash op,
+    // FLUSHED to the UART so a silent death cannot swallow them: presence of a
+    // line proves execution reached it, absence names the step that died.
+    // Removal: with the [MEM]/B1/B2/[STAMP]/[TICKSTAMP] family after G-01-10
+    // closes on bench evidence.
+    Serial.printf("[CAPWIN] pre-id id=%u (G-01-10)\n", static_cast<unsigned>(lastImageId));
+    Serial.flush();
+
     // 01-11 (G-01-6): persist BEFORE handing out the ID — a reboot after a
     // capture must never re-issue the same ID (that re-issue is the
     // overwrite bug). A failed write degrades to RAM-only behavior (logged
@@ -334,6 +360,9 @@ uint16_t AutoCapture::allocateImageId() {
     if (imageIdPrefsOpen) {
         imageIdPrefs.putUShort(kImageIdKey, lastImageId);
     }
+
+    Serial.println("[CAPWIN] post-id (G-01-10)");
+    Serial.flush();
 
     return lastImageId;
 }
