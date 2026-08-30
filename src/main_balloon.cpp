@@ -140,6 +140,43 @@ static AppState appState;
 // instrumentation after G-01-10 closes on bench evidence.
 static volatile uint32_t s_idle0TickCount = 0;
 
+// G-01-10 round #15 instrument [STAMP] (session-13 follow-up, 2026-08-30)
+// per .planning/debug/d1-crash-regression-push-start.md §13.9: RTC-memory
+// starvation stamps. The silent TG0WDT family (sessions 8/9/12/13) leaves NO
+// software trace — stage-0's print never ran — so the death window is
+// otherwise unobservable. These two RTC_DATA_ATTR words are written LIVE
+// during the previous boot (loopTask stamps every loop() pass entry; the
+// idle hook stamps every IDLE0 tick), SURVIVE the stage-1 hardware reset
+// (RTC domain — no re-init on a warm reset, unlike .bss), and are read out
+// once at the next boot:
+//   - the t values are the previous boot's own millis() clock (starts at 0
+//     per boot), so they read as the previous boot's AGE at each task's last
+//     progress — the reset landed up to ~10 s after the later stamp (the
+//     stage-1 period, §7.1/§11.2);
+//   - the gap (loop minus idle) splits the family:
+//       gap < ~1 s  -> both tasks froze together: whole-CPU stall (the
+//                      lock-with-ints-masked / ISR-storm family — matches
+//                      the balloon9/10 CAS + EnterCriticalTimeout census);
+//       gap >= ~5 s -> IDLE0 starved while loopTask kept passing: pure task
+//                      starvation — under THAT reading a silent stage-0
+//                      CONTRADICTS §7.1's armed-interrupt premise and
+//                      re-opens the WDT chain (the stage-0 print should
+//                      have appeared).
+//   - zero stamps with a matching magic mean the previous boot died before
+//     that task's first run (setup-phase death). In the
+//     G01_D1_IDLE_HOOK_DISABLED A/B arm the idle stamp never updates and the
+//     gap is meaningless (hook unregistered) — only the loop-side t reads.
+// RTC_DATA_ATTR words are uninitialized after a true POWERON, so a magic
+// word gates the readout (collision odds 1 in 2^32, accepted). Written
+// every pass/tick — one 32-bit RTC-SLOW store each, no locks (the idle-side
+// value is millis(), an esp_timer register read, legal in idle context).
+// G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2 instrumentation
+// after G-01-10 closes on bench evidence.
+#define RTC_STAMP_MAGIC 0xC05C1C5u
+static RTC_DATA_ATTR uint32_t s_rtcStampMagic = 0;
+static RTC_DATA_ATTR uint32_t s_rtcLoopLastPassMs = 0;
+static RTC_DATA_ATTR uint32_t s_rtcIdle0LastTickMs = 0;
+
 // G-01-10 round #14 instrument [STACK] (01-32) — CRASH-FIX REVISION
 // (session 8): the watermark sampling previously ran INSIDE this hook
 // (uxTaskGetStackHighWaterMark(NULL) every 1024 idle ticks), putting debug
@@ -154,6 +191,7 @@ static volatile uint32_t s_idle0TickCount = 0;
 // idle stack — that shift is the fix working, not new headroom appearing.
 static bool idle0TickHook(void) {
     s_idle0TickCount++;
+    s_rtcIdle0LastTickMs = millis();   // [STAMP] — see the block above
     return true;
 }
 
@@ -277,6 +315,26 @@ void setup() {
     // mirrored here where they are visible over the bridge cable
     Serial0.begin(115200);
     Serial0.printf("[BOOT] Cosmic1 Balloon v%s\n", FIRMWARE_VERSION);
+
+    // G-01-10 round #15 instrument [STAMP] (see the declaration block above):
+    // read out the PREVIOUS boot's last-progress stamps BEFORE anything can
+    // disturb them, then re-arm for this boot (magic set; stamps zeroed so a
+    // crash before a task's first run reads as 0, never as stale data). One
+    // line per boot, before subsystem init — a setup-phase death still gets
+    // this readout printed at ITS next boot. REMOVAL CONDITION: strips WITH
+    // the [MEM]/B1/B2 instrumentation after G-01-10 closes.
+    if (s_rtcStampMagic == RTC_STAMP_MAGIC) {
+        Serial0.printf("[STAMP] prev boot: loopTask last pass t=%lu ms, IDLE0 last tick t=%lu ms, gap %ld ms (loop minus idle) (G-01-10)\n",
+                       static_cast<unsigned long>(s_rtcLoopLastPassMs),
+                       static_cast<unsigned long>(s_rtcIdle0LastTickMs),
+                       static_cast<long>(static_cast<int32_t>(s_rtcLoopLastPassMs - s_rtcIdle0LastTickMs)));
+    } else {
+        Serial0.println("[STAMP] no prev-boot stamps (POWERON or RTC-domain reset) (G-01-10)");
+    }
+    s_rtcStampMagic = RTC_STAMP_MAGIC;
+    s_rtcLoopLastPassMs = 0;
+    s_rtcIdle0LastTickMs = 0;
+
     delay(SETUP_DELAY_MS);
     
     // Print welcome message immediately after serial init
@@ -391,6 +449,11 @@ void loop() {
     }
     
     uint32_t loopStartTime = millis();
+
+    // [STAMP] (G-01-10, see the declaration block): last-pass stamp written
+    // EVERY pass, before any subsystem work — if this pass is the one that
+    // wedges, the RTC word holds its start time, not a stale earlier pass.
+    s_rtcLoopLastPassMs = loopStartTime;
 
     // WR-09: no try/catch — ESP32 Arduino builds compile with exceptions
     // disabled (and even enabled, faults on this platform abort/reboot
