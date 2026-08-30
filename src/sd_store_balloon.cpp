@@ -127,11 +127,15 @@ static uint64_t cardFreeBytes() {
 }
 
 bool BalloonSdStore::hasHeadroomFor(uint32_t fullLen, uint32_t thumbLen) const {
-    // Not mounted = the honest card-full-adjacent refusal for the gates
-    // (the true cause stays visible in the boot log's mount verdict and
-    // getStatus()); the gate never mutates state — it is a pure query.
+    // Not mounted = TRUE: the capture proceeds on the D-03 volatile
+    // fallback — persistCapture's !available branch names the module-side
+    // skip and the caller takes the PSRAM-buffer regime. The pre-gates
+    // must NOT refuse in the fallback regime: session-19's card-less A/B
+    // (balloon17) found every CAPTURE_NOW refused with "card full" here —
+    // a FALSE message (the card was ABSENT, not full); this gate's
+    // honest-refusal reading predates the fallback and stranded it.
     if (!available || status.initFailed) {
-        return false;
+        return true;
     }
     return cardFreeBytes() >= requiredSpaceFor(fullLen, thumbLen);
 }

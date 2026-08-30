@@ -243,9 +243,13 @@ public:
     // usedBytes read per capture attempt (T-02.5-09), never inside the
     // per-chunk loop (PRI-03 pacing untouched), and the loop never blocks
     // on the card.
-    // Returns FALSE also when the store is not mounted: an absent card is
-    // the honest card-full-adjacent refusal for the capture gates (the true
-    // cause stays visible in the boot log's mount verdict and status).
+    // Returns TRUE when the store is not mounted: the capture proceeds on
+    // the D-03 volatile fallback (persistCapture names the module-side skip
+    // and the caller takes the PSRAM-buffer regime). The session-19
+    // card-less A/B (balloon17) stranded that regime — every CAPTURE_NOW
+    // was refused with a false "card full" — so the old absent-card FALSE
+    // is retired; the true cause stays visible in the boot log's mount
+    // verdict and status either way.
     // Consumers: CommandHandler::handleCaptureNow (refuses CAPTURE_NOW via
     // the EXISTING NACK_BUSY class, before any camera work) and
     // AutoCapture::fire (skips with a named log; the baseline-before-
