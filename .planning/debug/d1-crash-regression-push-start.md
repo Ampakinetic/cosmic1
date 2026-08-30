@@ -2566,3 +2566,67 @@ take the volatile fallback` at boot, NO SdStore rescan/persist/chunk
 lines, captures served from PSRAM buffers; the instruments ([STAMP],
 [TICKSTAMP] v2, gate, latch) all function unchanged. (01-UAT.md G-01-10,
 WINDOWS 15.)
+
+## 23 — SESSION-20 (balloon17 bench, 2026-08-30): THE CARD-REMOVAL A/B VERDICT — ZERO CRASHES — the SD-line class is CONFIRMED as the trigger family; the card-less session also exposed (and this record's fix retires) a capture-gate bug that stranded the volatile fallback
+
+### 23.1 The verdict
+
+`balloon17.log` (507 lines, ONE boot) / `base17.log` (252 lines),
+2026-08-30. Census: rst:0x7 = 0, rst:0xc = 0, Guru = 0 — **the first
+card-less session of the campaign ran end-to-end with ZERO deaths**,
+against an era in which every card-in session lost boots within 9–140 s.
+The mount failed honestly (`sdmmc_card_init failed (0x107)`,
+balloon17.log:107-109 — card absent), the volatile-fallback regime
+engaged (`SD card store unavailable - captures take the volatile
+fallback`), NO SD IO occurred all session — and nothing froze. THE
+SD-LINE CLASS IS CONFIRMED: the trigger is board-local to the card and
+its pins (GPIO39/38/40 = MTCK/—/MTDI — §22.2), travelling across two
+independent supplies (§22.4) and independent of load phase (the earlier
+lull deaths had card IO in their boots; this session had none and none
+died). The S3-systimer-erratum-independent-of-SD candidate drops below
+the line; stage 1 (the task-freeze that precedes the systimer break)
+now reads as part of the SD-correlated event chain — its mechanism is
+the remaining question INSIDE the confirmed class.
+
+### 23.2 The gate bug the A/B exposed (fixed beside this record)
+
+No CAPTURE_NOW succeeded card-less: `capture refused - card full
+(keep-everything archive...)` three times (balloon17.log:398/:461/:490)
+— a FALSE message (the card was ABSENT, not full). Root cause:
+`hasHeadroomFor` returned FALSE when the store was unavailable — an
+"honest card-full-adjacent refusal" written for the keep-everything
+gates that predates the D-03 volatile fallback and STRANDED it: without
+a card, no capture could ever pass the pre-gates, so the
+PSRAM-buffer regime built in 02.5-01 was unreachable through the command
+path. FIX: `hasHeadroomFor` now returns TRUE when the store is
+unavailable — the capture proceeds, `persistCapture`'s !available branch
+names the module-side skip, and the caller takes the fallback regime.
+All three consumers (CommandHandler CAPTURE_NOW, AutoCapture::fire,
+persistCapture's Step-1 backstop) share the one implementation, so the
+single fix covers the path; persistCapture's Step-1 comment's mounted-
+invariant still holds (its !available branch returns first). Committed
+beside this record; the balloon17 card-less session is also the proof
+the fallback REGIME is stable — zero crashes under it.
+
+### 23.3 The fix ladder for the confirmed trigger (recorded, not actioned)
+
+With the class confirmed, the engineering options in cost order:
+
+1. **Rewire the card off the JTAG pins** (CLK 39→ a non-JTAG GPIO; DATA
+   40 → likewise — free S3 GPIOs exist; GPIO35-37 are PSRAM-bound on
+   this 8 MB module, so pick from 33/34/47/... per the DevKitC header).
+   Removes the trigger at the board level; the keep-everything archive
+   comes back. THE real fix for flight.
+2. **Disarm stall-on-halt** (`systimer_ll_counter_can_stall_by_cpu(...,
+   false)` for both CPUs at boot): software-only, removes the stage-2
+   systimer death even if the JTAG/halt event still occurs — but a
+   spurious halt itself would still freeze the cores (a halt is only
+   clearable by the debugger), so this mitigates without curing.
+3. **Keep-the-card-out** (volatile fallback): works TODAY post-fix
+   (captures now pass), at the cost of the persistent archive and the
+   boot-resume machinery — the flight decision if the rewire waits.
+
+The JTAG-vs-electrical split inside the confirmed class (does the card's
+CLK on MTCK latch the TAP, or is it local rail/ground interaction?) is
+decidable later by option 1 alone: a rewire that eliminates the deaths
+closes the class. (01-UAT.md G-01-10, WINDOWS 15.)
