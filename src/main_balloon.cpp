@@ -144,11 +144,11 @@ static volatile uint32_t s_idle0TickCount = 0;
 // per .planning/debug/d1-crash-regression-push-start.md §13.9: RTC-memory
 // starvation stamps. The silent TG0WDT family (sessions 8/9/12/13) leaves NO
 // software trace — stage-0's print never ran — so the death window is
-// otherwise unobservable. These two RTC_DATA_ATTR words are written LIVE
-// during the previous boot (loopTask stamps every loop() pass entry; the
-// idle hook stamps every IDLE0 tick), SURVIVE the stage-1 hardware reset
-// (RTC domain — no re-init on a warm reset, unlike .bss), and are read out
-// once at the next boot:
+// otherwise unobservable. These two RTC-slow words (see the attribute note
+// on the declarations below) are written LIVE during the previous boot
+// (loopTask stamps every loop() pass entry; the idle hook stamps every
+// IDLE0 tick), SURVIVE the stage-1 hardware reset, and are read out once
+// at the next boot:
 //   - the t values are the previous boot's own millis() clock (starts at 0
 //     per boot), so they read as the previous boot's AGE at each task's last
 //     progress — the reset landed up to ~10 s after the later stamp (the
@@ -166,16 +166,22 @@ static volatile uint32_t s_idle0TickCount = 0;
 //     that task's first run (setup-phase death). In the
 //     G01_D1_IDLE_HOOK_DISABLED A/B arm the idle stamp never updates and the
 //     gap is meaningless (hook unregistered) — only the loop-side t reads.
-// RTC_DATA_ATTR words are uninitialized after a true POWERON, so a magic
+// RTC_NOINIT_ATTR, NOT RTC_DATA_ATTR — the session-14 field-trial lesson
+// (balloon11.log: every warm boot read "no prev-boot stamps"): .rtc.data
+// (RTC_DATA_ATTR) carries a FLASH LOAD IMAGE, and the second-stage
+// bootloader re-copies it from flash on EVERY non-deep-sleep boot —
+// clobbering whatever the previous boot wrote there. RTC_NOINIT_ATTR
+// (.rtc.noinit) is never loaded and never cleared: it survives every
+// reset except a true power-on, where its content is garbage — the magic
 // word gates the readout (collision odds 1 in 2^32, accepted). Written
-// every pass/tick — one 32-bit RTC-SLOW store each, no locks (the idle-side
-// value is millis(), an esp_timer register read, legal in idle context).
-// G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2 instrumentation
-// after G-01-10 closes on bench evidence.
+// every pass/tick — one 32-bit RTC-SLOW store each, no locks (the
+// idle-side value is millis(), an esp_timer register read, legal in idle
+// context). G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2
+// instrumentation after G-01-10 closes on bench evidence.
 #define RTC_STAMP_MAGIC 0xC05C1C5u
-static RTC_DATA_ATTR uint32_t s_rtcStampMagic = 0;
-static RTC_DATA_ATTR uint32_t s_rtcLoopLastPassMs = 0;
-static RTC_DATA_ATTR uint32_t s_rtcIdle0LastTickMs = 0;
+static RTC_NOINIT_ATTR uint32_t s_rtcStampMagic;
+static RTC_NOINIT_ATTR uint32_t s_rtcLoopLastPassMs;
+static RTC_NOINIT_ATTR uint32_t s_rtcIdle0LastTickMs;
 
 // G-01-10 round #14 instrument [STACK] (01-32) — CRASH-FIX REVISION
 // (session 8): the watermark sampling previously ran INSIDE this hook
