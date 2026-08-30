@@ -2014,3 +2014,111 @@ Item 1 ([STAMP]): instrument fixed, re-run owed on the next bench session —
 the gap reading remains the mechanism-class discriminator. Item 2 (the §11.4
 A/B hook-unregistered arm): still pending, unchanged. D1 stays OPEN;
 working theory unchanged (§13.7). (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 15 — SESSION-15 (balloon12 bench, 2026-08-30 14:00): [STAMP] ANSWERS — whole-CPU freeze confirmed — and the balloon8 dump, re-read, CAPTURES the mechanism: CPU0 spinning in a spinlock acquire with ints masked
+
+### 15.1 Provenance
+
+`balloon12.log` (1,032 lines, 4 boots: 1 POWERON + 3 rst:0x7) /
+`base12.log` (245 lines), written 2026-08-30 14:00, banner
+`Build: Aug 30 2026 13:53:35` (balloon12.log:24) = `2247f1c` content (the
+NOINIT [STAMP] fix). ELF provenance by banner + content only (the on-disk
+ELF was rebuilt with the §15.5 fix before this record). [STACK] floors 244
+×4 / 356 ×2 — fifth consecutive refutation; [MEM] minHeap 8457484 = the
+boot baseline (no drift this session).
+
+### 15.2 The round-#15 discriminator ANSWERS: whole-CPU freeze
+
+All three post-crash boots produced genuine [STAMP] readouts:
+
+| Boot | loopTask last pass | IDLE0 last tick | gap (loop − idle) |
+|---|---|---|---|
+| 2 | t=8850 ms | t=9295 ms | **−445 ms** |
+| 3 | t=83098 ms | t=83174 ms | **−76 ms** |
+| 4 | t=60630 ms | t=60642 ms | **−12 ms** |
+
+Against the §13.7 predictions: gap ≪ 1 s in EVERY reading — **both tasks
+progressed to within milliseconds of the death; the whole CPU froze
+together at IDLE0's last tick**. The whole-CPU masked-freeze class is
+CONFIRMED; the task-starvation reading is REFUTED. Two premises settle with
+it: the stage-0 silence is now EXPLAINED (the freeze masks the TIMG0
+interrupt that would print — no WDT-chain contradiction, §7.1's
+armed-interrupt premise STANDS: IDLE0 was alive and feeding until the
+freeze instant); and §13.7's boot-age readings (9.3 s / 83.2 s / 60.6 s at
+freeze) kill any fixed-maturation clock. One death's last console line is
+corrupted mid-print (`GPS: N∩┐╜ valid data`) — the freeze caught the
+console mid-byte, exactly the class's signature.
+
+### 15.3 The balloon8 dump, re-read: the mechanism CAPTURED (retrospectively completes §12.5)
+
+balloon8.log's CPU1 panic (:837) printed BOTH cores, and the §12.5 record
+mined only the CPU1 half. The full dump:
+
+- **CPU1** (the panicking core): backtrace `xt_utils_wait_for_intr` ←
+  `esp_vApplicationIdleHook` ← `prvIdleTask` (:850-854) — **IDLE1 is
+  innocent**: it sits in its normal wait loop. Its SysTick stopped being
+  served (tick increment takes a scheduler spinlock on SMP), the INT-WDT
+  feed stopped with it, and the int-wdt panicked CPU1.
+- **CPU0**: `PC: 0x4037d8ec — xPortEnterCriticalTimeout port.c:490,
+  PS 0x00060034` (:859-860) — **CPU0 was SPINNING IN A SPINLOCK ACQUIRE
+  with its interrupts masked** at the instant of the panic.
+
+This is the silent-reset mechanism photographed. Re-reading the censuses
+(§12.4/§13.5): `xPortEnterCriticalTimeout`, `esp_cpu_compare_and_set`,
+`_frxt_setup_switch`, and the tick-path PCs are all samples of ONE hang —
+CPU0 wedged acquiring a spinlock that is never released (dead/corrupted
+owner, or an ISR-over-task self-deadlock of a non-recursive lock), CPU0's
+ints masked so the TWDT stage-0 cannot print, stage-1 resetting silently
+at +10 s; CPU1's tick starvation produces the int-wdt expression when it
+lands first. LOCALIZED CLASS: **a spinlock acquire on CPU0 that never
+completes.** The dump does not name the lock's owner — that is the
+remaining question. Candidate lock families (from the death contexts and
+the drivers in the hot path): heap_caps region locks (any allocation),
+UART driver locks (the two-console write path), I2C bus locks (the
+i2cWrite ESP_ERR_INVALID_STATE class), SDMMC locks. Not ranked — recorded.
+
+### 15.4 The session's events
+
+Gate 3/3 (skip lines at balloon12.log:281/:637/:941). Deaths: boot 1 at
+image 52's thumb 7/8 completion moment (:178 — the FOURTH consecutive
+session to die inside image 52's push); boot 2 at image 56's thumb 3/7
+mid-push (:534); boot 3 lull-adjacent with the corrupted line above.
+POWERON boot 1 also completed the boot rescan honestly: 5 already-
+delivered records skipped, torn 47/48 still skipped (:111-113).
+
+### 15.5 The thumbnail-heal gap and its fix (committed beside this record)
+
+The gate's no-strand promise had a hole the session exposed: base heal
+windows for image 56's missing thumb chunks (2..6) were NACK_INVALID four
+times — `window request for unknown/evicted image 56 rejected`
+(balloon12.log:689/:753/:821/:977) — because the crash killed the RAM
+entry and the gate skips re-admission; the base's D-24 stall detector then
+FINALIZED the row INCOMPLETE at 2/7 (`thumbnail push stalled; passes
+exhausted`, base12.log:238-239). The rescue asymmetry: FULL pulls are
+rescued end-to-end (handleFullRequest card re-admit + the base's
+window-NACK re-arm), but the thumbnail push — balloon-driven, base-healed —
+had no rescue and NO wire command by which the base could request a
+re-announce. FIX (balloon side, one site): on a THUMBNAIL-kind window
+request whose target is unknown, re-admit the record from the card through
+the SAME validated boot-rescan fill — the entry lands at
+PUSH_THUMB_MANIFEST, the next process() pass re-announces, and the base's
+restart-on-new-manifest behavior re-drives the row. Guards in-source:
+thumb-kind only, record still owes the thumbnail, id not already queued,
+free slot required; FULL-kind asks deliberately NOT re-admitted here (that
+class is already rescued, and a thumbDelivered record would park where no
+window can arm). Wire format unchanged; builds 2/2, harness exit 0.
+
+### 15.6 Round-#15 verdict + routing
+
+Item 1 ([STAMP]): **ANSWERED** — whole-CPU freeze; the instrument and the
+NOINIT lesson both earn their keep. Item 2 (the §11.4 A/B hook-unregistered
+arm): **DEMOTED** — [STAMP] proves IDLE0 liveness to the freeze instant,
+which is the very question the A/B was built to ask; the hook dispatch is
+exonerated. D1's remaining question is NARROWER than ever: NAME THE LOCK
+whose acquire never completes on CPU0. Routing (recorded, not speculated):
+(1) mine every future dual-core dump — each carries both CPUs' PCs, and a
+CPU1-expression with the owner's frame visible would name it; (2) the ROM
+cluster PCs (§12.4) can be symbolated against Espressif's published
+esp-rom-elfs (a network fetch — the operator's call); (3) the §14.4
+52-row POWERON livelock candidate stays recorded-not-actioned. (01-UAT.md
+G-01-10, WINDOWS 15.)
