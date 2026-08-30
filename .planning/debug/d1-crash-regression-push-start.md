@@ -2424,3 +2424,70 @@ configuration), not software. (3) S3 systimer erratum search (network —
 the operator's call). D1 is no longer "open" in the old sense: the wedge
 site is dump-proven; what remains is the TRIGGER. (01-UAT.md G-01-10,
 WINDOWS 15.)
+
+## 21 — SESSION-19 (balloon16 bench, 2026-08-30): v2 verified on both cores — the dumps repeat frame-identical, BOTH cores' ticks now die at the SAME millisecond, and the two-stage death structure is SYSTEMATIC (tasks first, ticks seconds later)
+
+### 21.1 Provenance + v2 verdicts
+
+`balloon16.log` (1,717 lines, 5 boots: 1 POWERON + 1 silent rst:0x7 + 3
+int-wdt panics) / `base16.log` (379 lines), 2026-08-30, build `648ccad`
+(the [TICKSTAMP] v2). v2 verdicts: `hooks registered cpu0=1 cpu1=1` every
+boot ✓; the three dumps still die frame-identical in the systimer
+valid-bit spin (same chain as §20.2, addresses +0x1c from the rebuild),
+every one expressed on CPU1, interrupted context IDLE1. Delivery through
+the deaths continues: image 67 thumb + full 37/37 COMPLETE
+(base16.log:70/:362); the latch held (8 rows withheld at boot 1's rescan,
+`rescan found 0 undelivered`, balloon16.log:124).
+
+### 21.2 The session's structural finding: a TWO-STAGE death, 5/5 systematic
+
+The v2 tick stamps expose what the v1 single-core data could not:
+
+- **Both cores' tick stamps die at the IDENTICAL millisecond in every
+  death** (123934/123934, 30109/30109, 44564/44564, 25907/25907 ms) — the
+  systimer snapshot handshake breaks for BOTH cores simultaneously, as it
+  must for a shared peripheral; neither core's tick service dies first.
+- **The task stamps freeze 0.4–15.5 s BEFORE the final tick** in every
+  death (e.g. loopTask 108430 / IDLE0 108935 / ticks 123934) — the task
+  contexts stopped while the tick layer kept running.
+
+With balloon15's boot 4 (the §20.4 honest limit), this is FIVE instances
+of the same shape: **STAGE 1 — both cores' task contexts stop (loopTask
+and IDLE0's stamps freeze, possibly tens of seconds of gap between them)
+while ISRs and the systimer counter keep running; STAGE 2 — the systimer
+snapshot handshake breaks simultaneously for both cores, the tick ISRs
+wedge in the valid-bit spin, and the int-wdt panics (or, once, the
+silent stage-1 reset wins the race).** The dumps always photograph stage
+2; the [STAMP]/[TICKSTAMP] task stamps are stage 1's only recorder.
+
+### 21.3 What stage 1 is NOT (the structured eliminations)
+
+- **Not the kernel-lock wedge of §15.3/§18.3 as the WHOLE story**: the SMP
+  tick path takes the kernel lock in its post-hook critical section — if
+  the kernel lock died in stage 1, the ticks would wedge within one tick,
+  not survive 0.4–15.5 s. Balloon8's CPU0-in-`xPortEnterCriticalTimeout`
+  snapshot remains real, but it cannot be stage 1's mechanism.
+- **Not a spurious debug-halt at stage 1**: a halted core stops its ISRs
+  too — the ticks kept running through stage 1 on both cores.
+- Stage 1 candidates that survive: a lock/resource the tasks need that
+  the tick path does not (a driver lock wedged by a dead owner, with
+  loopTask AND whatever IDLE0 was postponed behind both blocked — the
+  exact mechanism still unnamed); or a scheduler-state wedge that stops
+  context switches without holding the tick path's lock.
+- The stage 1 → stage 2 CAUSAL question is open: whether the systimer
+  handshake break is an independent second fault or a consequence of
+  stage 1 (a stalled/interlocked clock or bus state after the task freeze)
+  is exactly what the USB-SJ disconnect A/B (§20.6 item 2) and the errata
+  search must decide. The one silent rst:0x7 per session (stage 2 winning
+  as a silent stage-1-reset before CPU1's int-wdt matures) stays the
+  minority expression, 1 per session across sessions 18-19.
+
+### 21.4 Instrument fix (committed beside this record)
+
+The ccount stamps read as ~17 s "ages" because CCOUNT is 32-bit and wraps
+every 2^32/240 MHz ≈ 17.9 s — session-19's ccount values are wrap PHASES,
+not ages (recorded as the instrument bug it is). The fix is the readout
+comment + the wrap note in the format string; the alive-vs-frozen
+comparison (tick stamp vs ccount stamp of the SAME core, within a wrap
+window) remains valid and is the v2 payoff still owed its first clean
+reading. (01-UAT.md G-01-10, WINDOWS 15.)
