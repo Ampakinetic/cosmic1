@@ -2693,10 +2693,17 @@ pre-written:
 
 Either branch is another campaign-level answer for one build flag.
 
-### 24.4 Open operator question
+### 24.4 Operator question ANSWERED + the A/B image shipped
 
-Was the SD CARD PHYSICALLY IN THE SOCKET during balloon18? The failed
-begin (0x107 timeout) reads identically for absent, dead, and badly-
-seated cards — and the answer changes the card-in-residue reading (a
-seated-but-dead card's bus behavior differs from an empty socket's
-floating D0). (01-UAT.md G-01-10, WINDOWS 15.)
+The operator confirmed the card was FULLY ABSENT during balloon18 (empty
+socket — the failed begin's 0x107 timeout is the empty-socket floating
+CMD/D0 case, per the driver's own pull-up warning at balloon18.log:108).
+So the session-21 deaths are the cleanest possible configuration: no
+card, no bus traffic, pins muxed+claimed by the failed begin only — and
+still the camera capture moment kills. The discrimination A/B image
+(`G01_SDMMC_BEGIN_DISABLED` in the balloon env's build_flags, with a
+removal comment in platformio.ini; the arm's console marker
+`[SDMMC] begin DISABLED for A/B - controller unclaimed (G-01-10)`
+verified present in the built ELF) is ready to flash: card-less, captures
+ON, run to the deaths-or-quiet verdict per §24.3's rules. (01-UAT.md
+G-01-10, WINDOWS 15.)
