@@ -254,9 +254,24 @@ public:
     // disturbed by admission. Returns the number admitted.
     uint8_t admitRescanned(const BalloonResumedRecord* records, uint8_t count);
 
+    // Boot reset-cause facts (balloon9 crash-loop mitigation, 2026-08-30):
+    // the reason is latched once in begin() beside the [BOOT] B1 line, so the
+    // resume gate in the wiring and the console always quote the SAME reset
+    // class. bootResetWasCrashClass() is true for the
+    // firmware-died-unexpectedly classes (TASK_WDT / INT_WDT / WDT / PANIC /
+    // CPU_LOCKUP — the D1 silent TG0WDT family among them); the 02.5-02
+    // boot-rescan auto-resume is skipped on such boots (gate lives in
+    // main_balloon.cpp's initializeSubsystems). MITIGATION, not the D1
+    // root-cause fix — its fate rides the G-01-10 outcome, not this gate.
+    const char* bootResetCauseName() const;
+    bool bootResetWasCrashClass() const;
+
 private:
     E32LoRa* lora;
     bool initialized;
+
+    // Boot reset-cause latch (see the public accessors) — set in begin().
+    esp_reset_reason_t bootResetCause;
 
     ImageTxEntry entries[QUEUE_DEPTH];
     uint32_t nextEnqueueSeq;

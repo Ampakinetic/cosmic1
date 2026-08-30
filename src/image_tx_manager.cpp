@@ -34,6 +34,7 @@ ImageTxManager& ImageTx() {
 ImageTxManager::ImageTxManager()
     : lora(nullptr)
     , initialized(false)
+    , bootResetCause(ESP_RST_UNKNOWN)
     , nextEnqueueSeq(0)
     , lastEnqueuedImageId(0)
     , lastBeaconMs(0)
@@ -88,6 +89,32 @@ static const char* resetReasonName(esp_reset_reason_t reason) {
     }
 }
 
+// Crash-class reset predicate — the balloon9 crash-loop gate (2026-08-30).
+// The D1 silent-reset family (TG0WDT stage-1 hardware reset, sessions 8/9 and
+// balloon8/9) surfaces as esp_reset_reason() TASK_WDT; the other cases are
+// the same firmware-died-unexpectedly class. On such a boot the 02.5-02
+// boot-rescan resume is SKIPPED (the gate lives in main_balloon.cpp's
+// wiring): every balloon9 silent reset died mid-push, so the unconditional
+// resume re-entered the crash-correlated card/push path ~2.5 s into every
+// boot (Uptime 2537 ms, six consecutive resets) and died again before the
+// base's COMPLETE reply could be processed — the delivery livelock. A
+// POWERON/EXT/SW/brownout-class boot resumes normally, and no data is
+// stranded either way: handleFullRequest re-admits any archived record on
+// the base's request. MITIGATION, not the D1 root-cause fix — its fate rides
+// the G-01-10 outcome, not this gate.
+static bool resetCauseIsCrashClass(esp_reset_reason_t reason) {
+    switch (reason) {
+        case ESP_RST_TASK_WDT:    // the D1 silent TG0WDT family
+        case ESP_RST_INT_WDT:
+        case ESP_RST_WDT:
+        case ESP_RST_PANIC:
+        case ESP_RST_CPU_LOCKUP:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool ImageTxManager::begin(E32LoRa* lora) {
     if (!lora) {
         return false;
@@ -136,8 +163,12 @@ bool ImageTxManager::begin(E32LoRa* lora) {
     // session 8's class decodes here as TASK_WDT/INT_WDT-class names instead
     // of a raw ROM code. REMOVAL CONDITION: strips WITH the [MEM]
     // instrumentation after G-01-10 closes on bench evidence.
+    // Latch once; the B1 line and the crash-loop gate (see
+    // resetCauseIsCrashClass above) both read this member, so the wiring's
+    // skip decision and the console always quote the SAME reset class.
+    bootResetCause = esp_reset_reason();
     Serial.printf("ImageTx: [BOOT] reset-cause: %s (G-01-10)\n",
-                  resetReasonName(esp_reset_reason()));
+                  resetReasonName(bootResetCause));
 
     // G-01-10 round #13 instrument [TWDT] (01-30) per
     // .planning/debug/d1-crash-regression-push-start.md §9.6: boot-time
@@ -179,6 +210,17 @@ void ImageTxManager::end() {
     for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
         freeEntry(entries[i]);
     }
+}
+
+// Boot reset-cause facts — see the header block by the declarations. The
+// accessors expose the begin()-latched reason to the resume wiring so the
+// gate and the B1 console line cannot disagree.
+const char* ImageTxManager::bootResetCauseName() const {
+    return resetReasonName(bootResetCause);
+}
+
+bool ImageTxManager::bootResetWasCrashClass() const {
+    return resetCauseIsCrashClass(bootResetCause);
 }
 
 // ===========================

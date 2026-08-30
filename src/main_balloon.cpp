@@ -716,14 +716,28 @@ bool initializeSubsystems() {
     // card files. Wire unchanged; runs once here in setup, never per loop
     // pass. A failed mount skips the rescan entirely: nothing to resume
     // from, the volatile fallback regime applies.
-    if (!BalloonSdStoreTx().getStatus().initFailed) {
+    //
+    // CRASH-LOOP MITIGATION (balloon9.log, 2026-08-30; NOT the D1 fix): after
+    // a crash-class reset (TASK_WDT/INT_WDT/WDT/PANIC/CPU_LOCKUP — see
+    // ImageTxManager::bootResetWasCrashClass), skip BOTH the rescan card-walk
+    // and the admission. Every balloon9 silent reset died mid-push, so the
+    // unconditional resume re-entered the crash-correlated card/push path
+    // ~2.5 s into every boot (Uptime 2537 ms, six consecutive resets) and
+    // died again before the base's COMPLETE reply could mark the thumbnail
+    // delivered — the delivery livelock. Telemetry keeps the radio here; the
+    // archive loses nothing (handleFullRequest re-admits any archived record
+    // on the base's request) and a clean boot re-arms the auto-resume.
+    if (BalloonSdStoreTx().getStatus().initFailed) {
+        SYS_WARNING("SD card store unavailable at boot - no rescan; nothing to resume (volatile fallback regime)");
+    } else if (ImageTx().bootResetWasCrashClass()) {
+        Serial.printf("SdStore: boot-rescan skipped - crash-class reset %s (auto-resume re-arms after a clean boot; base pull via IMAGE_FULL_REQUEST still served)\n",
+                      ImageTx().bootResetCauseName());
+    } else {
         static BalloonResumedRecord s_resumedRecords[SD_STORE_MAX_TRACKED];
         const uint8_t found = BalloonSdStoreTx().bootRescan(s_resumedRecords, SD_STORE_MAX_TRACKED);
         const uint8_t admitted = ImageTx().admitRescanned(s_resumedRecords, found);
         Serial.printf("SdStore: rescan found %u undelivered image(s), admitted %u\n",
                       static_cast<unsigned>(found), static_cast<unsigned>(admitted));
-    } else {
-        SYS_WARNING("SD card store unavailable at boot - no rescan; nothing to resume (volatile fallback regime)");
     }
 
     StatusOLED().showBootStage("IMG TX");
