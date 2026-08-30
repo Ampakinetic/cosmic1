@@ -2765,3 +2765,44 @@ capture-command/auto-interval coverage of those boots needs the base-log
 cross-check; the fb1 world decides it empirically (card back in + fb1 +
 camera: if quiet, the whole campaign was one bug). (01-UAT.md G-01-10,
 WINDOWS 15.)
+
+## 26 — SESSION-23 (balloon20 bench, 2026-08-30): fb1 REFUTED — byte-identical deaths — the wedge sits in the capture path itself; XCLK 10 MHz + DRAM frame buffer wired as the signal-domain reduction
+
+### 26.1 The refutation
+
+`balloon20.log` (1,139 lines, 7 boots: 1 POWERON + 6 `rst:0x8 TG1WDT`) /
+`base20.log` (109 lines), 2026-08-30, build = `d3cf356` (fb_count 1, A/B
+flag still armed, card out). The death signature is BYTE-IDENTICAL to
+balloon18/19: six deaths, all `rst:0x8`, all at
+`Camera: Image captured, size: N bytes` (sizes 6520-10793 B), instant
+wedge. **fb_count 1 — fetch-paced DMA, no background re-fill — dies
+exactly like fb_count 2. The standing-DMA theory is REFUTED.** What
+survives: the trigger is the capture path itself, post-fb_get (the
+driver RETURNS the frame — the print follows the return — and the wedge
+lands in the buffer handling after it), independent of buffering mode,
+card state, and SDMMC claim.
+
+### 26.2 The signal-domain reduction (the code commit beside this record)
+
+Two config levers wired together (one theme: remove the S3 capture
+pipeline's highest-risk specifics; if it quiets, bisection can follow —
+for the flight decision both stay):
+
+1. **XCLK 20 → 10 MHz**: halves the sensor/LCD_CAM signal-domain rate —
+   the standard first reduction for S3 LCD_CAM capture instability.
+2. **fb_location PSRAM → DRAM**: the S3's LCD_CAM DMA writes frame
+   buffers into PSRAM through the **EDMA/cache path** — the
+   highest-risk specific of the S3 capture pipeline, and the wedge lands
+   post-fb_get where the EDMA/PSRAM-cache interaction is live. A DRAM fb
+   (SVGA JPEG at the balloon's sizes, 6-23 KB, fits the internal heap at
+   one buffer) takes the EDMA/PSRAM path entirely out of the capture.
+
+Pre-written readings: deaths STOP → the S3 EDMA/PSRAM-cache and/or
+signal-domain interaction under LCD_CAM is named, and the balloon is
+flight-viable with both reductions kept; deaths PERSIST with both → the
+esp32-camera driver's S3 LCD_CAM path itself is the suspect — the
+driver-version audit for the pioarduino 3.3.9 embedded esp32-camera is
+the next move (network). The XCLK/fb_location changes are flight-viable
+configurations in their own right: XCLK 10 MHz costs capture speed the
+balloon never needed; a DRAM fb costs PSRAM headroom it has. (01-UAT.md
+G-01-10, WINDOWS 15.)

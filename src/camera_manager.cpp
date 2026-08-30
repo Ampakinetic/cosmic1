@@ -173,28 +173,34 @@ void CameraManager::configureCameraForBalloon() {
     cameraConfig.pin_sccb_scl = SIOC_GPIO_NUM;
     cameraConfig.pin_pwdn = PWDN_GPIO_NUM;
     cameraConfig.pin_reset = RESET_GPIO_NUM;
-    cameraConfig.xclk_freq_hz = 20000000;
+    // XCLK 10 MHz, NOT 20 (the D1 session-23 lever, balloon20 verdict):
+    // fb1 did not stop the capture-moment deaths (balloon20 = balloon18/19
+    // byte-identical), so the standing-DMA theory is refuted and the wedge
+    // sits in the capture path itself. XCLK 10 MHz halves the sensor and
+    // LCD_CAM signal-domain rate — the standard first reduction for
+    // S3 LCD_CAM capture instability. Cost: slower captures (irrelevant at
+    // the balloon's interval cadence).
+    cameraConfig.xclk_freq_hz = 10000000;
     cameraConfig.pixel_format = PIXFORMAT_JPEG;
     cameraConfig.grab_mode = CAMERA_GRAB_LATEST;
     
     // PSRAM configuration
     if (psramFound()) {
-        cameraConfig.fb_location = CAMERA_FB_IN_PSRAM;
-        // fb_count 1, NOT 2 (the D1 session-22 lever, balloon19 verdict):
-        // fb_count 2 + CAMERA_GRAB_LATEST keeps the S3's LCD_CAM DMA
-        // CONTINUOUSLY RE-ARMED in the background between captures — a
-        // standing DMA transfer that is the prime suspect for the whole
-        // D1 death family (the capture-moment TG1WDT wedges of
-        // balloon18/19 with the SDMMC fully out of the circuit, and — at
-        // variable latency — the SD-era deaths at pushes and lulls). With
-        // fb_count 1 the DMA arms only during esp_camera_fb_get(): a
-        // fetch-paced transfer, no background re-fill. Cost: no
-        // double-buffering (the stale-frame drain at :349 loses its
-        // second-buffer premise — harmless at the balloon's interval
-        // cadence); benefit: the standing exposure vanishes.
+        // Frame buffer in DRAM, NOT PSRAM (the D1 session-23 second lever,
+        // wired with the XCLK reduction): the S3's LCD_CAM DMA writes
+        // frame buffers into PSRAM through the EDMA/cache path — the
+        // highest-risk specific of the S3 capture pipeline, and the
+        // wedge lands post-fb_get (after "Image captured" returns, during
+        // the buffer handling). A DRAM fb (SVGA JPEG at the balloon's
+        // sizes, 6-23 KB, fits the internal heap comfortably at one
+        // buffer) takes the EDMA/PSRAM-cache path entirely out of the
+        // capture. If deaths stop, the S3 EDMA/PSRAM-cache interaction
+        // under LCD_CAM DMA is named; if they persist with XCLK also at
+        // 10 MHz, the driver itself is the suspect (version audit next).
+        cameraConfig.fb_location = CAMERA_FB_IN_DRAM;
         cameraConfig.fb_count = 1;
         if (DEBUG_CAMERA) {
-            Serial.println("Camera: PSRAM detected, using PSRAM for frame buffer");
+            Serial.println("Camera: frame buffer in DRAM (session-23 wedge hunt)");
         }
     } else {
         cameraConfig.fb_location = CAMERA_FB_IN_DRAM;
