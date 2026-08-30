@@ -3098,3 +3098,106 @@ RAM-only interval and the deferred write carries its own line).
 
 The SDMMC arm stays on; the [CAPWIN]/[MEM]/[STAMP]/[TICKSTAMP] instruments
 stay with their standing removal conditions. (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 31 — SESSION-28 (balloon25 bench, 2026-08-31): the deaths MOVED WITH THE WRITE — the deferred commit dies at +1.5 s — and the mechanism is NAMED: the NVS GC erase vs the 300 ms INT-WDT race, photographed mid-flash-op — the NVS partition is relocated and grown
+
+### 31.1 The verdict: not the capture window — the WRITE itself
+
+`balloon25.log` (≈570 lines, 3 boots: 1 POWERON + 2 `rst:0x8 TG1WDT_SYS_RST`) /
+`base25.log`, 2026-08-31 10:51, the round-#17 image (`3211fb5`: deferred
+commit). Two captures (images 108, 109), six [CAPWIN] allocation lines
+(pre-id/post-id/post-baseline ×2 — the capture window CLEAN, the session-27
+fix worked on its own terms) — and **ZERO `deferred id-commit` lines**.
+Both deaths are byte-identical and land at the same RELATIVE moment:
+capture ≈ t≈32.5 s (after [BCN] seq=6) → manifest → chunk 1/30 sent →
+chunk 2/30 sent → BMP280 → silent rst:0x8; [STAMP] freezes at **t=34341 ms**
+(boot 1) and **t=34665 ms** (boot 2) — **~1.8-2.0 s post-capture**, i.e. the
+FIRST process() pass after the 1500 ms deferred-commit deadline. The done
+line prints AFTER the putUShort — a death inside the write leaves no line.
+The wiring was verified sound (AutoCap().process() at main_balloon.cpp:1356,
+unconditional; the commit due and armed — `restored from NVS` at :103
+proves the handle opened). **The flash write is fatal anywhere; the deaths
+simply moved with it.** §30.3's second pre-written reading, taken.
+
+### 31.2 THE DECODE: mid-flash-op, photographed
+
+New Saved PC in boot 2: **0x4038612f = `_xt_context_save`**
+(xtensa_context.S:127) — the exception/interrupt CONTEXT-SAVE routine,
+sitting at the very top of `.iram0.text` **immediately after
+`spi_flash_os_check_yield` / `spi_flash_os_yield`** (the flash driver's
+mid-operation yield/WDT-check hooks). Boot 1: `_DoubleExceptionVector`
+(the era's majority PC, §29.2). Reading: the INT-WDT's level-4 interrupt
+preempted the CPU **while it was inside the flash operation's OS-yield
+path**; the panic path then needed flash-resident code — unfetchable with
+the flash cache suspended — → double exception → `_xt_panic` → silent
+MWDT1 stage-2 reset. The mechanism, end to end:
+
+1. `putUShort`+commit on the churned 20 KB NVS (partitions.csv
+   `nvs,0x9000,0x5000`, 24 bench sessions of per-capture u16 writes) hits
+   the full-page condition → **garbage collection: a 4 KB sector ERASE**
+   (TRM worst case ~400 ms class; typical far less).
+2. The erase runs with interrupts masked (level-3) on CPU1, CPU0 stalled,
+   flash cache suspended.
+3. A slow erase exceeds **CONFIG_ESP_INT_WDT_TIMEOUT_MS = 300** (baked into
+   the prebuilt arduino libs; no runtime set-timeout API exists — the
+   framework's esp_int_wdt.h exposes init only).
+4. The IWDT interrupt preempts mid-erase (`_xt_context_save`, boot 2's PC);
+   the panic printer/backtrace need FLASH code → fetch fault with cache
+   suspended → double exception (`_DoubleExceptionVector`, boot 1) →
+   `_xt_panic` spin → silent TG1WDT stage-2 at ~600 ms.
+
+This unifies the whole era: balloon18-23's "at-capture" deaths were this
+same write's erase; balloon24 (no writes) clean; balloon25 (write deferred
++1.5 s) identical death at the new write site; the era boundary (balloon4/5
+clean) = the partition had not yet crossed into per-write GC; the lone
+survivor (balloon18 image 71) = a write that landed on a non-full page
+(append, no GC). Honest residual: WHY erases on this board exceed 300 ms
+(marginal flash vs ordinary worst-case variance) is not settled — and the
+card-out state (floating JTAG-domain pins, §22.2) remains a possible
+contributor to flash slowness. Both stay recorded.
+
+### 31.3 The fix (committed beside this record)
+
+1. **NVS partition relocated + grown 4×**: `partitions.csv` moves nvs from
+   0x9000/0x5000 (20 KB, wear-central, GC-active) to **0xF00000/0x10000**
+   (64 KB of untouched flash at the 16 MB device's far end). GC erases
+   become vanishingly rare in flight (~2000+ entries before the first
+   page fills; the balloon writes one u16 per capture). The OLD region is
+   left unallocated — no other partition moves. Consequence recorded
+   in-source and here: reflashing with the new table wipes NVS — the
+   image-ID sequence restarts at 1 (G-01-6 filename-reissue exposure is
+   bench-only; a flight card is fresh like its NVS) and the base's stored
+   WiFi credentials reset (re-enter after the next base flash).
+2. **[CAPWIN] START/done pair**: `deferred id-commit START` (flushed) now
+   prints BEFORE the putUShort — balloon25's ambiguity (no done line =
+   "died in the write" vs "write never ran") is closed: START present +
+   done absent names the write itself as the death site.
+3. **The IWDT-timeout lever is NAMED but WITHHELD**: no public API (header
+   audited), private-hal surgery only — and §7.6's guard stands for a
+   reason upgraded by this round: the 300 ms IWDT is the tripwire that
+   CAUGHT every wedge this campaign diagnosed. It stays at 300 ms; the
+   fix removes the trigger (GC erases), not the alarm. Escape hatch
+   recorded: if deaths persist on the FRESH partition (START present, done
+   absent), the erase-vs-IWDT race is board-level and the lever re-opens
+   alongside a flash-chip diagnosis.
+
+### 31.4 Pre-written readings (next bench, the confirmation session)
+
+- **Multi-capture session, zero deaths, `deferred id-commit START` +
+  `written=2` lines PRESENT** (writes happening, surviving) → the GC-erase
+  race is CONFIRMED as the trigger; the camera-capture family of G-01-10
+  is closable (the SD-era resume-push cross-check remains the last open
+  thread, §28.3). Note the ID restart: first capture allocates ID 1 with
+  the fresh NVS.
+- **Deaths persist with START present / done absent** → the write dies even
+  on fresh silicon → board-level flash/erase behavior; the §31.3 escape
+  hatch (IWDT timeout) + flash-chip diagnosis open; re-arm
+  G01_CAPWIN_NVS_ID_DISABLED for a writes-none baseline in the same session
+  if needed.
+- **START present + done present + death elsewhere** → the write is
+  exonerated; re-read per the census discipline.
+
+Bench note: flashing the new table REQUIRES a full reflash of both boards
+(partition layout change; `pio run -t erase` then upload, or upload with
+`--erase-all` per esptool defaults on partition change — the table mismatch
+forces the rewrite). (01-UAT.md G-01-10, WINDOWS 15.)

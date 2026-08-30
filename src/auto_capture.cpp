@@ -395,11 +395,17 @@ void AutoCapture::persistImageIdIfDue() {
     idPersistPending = false;  // one-shot: a failed write degrades to
                                // RAM-only for the boot (the 01-11 contract)
 
+    // [CAPWIN] START/done pair (session-28, flushed): balloon25 died INSIDE
+    // this write with only the done line in the binary — an unprinted done
+    // line was ambiguous between "write died" and "write never ran". The
+    // START line closes that hole: START present + done absent = the death
+    // is inside the flash write itself. Removal: with the G-01-10
+    // instrument family.
+    Serial.println("[CAPWIN] deferred id-commit START (G-01-10)");
+    Serial.flush();
+
     size_t written = imageIdPrefs.putUShort(kImageIdKey, lastImageId);
 
-    // [CAPWIN] deferred-commit bracket (flushed): the bench reads this line
-    // as the proof the REAL flash write now lands safely off the capture
-    // window. Removal: with the G-01-10 instrument family.
     Serial.printf("[CAPWIN] deferred id-commit id=%u written=%u (G-01-10)\n",
                   static_cast<unsigned>(lastImageId), static_cast<unsigned>(written));
     Serial.flush();
