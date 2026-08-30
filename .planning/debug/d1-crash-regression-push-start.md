@@ -1950,3 +1950,67 @@ The round-#15 bench package, riding one session:
 D1 stays OPEN; the mechanism class (interrupts masked too long, one CPU at
 a time) is the recorded working theory; the [STAMP] gap is its next
 discriminator. (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 14 — SESSION-14 (balloon11 bench, 2026-08-30 13:49): the [STAMP] field trial fails BY IMPLEMENTATION — the .rtc.data flash-load-image trap — family unchanged (4 silent), gate 4/4, image 55 delivered through all four crashes
+
+### 14.1 Provenance
+
+`balloon11.log` (1,312 lines, 5 boots) / `base11.log` (316 lines), written
+2026-08-30 13:49, banner `Build: Aug 30 2026 13:08:45` (balloon11.log:24) =
+`f93cdb6` (the [STAMP] instrument build). ELF provenance by banner + content
+only — the on-disk ELF was rebuilt with the NOINIT fix before this record.
+
+### 14.2 The [STAMP] readout: 5/5 "no prev-boot stamps" — instrument bug, NOT a discriminator answer
+
+All five boots (including the four WARM post-crash boots) printed
+`[STAMP] no prev-boot stamps (POWERON or RTC-domain reset) (G-01-10)`
+(balloon11.log:20/:190/:612/:821/:1074). Root cause, verified in the build
+artifacts: the instrument's words were declared `RTC_DATA_ATTR` WITH
+initializers — `.rtc.data` carries a FLASH LOAD IMAGE, and the second-stage
+bootloader re-copies it from flash on every non-deep-sleep boot, clobbering
+the previous boot's writes. Symbols confirmed in RTC slow (`0x50000200`
+-`0x50000208`, `d`/data sections) — placed, but re-loaded. The
+cross-reset-persistence attribute is `RTC_NOINIT_ATTR` (`.rtc.noinit`):
+never loaded, never cleared, survives every reset except true power-on
+(garbage then — the existing magic-word gate covers it; the `b`-section
+placement of the fixed build was verified in the ELF). Fixed and committed
+beside this record. **Round-#15 item 1 is UNANSWERED — it re-runs on the
+NOINIT build.** The recording honesty rule: an instrument that cannot read
+is not a negative result.
+
+### 14.3 The session: the family unchanged
+
+rst:0x7 = 4 (one POWERON + four silent), rst:0xc = 0, Guru = 0, canary = 0,
+mojibake (raw-byte method) = 0, i2cWrite E = 0. Gate 4/4
+(`boot-rescan skipped - crash-class reset TASK_WDT` at balloon11.log:281/
+:703/:912/:1165). Death contexts: boot 1 died at the COMPLETION MOMENT
+again — thumb chunk 7/8 of image 52 sent (:178), death before the tail;
+the other three: in-lull beacon TX (:600), window 3/16 (:809), window 15/16
+(:1062) — the §13.4 lull/service split repeats. [MEM] heap drift this
+session: min 8456596 vs start 8457484 (~900 B) — the balloon10 §13.6 drip
+did NOT recur at this session's shape (active, short-lived boots);
+downgraded to watch-only.
+
+### 14.4 Delivery through the crashes — and the stuck row
+
+Image 55: thumbnail COMPLETE (base11.log:67-68) AND full 26/26 COMPLETE
+(:295-296), converged ACROSS the four crashes through resume-prefix
+receipts and re-arms (`resuming (2/26 held)` :187, `(16/26 held)` :264,
+then finalized) — the 02.5 delivery machinery's fourth consecutive session
+working through the crash family. Image 52, by contrast, has now been stuck
+undelivered since balloon9: every bench session's power-cycle re-arms the
+resume (POWERON), the push re-enters, and the completion moment kills the
+boot before the delivered bit persists — balloon11 boot 1 is the third
+consecutive session to die inside image 52's thumbnail push. The POWERON
+arm of the §12.2 livelock is its residual form (the gate by design cannot
+gate a POWERON boot); a candidate 02.5-side relaxation — gate the resume on
+"previous boot ALSO died mid-push of this same image" (an RTC_NOINIT
+per-boot flag) — is RECORDED, not actioned; it must not silently become a
+D1 lever.
+
+### 14.5 Round-#15 status
+
+Item 1 ([STAMP]): instrument fixed, re-run owed on the next bench session —
+the gap reading remains the mechanism-class discriminator. Item 2 (the §11.4
+A/B hook-unregistered arm): still pending, unchanged. D1 stays OPEN;
+working theory unchanged (§13.7). (01-UAT.md G-01-10, WINDOWS 15.)
