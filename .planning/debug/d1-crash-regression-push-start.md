@@ -2302,3 +2302,23 @@ dump. (3) The kernel-lock provenance question is now a pinned-IDF-source
 reading task (which locks the balloon's hot path takes: UART console
 writes, SDMMC, heap) — recorded, not speculated. (01-UAT.md G-01-10,
 WINDOWS 15.)
+
+## 19 — [TICKSTAMP] WIRED (post-session-17, 2026-08-30): the §18.4 item-1 instrument implemented — per-core tick stamps that cross the silent reset
+
+A project tick hook (`tickStampHook`, IRAM, lock-free — one millis() RTC
+store per tick per core) registered via `esp_register_freertos_tick_hook`
+(both cores) in main_balloon.cpp beside the [STAMP] block; two
+RTC_NOINIT words + magic, read out once at the next boot as
+`[TICKSTAMP] prev boot: core0 last tick t=%lu ms, core1 last tick t=%lu
+ms, gap %ld ms (core0 minus core1) (G-01-10)` with a registration check
+line, re-armed after the readout. Pre-written reading rules (§18.4's
+prediction, made concrete): gap ≈ 0 → both cores ticked to the end
+(the balloon14 CPU1-only reading would be wrong); gap positive → core1's
+tick service died first (the balloon14 shape); gap negative → core0's
+died first (the balloon8 shape, CPU0 wedged mid-spinlock-acquire).
+Combined with the [STAMP] task words every death now leaves a four-point
+picture: loopTask, IDLE0, tick-core0, tick-core1. Documented subtlety:
+the stamp freezes at the last COMPLETED hook dispatch — a core wedging
+at the tick handler's post-hook kernel-lock take still leaves a fresh
+stamp, so the ordering data survives. First genuine readouts owed at the
+next bench session's first crash. (01-UAT.md G-01-10, WINDOWS 15.)
