@@ -180,7 +180,19 @@ void CameraManager::configureCameraForBalloon() {
     // PSRAM configuration
     if (psramFound()) {
         cameraConfig.fb_location = CAMERA_FB_IN_PSRAM;
-        cameraConfig.fb_count = 2;
+        // fb_count 1, NOT 2 (the D1 session-22 lever, balloon19 verdict):
+        // fb_count 2 + CAMERA_GRAB_LATEST keeps the S3's LCD_CAM DMA
+        // CONTINUOUSLY RE-ARMED in the background between captures — a
+        // standing DMA transfer that is the prime suspect for the whole
+        // D1 death family (the capture-moment TG1WDT wedges of
+        // balloon18/19 with the SDMMC fully out of the circuit, and — at
+        // variable latency — the SD-era deaths at pushes and lulls). With
+        // fb_count 1 the DMA arms only during esp_camera_fb_get(): a
+        // fetch-paced transfer, no background re-fill. Cost: no
+        // double-buffering (the stale-frame drain at :349 loses its
+        // second-buffer premise — harmless at the balloon's interval
+        // cadence); benefit: the standing exposure vanishes.
+        cameraConfig.fb_count = 1;
         if (DEBUG_CAMERA) {
             Serial.println("Camera: PSRAM detected, using PSRAM for frame buffer");
         }

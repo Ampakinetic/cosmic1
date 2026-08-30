@@ -2707,3 +2707,61 @@ removal comment in platformio.ini; the arm's console marker
 verified present in the built ELF) is ready to flash: card-less, captures
 ON, run to the deaths-or-quiet verdict per §24.3's rules. (01-UAT.md
 G-01-10, WINDOWS 15.)
+
+## 25 — SESSION-22 (balloon19 bench, 2026-08-30): BRANCH B CONFIRMED — the camera alone is the trigger; the SD card, the JTAG pins, and the SDMMC claim are ALL exonerated — and the fix lever is the framebuffer count (the standing LCD_CAM DMA)
+
+### 25.1 The verdict
+
+`balloon19.log` (1,233 lines, 7 boots: 1 POWERON + 6 `rst:0x8 TG1WDT`)
+/ `base19.log` (185 lines), 2026-08-30, build `95b5aaf` (the A/B arm).
+`[SDMMC] begin DISABLED for A/B` on every boot (:106/:341/:479 — the
+controller NEVER claimed, pins 39/38/40 untouched all session) — and SIX
+deaths, every one at the camera capture moment (`CAPTURE_NOW` →
+`Camera: Image captured, size: N bytes` → instant reset, five sampled
+identical), [STAMP] gaps −3/−3/−3/−4 ms, both cores' ticks within 1 ms —
+the same instant whole-system wedge as balloon18, now with the SDMMC
+completely out of the circuit. **BRANCH B: the esp32-camera capture is
+the trigger. Necessary and sufficient. The SD card, the JTAG-domain pins,
+and the SDMMC claim are exonerated** — the entire §22-24 SD-line class
+was a confound (balloon17's camera-idle via the gate bug; §24.2's
+correction anticipated this).
+
+### 25.2 The mechanism reading (labeled hypothesis, now the working theory)
+
+The S3's esp32-camera drives the **LCD_CAM peripheral** (not the ESP32's
+I2S — the architectural difference that makes the S3 path the less
+mature one). The balloon's config: XCLK 20 MHz, JPEG, **fb_count 2**,
+CAMERA_GRAB_LATEST — which keeps the LCD_CAM DMA **continuously
+re-armed in the background between captures**. A standing, always-armed
+DMA transfer explains the campaign's shape better than anything before
+it: deaths at ANY phase (captures, pushes, lulls) with variable latency
+(§21's two-stage structure = the wedge propagating through shared
+bus/clock resources after the DMA misfires); the dump-proven death site
+(the systimer snapshot-valid spin — the systimer's update handshake dies
+when the bus/clock domain wedges — the systimer was the WITNESS, not the
+culprit); the silent vs panicking expressions depending on which context
+held the spin. The SD-era correlation reduces to: the capture-heavy
+bench campaigns co-varied with the SD store's presence, and balloon17's
+"card-less = crash-free" was camera-idle (the gate bug). THE SYSTIMER
+ERRATUM ARM CLOSES; the "name the lock" question of §15.6 dissolves —
+there was no lock; there was a bus.
+
+### 25.3 The fix lever (committed beside this record)
+
+`fb_count = 1` (camera_manager.cpp): the DMA arms ONLY during
+esp_camera_fb_get() — fetch-paced, no background re-fill. The no-PSRAM
+configuration path (the driver's own single-buffer mode) — a tested
+driver state. Costs: no double-buffering (the CR-03 stale-frame drain
+loses its second-buffer premise — harmless at the balloon's interval
+cadence). Expected reading, pre-written: deaths STOP (or collapse to
+rarity) at the balloon's interval cadence → the standing-DMA theory
+CONFIRMED and the balloon is flight-viable with the camera; deaths
+continue at the same rate → fetch-paced DMA still wedges → next levers:
+XCLK 20→10 MHz, then the esp32-camera driver version audit for the
+pioarduino 3.3.9 S3 LCD_CAM path. The remaining honest thread: whether
+EVERY SD-era death (including the no-CAPTURE_NOW resume-push deaths of
+balloon11/13) reduces to the camera is not yet proven — the
+capture-command/auto-interval coverage of those boots needs the base-log
+cross-check; the fb1 world decides it empirically (card back in + fb1 +
+camera: if quiet, the whole campaign was one bug). (01-UAT.md G-01-10,
+WINDOWS 15.)
