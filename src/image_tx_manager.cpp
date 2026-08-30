@@ -836,6 +836,15 @@ uint8_t ImageTxManager::admitRescanned(const BalloonResumedRecord* records, uint
             break;
         }
         admitRescannedFillEntry(*slot, rec);
+        // Session-16 52-row livelock latch (§14.4 candidate, card-resident —
+        // see SD_ST_RESUME_LATCH's block comment): this admission spends the
+        // row's auto-resume attempt. One boot-time bookkeeping write here,
+        // OFF the push hot path; a later delivery (by auto-resume, heal, or
+        // explicit pull) clears the bit through markDelivered. Latched rows
+        // are withheld by bootRescan from FUTURE resume sets — explicit base
+        // asks bypass. bootRescan already withheld rows the bit found SET at
+        // this boot (rec.resumeLatched true never reaches this loop).
+        BalloonSdStoreTx().markResumeLatched(rec.imageId);
         admitted++;
         if (DEBUG_IMAGE_TX) {
             Serial.printf("ImageTx: admitted rescanned image %u (full %u B / %u chunks, thumb %u B / %u chunks) - resume\n",
@@ -1342,7 +1351,9 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
         // uses — the entry lands at PUSH_THUMB_MANIFEST (persisted receipt
         // state honored), the next process() pass re-announces the manifest,
         // and the base's restart-on-new-manifest behavior re-drives the row;
-        // the UNKNOWN_IMAGE NACK that still returns this pass is moot.
+        // the UNKNOWN_IMAGE NACK that still returns this pass is moot. This
+        // re-admit deliberately BYPASSES SD_ST_RESUME_LATCH (explicit ask
+        // re-arms a latched row).
         // Guards: only for thumb-kind asks (the FULL class is already
         // rescued — and a re-admitted thumbDelivered record parks at
         // THUMB_PUSHED where no window can arm, so answering it would only
@@ -1638,7 +1649,10 @@ FullRequestResult ImageTxManager::handleFullRequest(const uint8_t* payload, size
     // No RAM entry (TTL-evicted / fresh boot): card re-admit through the
     // SAME validated fill the boot rescan uses — the card archive is the
     // truth, so a request for any archived image works far beyond the
-    // depth-5 RAM queue's horizon.
+    // depth-5 RAM queue's horizon. This path deliberately BYPASSES
+    // SD_ST_RESUME_LATCH: an explicit base ask re-arms a latched row (the
+    // latch suppresses only the automatic boot-rescan resume), and the
+    // pull's delivery clears the latch via markDelivered.
     BalloonResumedRecord rec{};
     if (!BalloonSdStoreTx().loadResumedRecord(imageId, rec)) {
         Serial.printf("ImageTx: FULL request for image %u refused - no record on card\n",

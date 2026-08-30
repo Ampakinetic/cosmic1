@@ -364,6 +364,7 @@ bool BalloonSdStore::markDelivered(uint16_t imageId, ImageKind kind) {
         return true;   // idempotent — already marked
     }
     rec.flags |= bit;
+    rec.flags &= static_cast<uint8_t>(~SD_ST_RESUME_LATCH);   // a provable delivery retires the resume-latch suppression
 
     // One-byte update in place: seek back to the flags byte and rewrite it
     // (no record rewrite).
@@ -376,6 +377,49 @@ bool BalloonSdStore::markDelivered(uint16_t imageId, ImageKind kind) {
     if (!ok) {
         status.writeFailed = true;
         Serial.printf("SdStore: delivery-flag write FAILED for %s (image %u)\n",
+                      path, static_cast<unsigned>(imageId));
+    }
+    return ok;
+}
+
+bool BalloonSdStore::markResumeLatched(uint16_t imageId) {
+    if (!available || status.initFailed) {
+        return false;
+    }
+
+    char path[32];
+    metaPath(path, sizeof(path), imageId);
+    // "r+" — in-place flags update, never a truncate (keep-everything).
+    File f = SD_MMC.open(path, "r+");
+    if (!f) {
+        return false;
+    }
+
+    // Untrusted removable media (T-02.5-01): validate magic + id before any
+    // write back — a torn/hostile record is left untouched.
+    BalloonCaptureRecord rec{};
+    if (f.read(reinterpret_cast<uint8_t*>(&rec), sizeof(rec)) != sizeof(rec) ||
+        rec.magic != SD_STORE_META_MAGIC || rec.imageId != imageId) {
+        f.close();
+        return false;
+    }
+    if (rec.flags & SD_ST_RESUME_LATCH) {
+        f.close();
+        return true;   // idempotent — already latched
+    }
+    rec.flags |= SD_ST_RESUME_LATCH;
+
+    if (!f.seek(offsetof(BalloonCaptureRecord, flags))) {
+        f.close();
+        return false;
+    }
+    const bool ok = (f.write(&rec.flags, 1) == 1);
+    f.close();
+    if (!ok) {
+        // Bookkeeping-only write (see the header declaration): no
+        // status.writeFailed — a failed latch degrades to today's
+        // unprotected-resume behavior, it never gates a capture.
+        Serial.printf("SdStore: resume-latch write FAILED for %s (image %u) - row stays auto-resumable\n",
                       path, static_cast<unsigned>(imageId));
     }
     return ok;
@@ -450,6 +494,7 @@ static void fillResumedRecord(const BalloonCaptureRecord& rec, BalloonResumedRec
     memcpy(rr.settings, &rec.resolution, sizeof(rr.settings));
     rr.thumbDelivered = (rec.flags & SD_ST_DELIV_THUMB) != 0;
     rr.fullDelivered = (rec.flags & SD_ST_DELIV_FULL) != 0;
+    rr.resumeLatched = (rec.flags & SD_ST_RESUME_LATCH) != 0;
     rr.thumbAcked = rec.thumbAcked;
 }
 
@@ -559,6 +604,7 @@ uint8_t BalloonSdStore::bootRescan(BalloonResumedRecord* out, uint8_t cap) {
     uint8_t  count = 0;             // resumed records held in out[] (ascending by imageId)
     uint16_t deliveredCount = 0;    // both delivery bits set — history, stays on card
     uint16_t tornCount = 0;         // META-invalid or size-mismatched captures
+    uint16_t latchedCount = 0;      // resume-latched: a previous boot already auto-resumed these and died
     uint16_t overCapDropped = 0;    // undelivered beyond the tracked cap (oldest ids)
 
     // Pass 1 — the openNextFile() walk (the base's buildIndex idiom, mirrored):
@@ -585,6 +631,21 @@ uint8_t BalloonSdStore::bootRescan(BalloonResumedRecord* out, uint8_t cap) {
                     // Delivered history: counted here, one summary line below —
                     // delivered images are never re-announced.
                     deliveredCount++;
+                } else if (rec.flags & SD_ST_RESUME_LATCH) {
+                    // Session-16 52-row livelock latch (§14.4 candidate):
+                    // this row's auto-resume was already attempted in a
+                    // previous boot that died before delivery — balloon9-13
+                    // burned image 52's completion moment five consecutive
+                    // sessions because every power cycle re-armed it. The row
+                    // is WITHHELD from the resume set (named line, counted in
+                    // the summary): the balloon's first boot of the session
+                    // stays alive, and the row is NOT stranded — explicit
+                    // base asks (handleFullRequest, the thumbnail-heal
+                    // re-admit) bypass this latch by design, and any
+                    // provable delivery clears the bit (markDelivered).
+                    latchedCount++;
+                    Serial.printf("SdStore: image %u auto-resume withheld (resume-latched by a previous boot's failed attempt) - explicit pull still served\n",
+                                  static_cast<unsigned>(id));
                 } else {
                     // Validated + undelivered → resume candidate. The settings
                     // trailer copies verbatim (pinned 7-byte ImageTxSettings
@@ -661,6 +722,10 @@ uint8_t BalloonSdStore::bootRescan(BalloonResumedRecord* out, uint8_t cap) {
     if (deliveredCount > 0) {
         Serial.printf("SdStore: rescan skipped %u already-delivered record(s) - history kept on card\n",
                       static_cast<unsigned>(deliveredCount));
+    }
+    if (latchedCount > 0) {
+        Serial.printf("SdStore: rescan withheld %u resume-latched record(s) - auto-resume already burned; explicit pull still served\n",
+                      static_cast<unsigned>(latchedCount));
     }
     if (overCapDropped > 0) {
         Serial.printf("SdStore: %u undelivered exceeds tracked cap %u - oldest ids left un-announced (files kept on card)\n",

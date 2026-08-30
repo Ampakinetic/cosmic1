@@ -96,6 +96,18 @@ static constexpr uint32_t SD_STORE_CAPTURE_ESTIMATE_THUMB = 8192;
 // so the boot rescan judges such a record purely on the full's bit.
 static constexpr uint8_t SD_ST_DELIV_THUMB = 0x01;   // thumbnail push provably completed (or no thumbnail owed)
 static constexpr uint8_t SD_ST_DELIV_FULL  = 0x02;   // full window service provably completed
+// Session-16 52-row livelock latch (the §14.4 candidate, re-homed): set when
+// a boot-rescan admission goes through, cleared by ANY provable delivery.
+// A record latched + still undelivered at a later boot rescan is NOT
+// auto-resumed — its push already burned at least one crash-correlated
+// attempt (balloon9-13: image 52 died inside its thumbnail push five
+// consecutive sessions, always re-armed by the POWERON boot the reset-cause
+// gate cannot gate). Deliberately card-resident, NOT an RTC_NOINIT flag:
+// the livelock is driven by power cycles, and RTC state is garbage after a
+// true power-on. Explicit base asks (handleFullRequest, the thumbnail-heal
+// re-admit) bypass the latch by design — the operator's pull re-arms the
+// row, and its delivery clears the latch naturally.
+static constexpr uint8_t SD_ST_RESUME_LATCH = 0x04;  // auto-resume attempted; suppress further auto-attempts until delivery
 
 // Outcome of persistCapture — branched on by ImageTxManager::enqueueCapture:
 //   PERSISTED  -> file-backed entry (null buffers, card is the byte source)
@@ -128,7 +140,7 @@ enum class PersistOutcome : uint8_t {
 struct __attribute__((packed)) BalloonCaptureRecord {
     uint16_t magic;          // SD_STORE_META_MAGIC — validated on read
     uint16_t imageId;        // AutoCap-assigned id (matches the file names)
-    uint8_t  flags;          // bit0 SD_ST_DELIV_THUMB, bit1 SD_ST_DELIV_FULL
+    uint8_t  flags;          // bit0 SD_ST_DELIV_THUMB, bit1 SD_ST_DELIV_FULL, bit2 SD_ST_RESUME_LATCH
     uint8_t  captureSource;  // CaptureSource value at capture
     uint32_t captureTimeMs;  // balloon millis at capture (rides the manifest)
     uint32_t fullLength;     // IMG_{id}.JPG byte length
@@ -182,6 +194,10 @@ struct BalloonResumedRecord {
     uint8_t  settings[7];    // ImageTxSettings layout verbatim (the manifest's 7-byte trailer)
     bool     thumbDelivered;
     bool     fullDelivered;
+    bool     resumeLatched;  // SD_ST_RESUME_LATCH: a previous boot already
+                             // auto-resumed this row and died before delivery
+                             // — bootRescan withholds it from the resume set
+                             // (explicit asks bypass)
     uint64_t thumbAcked;     // base-confirmed thumbnail chunk bitmap (image-
                              // transfer rework) — a resumed push skips these
 };
@@ -280,8 +296,20 @@ public:
     // Set the kind's SD_ST_DELIV_* bit in the META record — open, validate
     // magic + id, set the bit, seek back, write the single flags byte in
     // place (one-byte update, no record rewrite). Bookkeeping for plan
-    // 02.5-02's boot rescan.
+    // 02.5-02's boot rescan. Any provable delivery ALSO clears
+    // SD_ST_RESUME_LATCH (the row is retiring; the suppression with it).
     bool markDelivered(uint16_t imageId, ImageKind kind);
+
+    // Set SD_ST_RESUME_LATCH (see the bit's block comment) — called once per
+    // record at boot-rescan ADMISSION time (off the push hot path, one
+    // boot-time flags write per resumed row). Semantics: this row has now
+    // spent one auto-resume attempt; if this boot dies before delivery, the
+    // NEXT boot's rescan withholds the row instead of re-arming the same
+    // crash. Failure is logged but deliberately does NOT set
+    // status.writeFailed — this is bookkeeping, not capture integrity; a
+    // failed latch write degrades to today's behavior (unprotected resume),
+    // never blocks a capture.
+    bool markResumeLatched(uint16_t imageId);
 
     // Persist the base-confirmed thumbnail chunk bitmap (image-transfer
     // rework) — same in-place discipline as markDelivered: "r+" open,
