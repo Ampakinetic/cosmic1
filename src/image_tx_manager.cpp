@@ -1327,6 +1327,54 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
         }
     }
     if (target == nullptr) {
+        // Thumbnail-heal rescue (session-15, balloon12.log:689/:753/:821/:977):
+        // a THUMBNAIL window request with no RAM entry means the base holds
+        // this image's manifest and is missing chunks while the balloon's
+        // entry is gone — crash-class-gated boots skip the boot rescan
+        // (e9400b9); TTL evictions and fresh boots lose it too. The FULL
+        // pull has a rescue end-to-end (handleFullRequest's card re-admit +
+        // the base's window-NACK re-arm); the thumbnail push — balloon-
+        // driven, base-healed — had NONE, and there is no wire command by
+        // which the base can request a thumb re-announce (D-17: the thumb is
+        // balloon-pushed). The base's stall detector then finalizes the row
+        // INCOMPLETE (base12.log:238, image 56 at 2/7). So the balloon
+        // re-admits HERE, through the SAME validated fill the boot rescan
+        // uses — the entry lands at PUSH_THUMB_MANIFEST (persisted receipt
+        // state honored), the next process() pass re-announces the manifest,
+        // and the base's restart-on-new-manifest behavior re-drives the row;
+        // the UNKNOWN_IMAGE NACK that still returns this pass is moot.
+        // Guards: only for thumb-kind asks (the FULL class is already
+        // rescued — and a re-admitted thumbDelivered record parks at
+        // THUMB_PUSHED where no window can arm, so answering it would only
+        // obscure the base's working rescue); only while the record itself
+        // still owes a thumbnail; never while ANY entry already carries the
+        // id (a push may be mid-flight in a state the kind-split matching
+        // above deliberately skips). Exposure matches handleFullRequest's
+        // shipped card re-admit: untrusted RF can admit only records that
+        // validate against the card archive, bounded by the queue depth,
+        // id-idempotent.
+        if (thumbWindow) {
+            bool idAlreadyQueued = false;
+            ImageTxEntry* slot = nullptr;
+            for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+                if (entries[i].used && entries[i].imageId == imageId) {
+                    idAlreadyQueued = true;
+                    break;
+                }
+                if (slot == nullptr && !entries[i].used) {
+                    slot = &entries[i];
+                }
+            }
+            BalloonResumedRecord rec{};
+            if (!idAlreadyQueued && slot != nullptr &&
+                BalloonSdStoreTx().loadResumedRecord(imageId, rec) &&
+                rec.thumbLength > 0 && !rec.thumbDelivered) {
+                admitRescannedFillEntry(*slot, rec);
+                Serial.printf("ImageTx: thumbnail window request for image %u - card re-admitted; push re-announces on next pass\n",
+                              static_cast<unsigned>(imageId));
+                return WindowRequestResult::UNKNOWN_IMAGE;   // not armable this pass; the re-announce answers the base
+            }
+        }
         if (DEBUG_IMAGE_TX) {
             Serial.printf("ImageTx: window request for unknown/evicted image %u rejected\n", imageId);
         }
