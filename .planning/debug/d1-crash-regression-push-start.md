@@ -2172,3 +2172,55 @@ sessions.
 NAME THE LOCK whose acquire never completes on CPU0 (§15.3). No new dump,
 no new census members, no new candidates this session. Routing unchanged
 (§15.6). (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 17 — THE 52-ROW LATCH IMPLEMENTED (post-session-16, 2026-08-30): the §14.4 candidate actioned — with one honest re-homing: the latch lives in the CARD META, not RTC
+
+### 17.1 The re-homing decision (recorded deviation from §14.4's wording)
+
+§14.4 recorded the candidate as "an RTC_NOINIT per-boot flag". That
+mechanism cannot carry this state: the livelock's driver is the
+POWER-CYCLE (each bench session opens with a true power-on), and RTC
+domain state is garbage after a true power-on — RTC_NOINIT only crosses
+WARM resets, which the existing reset-cause gate (e9400b9) already
+covers. The durable home is the record the rescan already reads on every
+boot: a third bit in BalloonCaptureRecord::flags.
+
+### 17.2 The mechanism (as built)
+
+- `SD_ST_RESUME_LATCH` (flags bit 2, 0x04) — NO record-size change, torn-
+  record validation untouched, every pre-existing card record compatible
+  (bit unset = today's behavior).
+- SET once per record at boot-rescan ADMISSION (`admitRescanned` →
+  `markResumeLatched`, a boot-time one-byte in-place flags write, OFF the
+  push hot path; failure logged WITHOUT status.writeFailed — a failed
+  latch degrades to today's unprotected resume, never gates a capture).
+- CLEARED by any provable delivery (`markDelivered` now clears the bit
+  with either delivery bit) — a delivered row retires its suppression
+  naturally, whatever path delivered it.
+- WITHHELD from the resume set: `bootRescan` skips latched + undelivered
+  records with a named per-id line and a counted summary line
+  (`rescan withheld %u resume-latched record(s) ...`). The balloon's
+  first boot of a session stays ALIVE instead of burning the same
+  completion moment again.
+- BYPASSED by explicit asks: `handleFullRequest` and the thumbnail-heal
+  re-admit use `loadResumedRecord` and never consult the latch (documented
+  at both sites) — the operator's pull re-arms a latched row, and that
+  pull's delivery clears the latch. The keep-everything archive gains no
+  deletion surface and loses no recovery path.
+
+### 17.3 Expected bench signature (the prediction, written before the session)
+
+Next session on the current card: boot 1 (POWERON) admits 52, LATCHES it,
+pushes, and dies at the completion moment — the SIXTH and (by design)
+final auto-resume death for 52. Every POWERON boot after that prints
+`image 52 auto-resume withheld (resume-latched by a previous boot's
+failed attempt) - explicit pull still served` and runs on. 52's row
+remains fully recoverable: a base UI full-pull (the FULL_REQUEST rescue
+chain, proven on 57 in §16.3) delivers it and retires the latch. The
+deaths the family still produces will then be spread across fresh
+captures and window service — the D1 lock hunt (§15.6) continues
+unchanged.
+
+The latch is 02.5-side resume POLICY (labeled MITIGATION in source, per
+the §14.4 guard): it buys session uptime and breaks the 52 loop; it makes
+no D1 claim.
