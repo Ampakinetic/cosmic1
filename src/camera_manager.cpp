@@ -343,126 +343,56 @@ bool CameraManager::captureImageToBuffer() {
 }
 
 bool CameraManager::createThumbnail(const ImageData& source, ThumbnailData& thumbnail) {
-    // CR-04/WR-11 fix (Phase 2, must-fix-before-first-caller):
-    // capture the QQVGA frame FIRST, then allocate exactly fb->len.
-    // The old path allocated a fixed pre-capture estimate (4000 bytes) that
-    // QQVGA JPEGs routinely exceed, and both of its failure paths freed
-    // thumbnail.buffer WITHOUT nulling the member — a dangling pointer the
-    // next freeCurrentThumbnail() would double-free. The estimate is gone
-    // from this path entirely; every early return nulls the member and
-    // clears the valid flag.
-    (void)source; // recapture path: thumbnail dimensions come from the QQVGA frame itself
+    // D1 session-25 lever (balloon22 verdict): the thumbnail used to be a
+    // SECOND capture — a live sensor resolution switch (setFrameSize QQVGA
+    // + setQuality 20, SCCB re-programs mid-stream) plus the CR-03 drain
+    // fetch plus the thumbnail fetch, all immediately after the full
+    // capture. That switch-fetch-fetch sequence is the wedge site every
+    // D1 death since balloon18 lands in: the last console line is always
+    // the FULL capture succeeding, and the next step was this switch.
+    // Four capture-pipeline configs (fb2/fb1, PSRAM/DRAM fb, 20/10 MHz
+    // XCLK, SDMMC claimed or not, GRAB_LATEST/WHEN_EMPTY) produced
+    // byte-identical deaths because the switch ran in ALL of them.
+    // THE SWITCH IS GONE: the thumbnail IS the full frame's bytes when
+    // they fit the IMG-02 thumbnail budget (THUMB_MAX_BYTES); over-budget
+    // frames take the honest no-thumbnail path the enqueue already
+    // handles (the base pulls the full). No sensor ops, no second fetch,
+    // no switch — the sensor holds its configured size/quality boot to
+    // boot. The old CR-04 dangling-member discipline is preserved (every
+    // early return nulls the member and clears valid).
+    thumbnail.buffer = nullptr;
+    thumbnail.valid = false;
 
-    // Remember settings so every path can restore them
-    framesize_t originalSize = currentFrameSize;
-    int originalQuality = currentQuality;
-
-    // Thumbnail capture settings: QQVGA at quality 20 keeps the pushed
-    // thumbnail inside the IMG-02 10-second airtime window (research A3).
-    // WR-08: the downgrade is VERIFIED — if the sensor rejects the switch the
-    // "thumbnail" would be captured at full resolution/quality (potentially
-    // over the 50 KB cap or the IMG-02 airtime budget), so a failure bails
-    // honestly with settings restored instead of silently producing a
-    // full-size "thumbnail"; the enqueue path's failure branch handles it.
-    if (!setFrameSize(FRAMESIZE_QQVGA) || !setQuality(20)) {
+    if (!source.valid || source.buffer == nullptr || source.length == 0) {
+        captureErrorCount++;
+        return false;
+    }
+    if (source.length > THUMB_MAX_BYTES) {
         if (DEBUG_CAMERA) {
-            Serial.println("Camera: thumbnail downgrade to QQVGA/quality-20 rejected; "
-                           "no thumbnail captured");
+            Serial.printf("Camera: full frame %u B exceeds thumbnail budget %u B - no thumbnail (base pulls the full)\n",
+                          static_cast<unsigned>(source.length),
+                          static_cast<unsigned>(THUMB_MAX_BYTES));
         }
-        thumbnail.buffer = nullptr;
-        thumbnail.valid = false;
-        setFrameSize(originalSize);   // best-effort restore of both settings
-        setQuality(originalQuality);
         return false;
     }
 
-    // CR-03 (01-13) stale-frame drain: with fb_count 2 /
-    // CAMERA_GRAB_LATEST, the FIRST frame fetched after the QQVGA/quality-20
-    // downshift can be the stale pre-downshift capture whose dimension
-    // metadata was already restamped — the payload-vs-metadata mismatch the
-    // 01-12 bench saw in 4 of 6 captures. Fetch and discard ONE frame so the
-    // real capture below waits for a fresh QQVGA frame; the drained frame's
-    // width/height/len is the payload-vs-metadata discriminator the bench
-    // log needs.
-    camera_fb_t* stale = esp_camera_fb_get();
-    if (stale) {
-        if (DEBUG_CAMERA) {
-            Serial.printf("Camera: drained stale frame after QQVGA downshift (%ux%u, %u B)\n",
-                         static_cast<unsigned>(stale->width),
-                         static_cast<unsigned>(stale->height),
-                         static_cast<unsigned>(stale->len));
-        }
-        esp_camera_fb_return(stale);
-    }
-
-    // Capture the thumbnail frame — BEFORE any allocation
-    camera_fb_t* fb = esp_camera_fb_get();
-    if (!fb) {
-        if (DEBUG_CAMERA) {
-            Serial.println("Camera: Failed to get thumbnail frame buffer");
-        }
-        thumbnail.buffer = nullptr;  // CR-04: no dangling member on ANY failure path
-        thumbnail.valid = false;
-        setFrameSize(originalSize);
-        setQuality(originalQuality);
-        return false;
-    }
-
-    // 01-11 ride-along R2 (thumbnail-sizing quirk) + CR-03 (01-13) payload
-    // bound: verify the frame itself came back at the requested QQVGA size
-    // AND under the thumbnail byte ceiling. WR-08 verified the SETTERS'
-    // return values, but the v3/v4 bench traces show the sensor can accept
-    // the downgrade and still deliver a full-settings frame — 'Camera:
-    // Thumbnail created, size: 7138 bytes' byte-equal to the QVGA full
-    // (balloon3.log:131-132), and 7157-28808 B impostors in 4 of 6 captures
-    // (balloon4.log) whose dimensions claimed QQVGA while the payload was a
-    // stale full-size capture. Dimensions alone cannot discriminate that
-    // class; fb->len can. A wrong-size or oversize frame bails honestly
-    // through the same failure path the enqueue's no-thumbnail branch
-    // already handles — never a full-size "thumbnail".
-    if (fb->width != 160 || fb->height != 120 || fb->len > THUMB_MAX_BYTES) {
-        if (DEBUG_CAMERA) {
-            Serial.printf("Camera: thumbnail frame rejected %ux%u, %u B (expected 160x120 QQVGA, <= %u B) - settings did not take or stale impostor payload; no thumbnail captured\n",
-                         static_cast<unsigned>(fb->width),
-                         static_cast<unsigned>(fb->height),
-                         static_cast<unsigned>(fb->len),
-                         static_cast<unsigned>(THUMB_MAX_BYTES));
-        }
-        esp_camera_fb_return(fb);
-        thumbnail.buffer = nullptr;
-        thumbnail.valid = false;
-        setFrameSize(originalSize);
-        setQuality(originalQuality);
-        return false;
-    }
-
-    // Allocate exactly the captured size — after the bytes exist
-    thumbnail.buffer = (uint8_t*)malloc(fb->len);
+    thumbnail.buffer = (uint8_t*)malloc(source.length);
     if (!thumbnail.buffer) {
         if (DEBUG_CAMERA) {
             Serial.printf("Camera: Failed to allocate %u bytes for thumbnail\n",
-                         static_cast<unsigned>(fb->len));
+                          static_cast<unsigned>(source.length));
         }
-        esp_camera_fb_return(fb);
-        thumbnail.buffer = nullptr;  // malloc already returned null; keep it explicit
-        thumbnail.valid = false;
-        setFrameSize(originalSize);
-        setQuality(originalQuality);
+        captureErrorCount++;
         return false;
     }
 
-    memcpy(thumbnail.buffer, fb->buf, fb->len);
-    thumbnail.length = fb->len;
-    thumbnail.width = fb->width;
-    thumbnail.height = fb->height;
-    thumbnail.quality = 20;  // thumbnail quality constant (IMG-02 airtime math)
+    memcpy(thumbnail.buffer, source.buffer, source.length);
+    thumbnail.length = source.length;
+    thumbnail.width = source.width;
+    thumbnail.height = source.height;
+    thumbnail.quality = source.quality;
     thumbnail.timestamp = millis();
     thumbnail.valid = true;
-
-    // Return frame buffer and restore settings
-    esp_camera_fb_return(fb);
-    setFrameSize(originalSize);
-    setQuality(originalQuality);
 
     return true;
 }

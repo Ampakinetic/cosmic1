@@ -2850,3 +2850,56 @@ truly fetch-paced → the continuous-DMA family closes too and the
 suspect becomes the esp32-camera driver's S3 LCD_CAM path itself
 (version audit, then a pin-level/driver-patch investigation).
 (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 28 — SESSION-25 (balloon22 bench, 2026-08-31): WHEN_EMPTY also dies at captures — the continuous-DMA family CLOSES — and reading our OWN death window names the site at last: the QQVGA downswitch (two mid-stream SCCB re-programs) + drain fetch + thumbnail fetch, in OUR capture sequence — the switch is retired
+
+### 28.1 The third refutation, and where it pointed
+
+`balloon22.log` (966 lines, 6 boots: 1 POWERON + 5 `rst:0x8 TG1WDT`),
+2026-08-31, build `0b15776` (GRAB_WHEN_EMPTY + all prior reductions).
+Five deaths, all at `Camera: Image captured` — byte-identical. The
+continuous-DMA family CLOSES: with the DMA truly fetch-paced, the fetch
+itself still wedges. But THIS refutation finally forced the reading of
+the death window on the balloon side — the wedge sits AFTER the
+"Image captured" print (which `captureImage()` emits after
+`esp_camera_fb_get()` RETURNS) and BEFORE `Captured image ID N` (the
+CommandHandler's post-capture line, never printed in a death boot).
+Between them runs OUR code: `captureThumbnail()` → `createThumbnail()`'s
+**QQVGA downswitch** — `setFrameSize(FRAMESIZE_QQVGA)` + `setQuality(20)`
+(two SCCB re-programs to a streaming sensor) — then the CR-03 drain
+fetch, then the thumbnail fetch. A live sensor reconfiguration sandwiched
+between two fetches, on EVERY capture, in EVERY one of the 24 prior
+configurations — which is why every hardware lever "refuted" nothing:
+the sequence ran unchanged through all of them.
+
+### 28.2 The fix (committed beside this record)
+
+`createThumbnail` no longer captures anything: the thumbnail IS the
+full frame's bytes, copied, when they fit the IMG-02 thumbnail budget
+(`THUMB_MAX_BYTES` = 8192 — the balloon's QVGA-class fulls run
+3.7–10.8 KB, inside the budget most captures); over-budget frames take
+the honest no-thumbnail path the enqueue already handles (thumbLength 0
+→ the ANNOUNCE_FULL path; the base pulls the full). No sensor ops, no
+second fetch, no switch — the sensor holds one size/quality boot to
+boot. The CR-04 dangling-member discipline is preserved; the old
+CR-03 stale-impostor class becomes impossible by construction (there is
+no second frame to be stale).
+
+### 28.3 Pre-written readings + the honest remainder
+
+- Deaths STOP → the mid-stream sensor reconfiguration under LCD_CAM DMA
+  is NAMED as the wedge, and the balloon is flight-viable as built:
+  thumbnails carry full-frame bytes within budget, the base pulls fulls
+  beyond it. All prior reductions (fb1, DRAM fb, XCLK 10 MHz,
+  WHEN_EMPTY) stay — each is flight-viable and each removes a risk
+  class.
+- Deaths PERSIST → the remaining window shrinks to
+  getCurrentImage/post-capture bookkeeping (the PSRAM copy, the NVS
+  id-commit) — the interim-print bisector (a named line between each
+  step) becomes the tool, and the suspect list is down to project code.
+- The honest remainder, unchanged: the SD-era resume-push deaths
+  (balloon11/13's boots with no CAPTURE_NOW printed) still need their
+  capture-coverage cross-checked against the base logs' command timing —
+  the quiet world that §28.3's first reading opens would make the check
+  academic (the whole family fixed), and it runs anyway on the next
+  card-in session. (01-UAT.md G-01-10, WINDOWS 15.)
