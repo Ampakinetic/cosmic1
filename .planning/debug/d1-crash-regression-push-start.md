@@ -3355,3 +3355,195 @@ Pre-written readings (the next bench decides):
 - **A death NOT at a write** → census discipline as always.
 
 (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 34 — SESSION-31 (balloon28 bench, 2026-08-31): test E answers TWO §33.3 readings at once — E DIES (3/4 writes) AND branch 3 fires (a non-write TG0WDT before any capture) — and a new positive fact breaks determinism: the FIRST completed deferred write since the deferral shipped, in the very boot whose next write died — the location factor is exonerated, the wear confound is named and disarmed, and the deferral-timing A/B is armed
+
+### 34.1 Provenance (performed before any decode)
+
+On-disk `firmware.elf` mtime Aug 31 13:32, SHA256 `318e5a57…db1258`. The
+flashed image IS the round-#20 tree (bcba0a0), proven three ways:
+
+- `partitions.bin` carries `nvs` at **0x9000/0x5000** (raw bytes
+  `aa50 0102 0090 0000 0050 0000 6e76 7300`) — ONLY bcba0a0's table has the
+  old location (a0d891d/85c8c68 flash 0xF00000); behavior corroborates: boot 1
+  restored ID 110, the OLD partition's accumulated sequence;
+- `firmware.bin` string census: `[CAPWIN]` ×5, `deferred id-commit START` ×1,
+  `TICKSTAMP` ×3 present; the RETIRED markers absent (`SDMMC begin DISABLED`
+  ×0, `NVS id-commit DISABLED` ×0);
+- the banner `Build: Aug 31 2026 11:32:23` on every boot is the §29.1
+  stale-`__DATE__` artifact (the round changed only partitions.csv;
+  main_balloon.o was untouched since the 11:32 compile).
+
+`balloon28.log` 1,269 lines, 5 boots (1 POWERON + 4 crash resets),
+operator-ended (:1269); `base28.log` 366 lines, zero resets.
+
+### 34.2 Census (corrected raw-byte grep)
+
+`rst:0x7` ×1 (:223), `rst:0x8` ×3 (:685, :898, :1097), `rst:0xc` ×0,
+Guru ×0, stack-canary ×0, raw-byte mojibake (EF BF BD) ×0 — the only
+high-byte lines are the constant `ΓÇö` em-dash renderings on the SdStore
+strings (the degree-sign class, healthy). ID arithmetic consistent
+throughout (restored = stored+1; every death's value read back next boot).
+
+### 34.3 Boot map — three §33.3 readings answered AT ONCE
+
+| boot | reset | restored | capture / write | death |
+|---|---|---|---|---|
+| 1 (:12) | POWERON | 110 (:103) | none | **TG0WDT silent :221** — no capture, no write |
+| 2 (:237) | rst:0x7 | 110 (:315) | 110 write SURVIVED (:399-400); 111 died at write (:682) | rst:0x8 :685, PC 0x403743c0 |
+| 3 (:686) | rst:0x8 | 112 (:777) | 112 died at write (:895) | rst:0x8 :898, PC 0x403782a4 |
+| 4 (:913) | rst:0x8 | 113 (:990) | 113 died at write (:1094) | rst:0x8 :1097, PC 0x403743c0 |
+| 5 (:1112) | rst:0x8 | 114 (:1189) | none | operator-ended |
+
+**Reading 3 (census discipline) FIRES — boot 1 is a death NOT at a write**,
+and it is the SD-era silent family EXACTLY as §32.3's third reading
+predicted ("the SD-era TG0WDT family may simply have resumed with the card
+back"): card in, rescan ran the full SD-era path (12 delivered skipped, 10
+resume-latched withheld — balloon27's images 6/7/8 among them), beacons +
+GET_STATUS served, then a silent TG0WDT at :221 right after a heartbeat TX.
+The cross-boot instruments: `[STAMP]` loopTask stalled FIRST (last pass
+t=30209 vs IDLE0 t=30279, gap −70 ms), and the Saved PC lands the family's
+witness: **0x40381f3d = `systimer_hal_get_counter_value`**
+(`systimer_ll_counter_snapshot` inlined, systimer_hal.c:50) — INSIDE the
+§19/§22 stall chain already named (the snapshot spin; "the systimer was the
+WITNESS"). `[TICKSTAMP]`'s reconstructed tick-t (~45.3 s) reads ~15 s past
+the [STAMP] latches (~30.2/30.3 s) — a timebase caveat (ccount
+reconstruction vs systimer wall-time; the very wedge §19 photographed) —
+recorded, not over-read. Family discipline: SEPARATE family; this changes
+nothing about the write-family routing.
+
+**Reading 2 (E DIES) FIRES — three-for-three on boots 2-4's writes**: every
+death START flushed → ESP-ROM → rst:0x8, done absent, and the DATA LANDS
+every time (restores 112/113/114 — the dying writes' values were read back;
+the §32.1 completion-tail signature). Saved PCs the era's fault machinery:
+`_DoubleExceptionVector` ×2 and `_xt_panic` ×1 (0x403782a4,
+panic_handler_asm.S:28 — the §29.2 spin). `[TICKSTAMP]` at each write death:
+both cores' ticks frozen within ~1-2 ms of the loop/idle latches (gaps
+−13/−6/−6 ms) — the WHOLE-SYSTEM instantaneous freeze, photographically
+DIFFERENT from boot 1's two-stage stall. Two families, two signatures, one
+session. The reset-cause gate named every boot correctly
+(TASK_WDT/INT_WDT/INT_WDT/INT_WDT) and skipped rescan each time.
+
+**Reading 1 (E survives) is DEAD — the high-flash-location factor is
+exonerated as the necessary trigger.**
+
+### 34.4 THE NEW POSITIVE FACT: a deferred write COMPLETED
+
+balloon28.log:399-400:
+
+> `[CAPWIN] deferred id-commit START` → `[CAPWIN] deferred id-commit id=110
+> written=2`
+
+The FIRST completed deferred write since 3211fb5 shipped (balloon25-27: 0
+of 8 known-outcome writes; era total now 1 of 11 — 10 died at START). The
+survivor landed MID-DELIVERY (between chunk 1/17 :396 and chunk 2/17 :402,
+interleaved with radio TX) — the same context class where balloon25/27
+died. Image 110 then delivered END-TO-END (thumb kind-0 17/17 and the
+UI-pulled FULL kind-1 17/17; base28.log:137-138/:218-219 both
+`complete=true`) — the delivery chain is healthy right up to a write that
+dies.
+
+Determinism is dead as a reading: same boot, same partition state, same
+card — one write completes, the next dies minutes later. The death is
+STOCHASTIC in the old+in+deferred cell.
+
+Session variable, recorded honestly: the operator churned resolution
+(SET_RESOLUTION 6→11 at :632-647, again 6→11 in boot 3 :839-854, 6→10/9 in
+boot 4 :1047-1062 — camera re-init each time; HD-class captures 9403-14344 B
+took the over-budget no-thumb path, and the 3608 B survivor shows the
+§28.2 thumb==full equality case). EVERY death followed a re-init; the
+survivor preceded any. But balloon25-27 died re-init-free — the factor is
+NOT necessary. The next bench PINS resolution at boot default (removes the
+variable).
+
+### 34.5 The matrix after balloon28 — the wear confound, named and disarmed
+
+| NVS | wear at test | card/SDMMC | write timing | code era | writes |
+|---|---|---|---|---|---|
+| old 0x9000 | ~67 entries | in/claimed | capture-time | ≤ balloon16 | **SURVIVE** (dozens, balloon4-16) |
+| old 0x9000 | ~69-110 | out | capture-time | gate-fix..QQVGA | die 41/42 (balloon18-23) |
+| new 0xF00000 | VIRGIN | out | deferred | current | die 4/4 known (25: 2, 26: 2) |
+| new 0xF00000 | VIRGIN | in | deferred | current | die 3/3 (27) |
+| old 0x9000 | ~110 | in | deferred | current | die 3/4 (28) |
+
+The wear confound is REAL: cell A's survivors ran a LESS-worn partition
+(~67 entries); balloon18-23's dying-but-landing writes pushed it to ~110 by
+balloon28. But the confound cannot carry the verdict alone: **balloon25-27
+died on VIRGIN silicon** (wear not necessary), **balloon28 died on the OLD
+partition** (location not necessary), **balloon27/28 died card-IN** (card
+state not necessary), **balloon18-23 died at capture-time writes**
+(deferral not necessary). Every single-factor candidate fails as NECESSARY
+somewhere. What survives as the ONLY factor present in every death cell and
+absent from every survivor cell: **the balloon16→current code delta set.**
+Correcting §33.3's "four commits" shorthand, the full functional list (git):
+69fad61 (capture pre-gate fix), d3cf356 (fb_count 1), 0bbf150 (XCLK 10 MHz +
+DRAM fb), 0b15776 (WHEN_EMPTY), cfb1ca5 (QQVGA retire), 9e063f5
+(instruments), 3211fb5 (the deferral). (a0d891d/85c8c68/bcba0a0 net to zero
+on the current tree.)
+
+### 34.6 The round (committed beside this record)
+
+1. **`G01_ID_COMMIT_IMMEDIATE` A/B arm** (platformio.ini balloon env,
+   shipped COMMENTED — default OFF keeps the round-#21 build's behavior
+   identical to #20, so phase A needs NO reflash): when armed,
+   `allocateImageId` performs the `putUShort`+commit IMMEDIATELY (the
+   pre-3211fb5 capture-time placement, bracketed by its own START/done pair)
+   and the +1.5 s pending defer never arms. Console marker at boot:
+   `[CAPWIN] G01_ID_COMMIT_IMMEDIATE armed …`. Removal: with the G-01-10
+   instrument family, per the verdict.
+2. **The two-phase bench brief** (one session, one reflash between phases —
+   established practice; resolution PINNED at boot default throughout):
+   - **Phase A — wear isolate (Test F):** `esptool erase_region 0x9000
+     0xE000` on the flashed board (no reflash; the app persists), then ≥6
+     captures, deferred write. Single changed factor vs balloon28: the wear
+     state.
+   - **Phase B — deferral timing (cell-A recreation):** uncomment the flag,
+     rebuild, reflash, ≥6 captures again. Single changed factor vs phase A:
+     the write's placement. (The partition carries phase A's handful of
+     entries — near-virgin either way.)
+
+Bench notes: the region erase resets the ID sequence — expect NO restore
+line (fresh NVS reads 0) and first capture ID 1 (accepted bench-side, §33.3
+precedent; the 25-27 reissue rows are already on the base's card).
+
+Pre-written readings:
+
+- **B SURVIVES** (≥6 immediate commits, START→done pairs, zero deaths) →
+  **the deferral is NAMED** as the code delta: the capture-time commit on
+  old+card-in is the ship shape (balloon16's proven placement, current code
+  otherwise); the deferral's original justification (card-OUT
+  capture-window deaths, balloon24) becomes a recorded flight constraint
+  (flight flies card-in for the archive). G-01-10's write family then closes
+  pending the §28.3 SD-era cross-check.
+- **B DIES** → the deferral is exonerated; the bisect ladder proceeds:
+  instruments-out control arm (9e063f5) next, then the camera-config cluster
+  (fb_count 1 / XCLK+DRAM / WHEN_EMPTY — the deltas straddling the
+  balloon17/18 boundary where the deaths began).
+- **A SURVIVES and B DIES** → wear named for the old partition AND timing
+  named — an AND-gate (deferred write on worn silicon); the ship shape is
+  still B (capture-time commit), wear logged as the secondary constraint.
+- **A SURVIVES and B SURVIVES** → neither wear nor deferral; balloon28's
+  session context (resolution churn) becomes prime suspect — rerun the
+  deferred build at pinned resolution (a no-change repetition) before any
+  further bisect.
+- **A DIES** (B whatever) → wear exonerated on the old partition; the
+  code-delta ladder alone remains.
+- **Any death NOT at a write** → census discipline as always — and NOTE:
+  the silent family is ACTIVE again (boot 1); a TG0WDT-class silent death
+  with no `[CAPWIN]` lines belongs to THAT family, not the write family.
+
+### 34.7 Honest remainder
+
+- The stochastic reading rides n=11 era writes (1 survivor); phases A/B
+  raise n per session by design.
+- The wear arithmetic (~126 entries/page on the 20 KB partition) is
+  ESTIMATED, not read from the chip; the region erase moots it for the
+  bench.
+- The instruments (9e063f5) ride along in every arm — if the ladder
+  exonerates everything else, they are the last delta and the control arm is
+  mandatory before closure.
+- The SD-era silent family's own threads (§28.3 cross-check) stay open and
+  are now UNBLOCKED in practice: boot 1 is a fresh specimen of exactly that
+  family, card in, PC inside the named systimer witness.
+
+(01-UAT.md G-01-10, WINDOWS 15.)
