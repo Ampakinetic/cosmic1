@@ -3547,3 +3547,291 @@ Pre-written readings:
   family, card in, PC inside the named systimer witness.
 
 (01-UAT.md G-01-10, WINDOWS 15.)
+
+---
+
+## 35 — SESSION-32 (balloon29 bench, 2026-08-31): the §34 phases were NOT run — balloon29 is an unplanned same-build control that instead delivered the era's FIRST visible write-family panic, and the Cache-error dump NAMES the mechanism in one photograph: the G-01-10 tick hook's flash-resident millis() executes inside the NVS op's cache-disabled window and faults — the hook is fixed IRAM-safe this round (committed beside this record), the control arm is now phase 0 of the bench, and phases A/B remain OWED
+
+**Session status:** UNPLANNED. The operator's bench did not execute §34's
+phase checklist: **no phase A** (no `erase_region` signature anywhere in the
+log; NVS restores continue balloon28's exact sequence — 114 (:103) then
+115 (:358), 116 (:547, :734, :973, :1205, :1370), 117 (:1532, :1712)), and
+**no phase B** (zero `IMMEDIATE` markers whole-log; every banner is
+`Build: Aug 31 2026 14:17:24` — a post-c6c20c8 rebuild of the DEFAULT
+round-#21 build; c6c20c8's A/B arm shipped commented and stayed commented).
+balloon29 is therefore a **same-build control/variance session**: §34's
+B-survives/B-dies readings are NOT evaluated, and the phase A/B checklist
+REMAINS OWED (§35.7 re-arms it, with phase 0 prepended).
+
+### 35.1 Provenance (performed before any decode)
+
+On-disk `firmware.elf` (pre-round build) mtime Aug 31 14:18, SHA256
+`f6e6c6d5…f6f9b5`. This round the panic handler itself carried the build
+identity TWICE — both Guru dumps print `ELF file SHA256: f6e6c6d5f`
+(balloon29.log:876, :1108), matching the on-disk ELF exactly, and the
+operator's monitor symbolized both backtraces in-log. Independent
+addr2line (xtensa-esp32s3-elf-addr2line -pfiaC, on-disk ELF) reproduces
+every decoded frame of both dumps with zero disagreement.
+
+Banner provenance: `14:17:24` on all nine boots; git has 7aa263a (docs
+only) above c6c20c8, whose only functional delta is the COMMENTED
+platformio.ini flag — so the flashed build is behaviorally identical to
+balloon28's round-#21 build. Corroborated by string census:
+`G01_ID_COMMIT_IMMEDIATE armed` ×0, `IMMEDIATE START`/`IMMEDIATE done` ×0,
+erase signature ×0; the round-#21 markers present (`[CAPWIN]` family,
+`deferred id-commit START`, `[STAMP]`, `[TICKSTAMP]`).
+
+`balloon29.log` 1,770 lines, 9 boots (1 POWERON + 8 deaths), operator-ended
+(:1770); `base29.log` 431 lines, **zero resets** — the base stayed clean
+all session while the balloon died eight times.
+
+### 35.2 Census (corrected raw-byte grep) — and a pre-verify correction
+
+`rst:0x7` ×3 (:642, :1278, :1620), `rst:0x8` ×3 (:266, :455, :1440),
+`rst:0xc` ×2 (:881, :1113), Guru ×2 (:806, :1058), stack-canary ×0,
+raw-byte mojibake (EF BF BD) ×0 — the only high-byte lines are the healthy
+degree/em-dash classes (┬░ ×94, ΓÇö ×2). **Correction to the round's
+pre-verification:** it reported "rst:0x7 ×4 … +one more" — the actual count
+is ×3; the pre-verify conflated the rst lines with their Saved PC lines
+(:643/:1279/:1621) and its "+one more" does not exist. Resolution was
+PINNED at boot default all session (zero SET_RESOLUTION lines) — balloon28's
+re-init confound is absent here, which makes this a CLEAN variance session.
+One minor instrument note: `[IDLE0] stack watermark 284 words free (new
+low…)` (:1434). ID arithmetic consistent throughout (restored = stored+1;
+116 was re-captured four boots running — boots 4-7 — because two deaths
+prevented its commit and one write died before landing).
+
+### 35.3 Boot map — the sickest session of the campaign
+
+| boot | reset in | restored | capture / write | death |
+|---|---|---|---|---|
+| 1 (:11) | POWERON | 114 (:103) | 114 (5798 B) → START :263 | silent rst:0x8 — **START→ROM with ZERO lines between** (:263→:264); PC 0x403743c0; data LANDED (115 :358) |
+| 2 (:264) | rst:0x8 | 115 (:358) | 115 (3317 B) → START :452 | silent rst:0x8 :455, PC 0x403743c3; data LANDED (116 :547) |
+| 3 (:454) | rst:0x8 | 116 (:547) | **NO capture** — died mid-delivery of the base's image-114 window pull (chunks 1-8/26, :610-639) | silent TG0WDT rst:0x7 :642, PC 0x4037d9ce; [STAMP] −510 ms |
+| 4 (:640) | rst:0x7 | 116 (:734) | 116 (3355 B) — NO START (death before the +1.5 s defer) | **int-wdt PANIC :806** (photographed, §35.4) → rst:0xc :881, Saved PC 0x4201cf57 |
+| 5 (:880) | rst:0xc | 116 (:973) | 116 (3360 B) → START :1057 | **Cache-error PANIC :1058** (photographed, §35.5) → rst:0xc :1113, Saved PC 0x40375a21; data did NOT land (116 again :1205) |
+| 6 (:1112) | rst:0xc | 116 (:1205) | 116 (3403 B) — NO START | silent TG0WDT :1278, PC 0x40376480; [STAMP] −27 ms |
+| 7 (:1276) | rst:0x7 | 116 (:1370) | 116 (3344 B) → START :1437 | silent rst:0x8 — START→ROM zero lines (:1437→:1438), PC 0x403782ac; data LANDED (117 :1532) |
+| 8 (:1438) | rst:0x8 | 117 (:1532) | none | silent TG0WDT :1620, PC 0x4037c8c4; [STAMP] −669 ms |
+| 9 (:1619) | rst:0x7 | 117 (:1712) | none | operator-ended |
+
+Write tally this session: START ×4 (:263, :452, :1057, :1437), done ×0 —
+3 silent rst:0x8 with data LANDED (the §32.1 completion-tail signature
+again), 1 Cache-error with data NOT landed (the dump shows why: the write
+was still in the read-before-write phase, §35.5). **Era total: 1 completed
+of 15 attempted.** Two captures also died WITHOUT reaching their deferred
+write (boots 4 and 6, ~13 lines post-capture — family S taking captures
+too). Reset-cause gate classified every boot correctly
+(TASK_WDT/INT_WDT/PANIC per the death) and skipped rescan each time.
+
+### 35.4 Boot 4's dump: the probe caught the systimer wedge IN THE ACT (family S, working as designed)
+
+`balloon29.log:806` — Core 1 `Interrupt wdt timeout on CPU1`, fully
+symbolized in-log (:808-871), independently verified. Core 1 was in ISR
+context, PC/EPC4 = `systimer_ll_is_counter_value_valid` /
+`systimer_hal_get_counter_value` (systimer_hal.c:51) — the snapshot spin —
+for >300 ms (INT-WDT). The interrupted context (backtrace frames #8-#10):
+`prvIdleTask` → `esp_cpu_wait_for_intr` — **NO flash op anywhere; this is a
+plain SysTick during idle**: `_xt_lowint1` → `SysTickIsrHandler` →
+`xPortSysTickHandler` → `esp_vApplicationTickHook` → **tickStampHook
+(main_balloon.cpp:226)** → `millis()` → `esp_timer_impl_get_time` (IRAM,
+0x4037779e) → the snapshot that never validated. This is the DESIGNED
+catch (main_balloon.cpp's probe comment: the wedge caught in the hook
+"converts a silent TG0WDT death into an int-wdt PANIC WITH A DUMP naming
+the systimer") — balloon15's seven dumps, balloon28 boot 1's Saved PC, now
+a full register dump. Family S's upstream wedge (why the systimer UPDATE
+never completes) remains unknown; family discipline: SEPARATE family.
+
+### 35.5 THE CENTERPIECE — boot 5's Cache-error dump photographs the write family's mechanism
+
+`balloon29.log:1058-1059`:
+
+> `Guru Meditation Error: Core  1 panic'ed (Cache error).`
+> `Cache disabled but cached memory region accessed`
+
+The first VISIBLE panic of the write family, 11 lines after
+`[CAPWIN] deferred id-commit START` (:1057). The full decoded stack
+(:1071-1102, verified frame-by-frame against the on-disk ELF) reads as ONE
+photograph, two interleaved stacks:
+
+**The interrupted context (what CPU1 was doing)** — frames #5-#22, the
+deferred id-commit mid-flight: `AutoCapture::process()` (auto_capture.cpp:
+189) → `persistImageIdIfDue()` (:409) → `Preferences::putUShort`
+(:436 = the write line, exactly) → `nvs_set_u16` → `set_typed_item` →
+`nvs::Storage::writeItem` → `cmpItem`/`findItem`/`readEntry` — **the
+read-before-write compare; the value was NOT yet written, which is why
+boot 6 restored 116 again** — → `esp_partition_read` → `esp_flash_read` →
+`spi_flash_chip_generic_read` → `spi_flash_hal_read` (IRAM, cache now
+DISABLED) → ROM `memcpy` (always available).
+
+**The killing interrupt (what ran on top)** — frames #0-#4: a SysTick
+landed on CPU1 INSIDE the cache-down window: `_xt_lowint1` →
+`SysTickIsrHandler` → `xPortSysTickHandler` → `esp_vApplicationTickHook`
+(IRAM) → **tickStampHook (IRAM)** → PC 0x4201510e = **`millis()` —
+FLASH-RESIDENT (esp32-hal-misc.c:208; nm: 0x4201510c)**. The hook chain is
+IRAM right up to the `millis()` call; the millis fetch from cached-mapped
+flash with the cache disabled by the NVS op = the Cache-error fault.
+
+The hook's own design comment claimed "millis() is an esp_timer register
+read, legal at ISR level" (main_balloon.cpp:207). **That assumption is now
+DISPROVEN by the campaign's own dump**: millis is a flash-resident Arduino
+wrapper; only the `esp_timer_impl_get_time` chain it wraps is IRAM.
+
+Boot 5's Saved PC 0x40375a21 decodes to `spi_flash_op_block_func`
+(cache_utils.c:109) — the OTHER core parked in the flash-op blocker at
+reset: Core 0 was doing exactly what the flash driver designed (blocked in
+IRAM for the op's duration), confirming the cache-down window was live.
+
+### 35.6 All eight Saved PCs decode clean
+
+| death | rst | Saved PC | decode |
+|---|---|---|---|
+| b1 write | 0x8 | 0x403743c0 | `_DoubleExceptionVector` (xtensa_vectors.S:564) |
+| b2 write | 0x8 | 0x403743c3 | `_DoubleExceptionVector` (:566) |
+| b3 silent | 0x7 | 0x4037d9ce | `spinlock_release`/`vPortExitCritical` (port.c:501) — NEW PC for the family |
+| b4 panic | 0xc | 0x4201cf57 | `panic_handler` (panic_handler.c:174) |
+| b5 panic | 0xc | 0x40375a21 | `spi_flash_op_block_func` (cache_utils.c:109) |
+| b6 silent | 0x7 | 0x40376480 | `tick_hook` (int_wdt.c:113 — the INT-WDT feed hook) |
+| b7 write | 0x8 | 0x403782ac | `_xt_panic` (panic_handler_asm.S:30 — the §29.2 spin) |
+| b8 silent | 0x7 | 0x4037c8c4 | `esp_vApplicationTickHook` (freertos_hooks.c:34) |
+
+The write deaths' PCs are POST-fault exception machinery — consistent with
+boot 5's photographed fault taken at a NON-printable moment: the tick+hook
+fault lands in the flash op's completion tail (data lands, §32.1), the
+fault machinery itself needs the still-disabled cache, and the system
+double-faults (`_DoubleExceptionVector`) or spins in `_xt_panic` before the
+flash-resident panic handler can print → TG1WDT reset with ZERO output
+lines (photographed: START :263 → ROM :264; START :1437 → ROM :1438).
+Whether it prints (boot 5: fault in the read phase, panic path intact) or
+wedges silently (boots 1/2/7: fault in the tail, machinery cache-blind) is
+timing luck — same fault, two expressions. Honest limit: the silent
+deaths' PCs do NOT name their original fault; the identity with boot 5's
+is an inference (a strong one — the only fault class known to live in this
+window is the cache fault — but an inference).
+
+[STAMP] gaps by death: b1 −18, b2 −18, b3 −510, b4 −400, b5 −11, b6 −27,
+b7 −20, b8 −669 ms — loopTask stalled first in ALL eight (all negative).
+**Correction to the pre-verify:** its "−400/−510/−669 = the TG0WDT
+silents" is wrong twice — −400 belongs to boot 4's INT-WDT PANIC (IDLE0
+ticked on during the panic print; expected), and boot 6's silent shows a
+SMALL gap (−27 ms), breaking the tidy two-stage attribution — the silent
+family shows BOTH shapes this session (two-stage −510/−669, instantaneous
+−27), variance recorded not over-read. [TICKSTAMP]'s reconstructed tick-t
+again reads ~15 s past the [STAMP] latches (b3: 29565 vs 14055/14565; b6:
+21833 vs 6806/6833; b8: 27151 vs 11482/12151) — the §34 timebase caveat
+repeats; recorded, not over-read.
+
+base29 cross-check: zero resets; the base pulled windows for 114/115/116
+all session (seq 5/7/9/13/15/16/17), heals deferring throughout — the
+balloon kept dying mid-delivery, so nothing completed; the delivery chain
+itself stayed healthy right up to each death (same reading as §34.4).
+
+### 35.7 What the evidence does to §34's matrix — the AND-gate now has STRUCTURE
+
+New matrix row: old 0x9000, ~114-wear, in/claimed, deferred, current →
+**die 4/4 (29)**. Every single-factor candidate is still non-necessary
+(§34.5 stands). But this round ADDS a boundary alignment the older matrix
+could not see — checked directly against the retained logs:
+
+- **[TICKSTAMP] (the millis-stamp tick hook) first appears in balloon15**
+  (balloon13/14: zero TICKSTAMP lines; balloon15: 18; balloon16: 10;
+  balloon17: 2; balloon18: 26). The hook's flash-resident stamp read
+  shipped between balloon14 and balloon15.
+- **The write deaths begin balloon18** (§34.5: 41/42 in 18-23).
+- Balloons 15/16/17 wrote successfully WITH the hook present.
+
+So the photographed mechanism splits into a NECESSARY factor and an
+ENABLING factor — an AND-gate, not a single lever:
+
+- **Necessary for the photographed fault:** the hook's flash call in tick
+  context (balloon15+). Present in EVERY write-death build; ABSENT from
+  every pre-death survivor build (≤14, dozens of surviving capture-time
+  writes). Not sufficient alone: 15-17 survived — with short cache-down
+  windows, a 1 ms SysTick essentially never lands inside one.
+- **Enabling:** the camera cluster at the 17/18 boundary (§34.5's fb_count
+  1 / XCLK 10 MHz + DRAM fb / WHEN_EMPTY / QQVGA retire / pre-gate fix).
+  Presumed mechanism: continuous PSRAM-framebuffer streaming shares the
+  flash bus on the S3, stretching every NVS op's cache-down window from
+  microseconds to tick-scale — now a SysTick lands inside with
+  near-certainty, and the hook's millis fetch faults. THE HONEST LIMIT:
+  the bus-stretch story is INFERRED, not photographed (no instrument
+  watches the window length); balloon24 (deferred, hook present, zero
+  write deaths) sits awkwardly but is small-n luck under any stochastic
+  overlap model; and 1-of-15 completions is exactly what
+  "death unless the window happens to dodge the tick" predicts.
+- **Family S is NOT claimed by the instrument:** the TG0WDT two-stage
+  silents pre-date the probe (balloon10's §13 PC families); the probe was
+  BUILT to photograph that wedge and did (§35.4). But the same line that
+  arms the probe (the stamp read) also armed family W — one line, two
+  roles, and §34.7's "instruments are the last delta" remainder is now
+  ELEVATED from closure-formality to PRIME SUSPECT with a photograph
+  attached.
+
+### 35.8 The round (committed beside this record) — the hook made IRAM-safe
+
+Mechanism named by direct evidence → the honesty guard permits the fix, and
+the fix is instrument-only: **`tickStampHook`'s stamp read `millis()` →
+`esp_timer_get_time()`** (main_balloon.cpp, + `#include <esp_timer.h>`).
+Same value (millis wraps it), same IRAM systimer chain whose snapshot spin
+IS the wedge probe (§35.4's designed dump still works — the spin is inside
+`esp_timer_impl_get_time`, IRAM 0x4037779e) — but the hook is now IRAM
+end-to-end: no flash execution in tick context, during NVS ops or
+anywhere else. The false "millis() is an esp_timer register read" comment
+is corrected in place with the balloon29 citation. Binary-verified: hook
+symbol at 0x403754f0 (IRAM), disassembly shows the `esp_timer_get_time`
+call and NO millis reference; new ELF SHA256 `c07a2cda…3692c6`.
+Classification: instruments-only (G-01-10 family; same removal condition).
+
+### 35.9 The re-armed bench (phases A/B REMAIN OWED; phase 0 prepended)
+
+One session, two reflashes, resolution PINNED throughout (balloon29 proved
+the pin works):
+
+- **Phase 0 — control + fix validation** (§34.7's control arm, made
+  concrete by the dump): flash the fixed round-#22 build, ≥6 captures,
+  deferred commits. Single changed factor vs balloon29: the hook's flash
+  execution.
+- **Phase A — wear isolate (unchanged §34.6, Test F):** `esptool
+  erase_region 0x9000 0xE000` on the flashed board — NO reflash needed
+  (the board already runs the fixed build; §34.6's no-reflash property is
+  restored), then ≥6 captures. Bench note unchanged: expect NO restore
+  line and first capture ID 1.
+- **Phase B — deferral timing (unchanged §34.6):** uncomment
+  `G01_ID_COMMIT_IMMEDIATE`, rebuild, reflash, ≥6 captures.
+
+Pre-written readings (rewritten around the named mechanism):
+
+- **P0 SURVIVES** (≥6 writes, zero deaths) → the hook's flash execution is
+  NAMED as the current-era killer; the camera cluster is recorded as the
+  inferred enabler (its bus story stays a hypothesis unless deaths return);
+  the deferral is exonerated as necessary and STAYS (harmless; the balloon24
+  flight-constraint note stands). G-01-10's write family closes pending the
+  still-owed A/B wear discrimination.
+- **P0 DIES at a write** → the hook exonerated as sufficient; §34.6's A/B
+  readings stand verbatim; the camera-cluster bisect arm returns to the
+  front of the ladder.
+- **P0 dies NOT at a write** (silent TG0WDT, no [CAPWIN] lines) → family S
+  session — the §28.3 SD-era cross-check thread takes priority; family W
+  readings unaffected. An int-wdt dump in the systimer spin is the DESIGNED
+  catch, not a regression.
+- **Any Cache-error panic in P0+** should now be IMPOSSIBLE via the hook
+  (IRAM end-to-end). If one appears, a DIFFERENT flash-resident
+  tick-context execution exists — decode and name it before touching
+  anything.
+
+### 35.10 Honest remainder
+
+- The silent write deaths' identity with the photographed fault is
+  inference (post-fault PCs name nothing); P0 is the experiment that
+  tests it.
+- The enabler's bus-arbitration story is unproven; the camera cluster's
+  exculpation rides on P0's outcome, not on the story.
+- balloon24's zero write deaths with the hook present remains small-n; the
+  stochastic overlap model absorbs it, but it is the one cell that does
+  not fit the simple story.
+- Family S's upstream trigger (why the systimer UPDATE bit never
+  validates) is untouched by all of this and remains open.
+- n is now 15 era writes (1 survivor) — still thin for the probability
+  claims; P0+A+B roughly doubles it.
+
+(01-UAT.md G-01-10, WINDOWS 15.)

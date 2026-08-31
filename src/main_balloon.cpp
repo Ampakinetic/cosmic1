@@ -8,6 +8,7 @@
  */
 
 #include <Arduino.h>
+#include <esp_timer.h>  // esp_timer_get_time — IRAM, tick-hook-safe (session-32)
 #include <WiFi.h>
 #include <Preferences.h>
 #include <HardwareSerial.h>
@@ -204,10 +205,21 @@ static RTC_NOINIT_ATTR uint32_t s_rtcIdle0LastTickMs;
 // at the last COMPLETED hook dispatch — a core wedging at the tick
 // handler's post-hook critical section (port_systick.c, the kernel-lock
 // take) still leaves a fresh stamp; the ordering data survives. The hook
-// is IRAM and lock-free (millis() is an esp_timer register read, legal at
-// ISR level), registered AFTER the boot readout re-arms the words.
-// G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2 instrumentation
-// after G-01-10 closes on bench evidence.
+// is IRAM and lock-free, registered AFTER the boot readout re-arms the
+// words. SESSION-32 REVISION (balloon29): the stamp read was millis() —
+// believed "an esp_timer register read, legal at ISR level". FALSE:
+// Arduino's millis() is FLASH-resident here (0x4201510c; nm), and
+// balloon29.log:1058 photographed the consequence — a Core-1 SysTick
+// landed mid-NVS-op, the hook chain ran, and the millis() fetch faulted
+// with the flash cache disabled by the op ("Cache disabled but cached
+// memory region accessed") — the era's FIRST visible write-family panic,
+// backtrace straight down persistImageIdIfDue/putUShort. The hook now
+// reads esp_timer_get_time() — the SAME value (millis() wraps it) and the
+// SAME IRAM systimer chain (0x40377794, nm; esp_timer_impl_get_time
+// inlined) whose snapshot spin is the deliberate wedge probe below — but
+// IRAM end-to-end: no flash execution in tick context, during NVS ops or
+// anywhere else. G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2
+// instrumentation after G-01-10 closes on bench evidence.
 #define RTC_TICKSTAMP_MAGIC 0x71C67A9Du
 static RTC_NOINIT_ATTR uint32_t s_rtcTickMagic;
 static RTC_NOINIT_ATTR uint32_t s_rtcTickStamp[2];
@@ -216,14 +228,21 @@ static RTC_NOINIT_ATTR uint32_t s_rtcTickCcount[2];
 static void IRAM_ATTR tickStampHook(void) {
     const uint32_t core = xPortGetCoreID();
     // SYSTIMER-BASED stamp — deliberately the wedge PROBE: session-18's
-    // seven dumps proved CPU1's last tick dies INSIDE this millis() call,
-    // spinning in systimer_hal_get_counter_value's unbounded
+    // seven dumps proved CPU1's last tick dies INSIDE this stamp read
+    // (then millis(), now esp_timer_get_time() — the same IRAM
+    // esp_timer_impl_get_time chain), spinning in
+    // systimer_hal_get_counter_value's unbounded
     // while(!timer_unit_value_valid) loop (systimer_hal.c:51) — the wedge
     // caught here converts a silent TG0WDT death into an int-wdt PANIC WITH
-    // A DUMP naming the systimer. With the hook registered on BOTH cores
+    // A DUMP naming the systimer (balloon29 boot 4 photographed it
+    // working). With the hook registered on BOTH cores
     // (see the registration below — session-18's version only reached the
     // calling core), every stall-side wedge should produce a dump.
-    s_rtcTickStamp[core] = millis();
+    // SESSION-32: esp_timer_get_time() replaces millis() — identical value,
+    // but IRAM (see the revision note above): millis() is flash-resident
+    // and its fetch faults when a SysTick lands inside an NVS op's
+    // cache-disabled window (balloon29 boot 5's Cache-error panic).
+    s_rtcTickStamp[core] = (uint32_t)(esp_timer_get_time() / 1000ULL);
     // CCOUNT-BASED stamp — the INDEPENDENT clock (CPU cycle counter, a
     // register read, no systimer involvement, 240 MHz per the boot banner).
     // If at the next boot a core's tick stamp froze while its ccount stamp
