@@ -158,6 +158,7 @@ void handleSetAlertThresholds();
 void handleAlertAck();
 void handleWifiSwitch();
 void handleRequestFull();
+void handleSdClear();
 void handleApiState();
 void handleLeafletJs();
 void handleLeafletCss();
@@ -2214,6 +2215,10 @@ void initWebServer() {
     // Image-transfer rework: FULL on request — the "Fetch full" button asks
     // the balloon to announce a specific image's FULL manifest
     server.on("/request-full", HTTP_POST, handleRequestFull);
+    // Explicit operator wipe (quick-260831): the base card's ONLY deletion
+    // surface — confirm-gated in the UI, busy-gated against in-flight
+    // transfers inside the handler. POST-only (never a GET side effect).
+    server.on("/sd-clear", HTTP_POST, handleSdClear);
     server.on("/api/state", HTTP_GET, handleApiState);
     server.on("/status", HTTP_GET, handleApiState);  // legacy alias — same serializer
     server.on("/gallery", HTTP_GET, handleGalleryList);  // /gallery/{id} rides handleNotFound (parameter)
@@ -2573,6 +2578,24 @@ void handleRoot() {
 
     html += "<div class=\"message error\" id=\"wifi-join-error\" style=\"display:none;\"></div>";
     html += "<div class=\"message info\" id=\"wifi-msg\" style=\"display:none;\"></div>";
+
+    html += "</div>";
+
+    // 💾 SD Card card (quick-260831): the base card's ONLY deletion surface.
+    // The inline onsubmit confirm IS the destructive-action gate — its
+    // wording names the full scope (ALL files erased), and declining returns
+    // false, which sets defaultPrevented BEFORE the delegated submit
+    // listener runs (it bails on that guard, line ~1562), so declining
+    // sends NO request. Accepting falls through to the generic machinery:
+    // the submit button has no name, so the POST body is empty, and the
+    // server's verdict renders into the lazy js-capture-msg div the
+    // listener creates (none in the markup, by design).
+    html += "<div class=\"card\">";
+    html += "<h2>💾 SD Card</h2>";
+
+    html += "<form action=\"/sd-clear\" method=\"POST\" onsubmit=\"return confirm('This deletes ALL files on the base station SD card. Every stored image and sidecar file will be permanently erased. Continue?')\">";
+    html += "<button type=\"submit\">Clear SD Card</button>";
+    html += "</form>";
 
     html += "</div>";
 
@@ -2964,6 +2987,43 @@ void handleAutoCaptureDisable() {
     } else {
         sendResponse(500, "Error", "Failed to send auto-capture disable command");
     }
+}
+
+// ===========================
+// SD Card Clear (quick-260831 — the base card's ONLY deletion surface)
+// ===========================
+// The browser-side confirm dialog IS the operator confirmation (declining
+// sets defaultPrevented before the delegated submit listener runs, so a
+// declined dialog sends NO request); this handler adds the two server-side
+// honesty gates: refuse while any transfer row can still write to the card,
+// and answer 500 with the not-mounted truth when there is no card. The wipe
+// itself (SDStorage().clearAllImages) runs synchronously in this loop pass —
+// a full card is a few hundred ms of deletes, mirroring the balloon's serial
+// SDCLEAR precedent. The clearing guards inside SdStorage make any
+// race-window write fail fast WITHOUT latching the boot-permanent
+// writeFailed degradation (T-Q01-03).
+void handleSdClear() {
+    // Busy gate FIRST (T-Q01-03): QUEUED/RECEIVING/RETRYING rows may still
+    // write chunks or sidecars — nothing is deleted while one lives.
+    if (ImageRx().anyTransferActive()) {
+        Serial.println("  /sd-clear refused - image transfer in progress (nothing deleted)");
+        sendResponse(409, "Busy",
+                     "Image transfer in progress - wait for transfers to finish, then clear again");
+        return;
+    }
+
+    const uint16_t removed = SDStorage().clearAllImages();
+
+    // Not-mounted honesty: the wipe skipped itself — say so, never a fake OK
+    if (SDStorage().getStatus().initFailed) {
+        Serial.println("  /sd-clear skipped - SD card not mounted");
+        sendResponse(500, "Error", "SD card not mounted - nothing was deleted");
+        return;
+    }
+
+    String message = "SD card cleared - " + String(removed) + " file(s) removed";
+    sendResponse(200, "OK", message.c_str());
+    Serial.printf("  /sd-clear done - %u file(s) removed\n", static_cast<unsigned>(removed));
 }
 
 void handleSetEventThresholds() {
