@@ -140,6 +140,14 @@ See: `.planning/PROJECT.md`
 **Stopped at:** Completed 02.5-03-PLAN.md
 **Resume file:** None
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260831-vat | Clear SD card button in base-station web UI with action confirm (balloon descoped by operator decision — its reset flow stays the serial SDCLEAR CONFIRM command) | 2026-08-31 | 9db1d1e | [260831-vat-add-a-clear-sd-card-function-as-a-button](./quick/260831-vat-add-a-clear-sd-card-function-as-a-button/) |
+
+Last activity: 2026-08-31 - Completed quick task 260831-vat: Clear SD card button (base station web UI, /sd-clear route + confirm; balloon has no web server — operator chose base-only)
+
 ## Performance Metrics
 
 | Plan | Duration | Tasks | Files |
