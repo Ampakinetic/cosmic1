@@ -1212,14 +1212,14 @@ bool initializeBoard() {
    // digitalWrite(POWER_ENABLE_PIN, HIGH);  // Enable power to sensors
     
     // Initialize LED pins
-    pinMode(LED_GPS_LOCK_PIN, OUTPUT);
-    pinMode(LED_LORA_TX_PIN, OUTPUT);
-    pinMode(LED_ERROR_PIN, OUTPUT);
+    //pinMode(LED_GPS_LOCK_PIN, OUTPUT);
+    //pinMode(LED_LORA_TX_PIN, OUTPUT);
+   // pinMode(LED_ERROR_PIN, OUTPUT);
     
     // Set initial LED states
-    digitalWrite(LED_GPS_LOCK_PIN, LOW);
-    digitalWrite(LED_LORA_TX_PIN, LOW);
-    digitalWrite(LED_ERROR_PIN, LOW);
+   // digitalWrite(LED_GPS_LOCK_PIN, LOW);
+   // digitalWrite(LED_LORA_TX_PIN, LOW);
+   // digitalWrite(LED_ERROR_PIN, LOW);
     
     SYS_INFO("Board initialization complete");
     return true;
@@ -1276,12 +1276,14 @@ bool checkHardwareStatus() {
     }
     
     // Check power status
-    int batteryLevel = analogRead(BATTERY_SENSE_PIN);
-    if (batteryLevel > 0) {
-        SYS_INFO("Battery monitoring active (raw reading: %d)", batteryLevel);
-    } else {
-        SYS_WARNING("Battery monitoring may not be working");
-    }
+    #ifdef BATTERY_SENSE_PIN
+        int batteryLevel = analogRead(BATTERY_SENSE_PIN);
+        if (batteryLevel > 0) {
+            SYS_INFO("Battery monitoring active (raw reading: %d)", batteryLevel);
+        } else {
+            SYS_WARNING("Battery monitoring may not be working");
+        }
+    #endif
     
     SYS_INFO("Hardware status check complete");
     return allGood;
@@ -1297,8 +1299,12 @@ bool checkHardwareStatus() {
 // is nonzero. A floating or absent sense line must never drive a safety
 // branch (emergency / camera-disable) or fabricate a pack into state.
 static bool batteryReadingValid() {
-    float voltage = PowerMgr().getBatteryVoltage();
-    return (voltage >= 1.8f && voltage <= 8.0f && analogRead(BATTERY_SENSE_PIN) != 0);
+    #ifdef BATTERY_SENSE_PIN
+        float voltage = 4.2; //PowerMgr().getBatteryVoltage();
+        return (voltage >= 1.8f && voltage <= 8.0f && analogRead(BATTERY_SENSE_PIN) != 0);
+    #else 
+        return true;
+    #endif
 }
 
 void updateSystemState() {

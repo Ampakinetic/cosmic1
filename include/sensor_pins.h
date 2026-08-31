@@ -59,12 +59,12 @@
 #define LORA_UART_NUM     UART_NUM_2  // Use UART2
 
 // Status LEDs (Optional)
-#define LED_GPS_LOCK_PIN  38  // GPS Lock Status
-#define LED_LORA_TX_PIN   39  // LoRa Transmit Status
-#define LED_ERROR_PIN     40  // Error Status
+//#define LED_GPS_LOCK_PIN  38  // GPS Lock Status
+//#define LED_LORA_TX_PIN   39  // LoRa Transmit Status
+//#define LED_ERROR_PIN     40  // Error Status
 
 // Power Management Pins (Optional)
-#define BATTERY_SENSE_PIN 4   // Battery voltage monitoring (ADC)
+// #define BATCTERY_SENSE_PIN 4   // Battery voltage monitoring (ADC)
 // POWER_ENABLE_PIN removed due to pin conflicts - sensors always on
 
 // ===========================

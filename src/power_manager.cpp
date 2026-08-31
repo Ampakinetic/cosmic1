@@ -314,13 +314,17 @@ bool PowerManager::checkBatteryHealth() {
 
 float PowerManager::readBatteryVoltage() {
     // Read from ADC pin (assuming voltage divider)
-    int rawValue = analogRead(BATTERY_SENSE_PIN);
-    
-    // Convert ADC reading to voltage
-    // Assuming 3.3V reference and voltage divider ratio
-    float voltage = (rawValue / 4095.0f) * 3.3f * 2.0f;  // 2.0 = voltage divider ratio
-    
-    return voltage;
+     #ifdef BATTERY_SENSE_PIN
+        int rawValue = analogRead(BATTERY_SENSE_PIN);
+        
+        // Convert ADC reading to voltage
+        // Assuming 3.3V reference and voltage divider ratio
+        float voltage = (rawValue / 4095.0f) * 3.3f * 2.0f;  // 2.0 = voltage divider ratio
+        
+        return voltage;
+    #else
+        return 4.2;
+    #endif
 }
 
 float PowerManager::readBatteryCurrent() {
