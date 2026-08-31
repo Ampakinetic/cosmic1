@@ -64,7 +64,7 @@
 //#define LED_ERROR_PIN     40  // Error Status
 
 // Power Management Pins (Optional)
-// #define BATCTERY_SENSE_PIN 4   // Battery voltage monitoring (ADC)
+// #define BATTERY_SENSE_PIN 4   // Battery voltage monitoring (ADC)
 // POWER_ENABLE_PIN removed due to pin conflicts - sensors always on
 
 // ===========================

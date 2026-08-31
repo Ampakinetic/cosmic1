@@ -11,3 +11,4 @@
 .pio/build/esp32dev/FrameworkArduino/chip-debug-report.cpp.o
 .pio/build/esp32dev/FrameworkArduino/firmware_msc_fat.c.o
 include/wifi_config.h
+.pio/build/project.checksum
