@@ -30,6 +30,7 @@ SdStorage& SDStorage() {
 
 SdStorage::SdStorage()
     : available(false)
+    , clearing(false)
     , fullFileId(0)
     , fullPersistedBytes(0)
     , thumbFileId(0)
@@ -146,6 +147,12 @@ void SdStorage::fileFor(uint8_t kind, File** out, uint16_t** outId, uint32_t** o
 }
 
 bool SdStorage::openTransfer(uint16_t imageId, uint8_t kind, uint32_t totalSize) {
+    // Wipe hold (quick-260831): a transfer opening a file while the explicit
+    // /sd-clear walk runs must fail fast WITHOUT degrade() — a deliberate
+    // wipe must never latch the boot-permanent writeFailed state.
+    if (clearing) {
+        return false;
+    }
     if (!available) {
         return false; // degraded — accounting continues, nothing persisted
     }
@@ -193,6 +200,12 @@ bool SdStorage::openTransfer(uint16_t imageId, uint8_t kind, uint32_t totalSize)
 
 bool SdStorage::writeChunk(uint16_t imageId, uint8_t kind, uint16_t chunkIndex,
                            uint16_t chunkSize, const uint8_t* data, size_t len) {
+    // Wipe hold (quick-260831): a chunk arriving during the /sd-clear walk
+    // must fail fast WITHOUT degrade() — the wipe must not latch the
+    // boot-permanent writeFailed state (nor flood the console per chunk).
+    if (clearing) {
+        return false;
+    }
     if (!available) {
         return false;
     }
@@ -325,6 +338,12 @@ bool SdStorage::finalizeImage(const SdImageMetadata& meta) {
 }
 
 bool SdStorage::writeSidecar(const SdImageMetadata& meta) {
+    // Wipe hold (quick-260831): a sidecar landing during the /sd-clear walk
+    // must fail fast WITHOUT degrade() — the wipe must not latch the
+    // boot-permanent writeFailed state.
+    if (clearing) {
+        return false;
+    }
     // Hand-built String JSON, matching the main_basestation style — the
     // base env deliberately has no ArduinoJson dependency (research
     // Supporting table). Written exactly once per image at finalization.
@@ -874,6 +893,105 @@ bool SdStorage::readSidecarMeta(uint16_t imageId, bool thumb, SdImageMetadata* o
     }
 
     return true;
+}
+
+// ===========================
+// Explicit Operator Wipe (quick-260831 — the base card's ONLY deletion
+// surface, invoked solely by the /sd-clear HTTP handler)
+// ===========================
+
+// Order matters: the not-mounted honesty check comes first; the open write
+// handles are closed BEFORE any removal (deleting a file under an open FAT
+// handle is the hazard step c removes); the walk mirrors buildIndex's
+// openNextFile idiom and the balloon module's per-file + summary logging
+// (02.5-03 SDCLEAR precedent); the RAM index is reset in place with a
+// version bump + alignment so /gallery and the /api/state galleryCount
+// refetch signal (D-36) reflect the empty card on the next poll WITHOUT a
+// directory re-walk. Single-threaded loop: no transfer can truly interleave
+// (the clearing guards are belt-and-braces), and a full card is a few
+// hundred ms of deletes — synchronous is acceptable, mirroring the balloon.
+uint16_t SdStorage::clearAllImages() {
+    // Not-mounted honesty: nothing to walk, nothing fabricated
+    if (status.initFailed) {
+        Serial.println("SdStorage: clear skipped - card not mounted");
+        return 0;
+    }
+
+    clearing = true;
+
+    // Close both open write handles and forget their accounting — deleting
+    // a file under an open FAT handle is the hazard this step removes
+    if (fullFile) {
+        fullFile.close();
+        fullFile = File();
+    }
+    if (thumbFile) {
+        thumbFile.close();
+        thumbFile = File();
+    }
+    fullFileId = 0;
+    thumbFileId = 0;
+    fullPersistedBytes = 0;
+    thumbPersistedBytes = 0;
+
+    uint16_t removed = 0;
+
+    File dir = SD_MMC.open("/images");
+    if (!dir || !dir.isDirectory()) {
+        Serial.println("SdStorage: clear - /images open failed; nothing removed");
+    } else {
+        // Flat layout (D-32): every file lives directly in /images — walk
+        // WITHOUT recursing; a directory entry is skipped with a named log.
+        // Names are copied out before close (f.name() is valid only while
+        // open); a name that cannot fit the bounded path buffer is skipped
+        // with a named line rather than silently truncated into a
+        // wrong-path remove.
+        File f;
+        while (f = dir.openNextFile()) {
+            if (f.isDirectory()) {
+                Serial.printf("SdStorage: clear skipped directory entry %s "
+                              "(flat layout - never recursed)\n", f.name());
+                f.close();
+                continue;
+            }
+            const char* base = f.name();
+            const char* slash = strrchr(base, '/');
+            if (slash) {
+                base = slash + 1;   // f.name() may carry a leading path
+            }
+            char path[48];
+            if (strlen(base) + strlen("/images") + 2 > sizeof(path)) {
+                Serial.println("SdStorage: clear skipped for over-long name (kept on card)");
+                f.close();
+                continue;
+            }
+            snprintf(path, sizeof(path), "/images/%s", base);
+            f.close();
+            if (SD_MMC.remove(path)) {
+                removed++;
+                Serial.printf("SdStorage: cleared %s\n", path);
+            } else {
+                Serial.printf("SdStorage: clear FAILED for %s (kept on card)\n", path);
+            }
+        }
+        dir.close();
+
+        Serial.printf("SdStorage: clear removed %u file(s)\n",
+                      static_cast<unsigned>(removed));
+    }
+
+    // Reset the RAM gallery index in place: no stale entries, and the
+    // version bump + alignment makes ensureIndexCurrent() a no-op — /gallery
+    // and the /api/state galleryCount refetch signal (D-36) reflect the
+    // empty card on the next poll without a directory re-walk.
+    galleryCount = 0;
+    indexVersion++;
+    indexedVersion = indexVersion;
+
+    // Single exit after the latch was set — clearing = false runs on EVERY
+    // path past the not-mounted early return.
+    clearing = false;
+    return removed;
 }
 
 // ===========================

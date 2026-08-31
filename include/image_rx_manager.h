@@ -228,6 +228,20 @@ public:
     static constexpr uint8_t RX_TRANSFER_SLOTS = 8;
     uint8_t getTransferSnapshot(TransferRow* rows, uint8_t maxRows) const;
 
+    // The /sd-clear busy gate (quick-260831): true while ANY slot holds a
+    // non-terminal transfer. QUEUED/RECEIVING/RETRYING rows may still write
+    // chunks or sidecars to the card; terminal rows write nothing more.
+    // Read on the single-threaded loop by the HTTP handler BEFORE any
+    // deletion — the wipe refuses while this is true.
+    bool anyTransferActive() const {
+        for (uint8_t i = 0; i < RX_TRANSFER_SLOTS; i++) {
+            if (transfers[i].used && !transfers[i].terminal) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 private:
     bool initialized;
 

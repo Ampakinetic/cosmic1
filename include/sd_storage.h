@@ -218,9 +218,33 @@ public:
     // /gallery/{id} detail serializer so the two can never diverge.
     static const char* triggerSourceName(uint8_t captureSource);
 
+    // ---- Explicit operator wipe (quick-260831) ----
+
+    // The ONLY deletion surface on the base card: deletes every file inside
+    // /images (JPGs and sidecars, walked flat — never recursed), resets the
+    // RAM gallery index in place, and returns the removed count. Invoked
+    // solely by the /sd-clear HTTP handler in main_basestation.cpp (behind
+    // the dashboard's confirm dialog and the ImageRx busy gate).
+    //
+    // The disk-full policy above (NO file is ever deleted to make space)
+    // is untouched: that rule bans SILENT/automatic deletion; this is a
+    // deliberate, operator-confirmed wipe. The wipe never latches the
+    // boot-permanent writeFailed degradation — the clearing guard on
+    // openTransfer/writeChunk/writeSidecar returns false WITHOUT calling
+    // degrade(), so transfers persist normally after the wipe.
+    // Synchronous by design (single-threaded loop, mirrors the balloon
+    // serial SDCLEAR precedent): a full card is a few hundred ms of deletes.
+    uint16_t clearAllImages();
+
 private:
     bool available;
     SdStorageStatus status;
+
+    // Wipe-in-progress latch (quick-260831): true only inside the
+    // synchronous clearAllImages() walk. openTransfer/writeChunk/
+    // writeSidecar check it and fail fast WITHOUT degrade() — a transfer
+    // racing the wipe must not set the boot-permanent status.writeFailed.
+    bool clearing;
 
     // One open write handle per kind: at most one active full pull (FIFO)
     // and one in-flight thumbnail push can receive chunks at a time
