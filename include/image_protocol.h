@@ -83,8 +83,8 @@ static constexpr uint8_t  IMG_WINDOW_MAX_CHUNKS      = 16;
 // slot, so image 42's window request evicted the base-activated, receipt-
 // evidenced image 41 entry via the supersede path, balloon4.log:816-817 ->
 // seven honest rejections -> full 0/31). Arithmetic bound: worst-case
-// residency 5 entries x (IMG_MAX_IMAGE_SIZE 50000 B full + THUMB_MAX_BYTES
-// 8192 B thumb) = 290,960 B (~284 KB) = 3.5% of the bench-observed free
+// residency 5 entries x (IMG_MAX_IMAGE_SIZE 204800 B full + THUMB_MAX_BYTES
+// 8192 B thumb) = 1,064,960 B (~1.04 MB) = 12.5% of the bench-observed free
 // PSRAM (8.35 MB, balloon4.log:138 [MEM]); internal RAM +2 x 88 B
 // (sizeof(ImageTxEntry)) = +176 B static. sweepExpiredEntries' 15-min TTL
 // and freeEntry's buffer lifetime are unchanged — depth raises the count of
@@ -135,25 +135,45 @@ static constexpr uint8_t  IMG_MANIFEST_MAX_ATTEMPTS = 3;
 // caught the loop too (a different, loop-visible class).
 static constexpr uint32_t IMG_LOOP_SLOW_PASS_MS = 2500;
 
-// Full-image transfer cap (research Q4 resolution; reason re-named at Phase
-// 2.5): the wire is FROZEN and the base's startTransfer validates totalSize
-// against its own MAX_IMAGE_SIZE (50000) in include/base_station_config.h —
-// a larger manifest would be rejected base-side, so fulls at or above this
-// never arm a pull (the balloon logs a warning naming the image ID and size
-// while the thumbnail still pushes, and the base never sees a FULL_IMAGE
-// manifest for them). It is NOT a balloon RAM limit anymore — the Phase 2.5
-// file-backed pipeline holds no PSRAM image copy on the normal path; the cap
-// governs wire armability only, never what the card archive keeps.
-static constexpr uint32_t IMG_MAX_IMAGE_SIZE         = 50000;
+// Full-image transfer cap (research Q4 resolution; raised 50000 -> 204800 on
+// 2026-09-01 by operator request: UXGA-class captures reached 52-118 KB in
+// balloon42 and were being parked un-transferable — 204800 B = 200 KB covers
+// every framesize the OV2640 offers with headroom). The wire is FROZEN and
+// the base's startTransfer validates totalSize against its own MAX_IMAGE_SIZE
+// (204800, include/base_station_config.h — the static_assert in
+// image_rx_manager.cpp pins the two) — a larger manifest would be rejected
+// base-side, so fulls at or above this never arm a pull (the balloon logs a
+// warning naming the image ID and size while the thumbnail still pushes, and
+// the base never sees a FULL_IMAGE manifest for them). It is NOT a balloon
+// RAM limit anymore — the Phase 2.5 file-backed pipeline holds no PSRAM image
+// copy on the normal path; the cap governs wire armability only, never what
+// the card archive keeps. Cost of the raise, accepted by the operator: 919
+// chunks = up to 58 windows ≈ 10-11 min per max-size pull at the observed
+// ~0.7 s/chunk airtime.
+static constexpr uint32_t IMG_MAX_IMAGE_SIZE         = 204800;
 
-static constexpr uint32_t IMG_WINDOW_STALL_MS        = 8000;
+// Base-side stall clock (09-01 recalibration, base40.log): was 8000, which
+// sat BELOW the balloon's real request->first-chunk lead-in. The balloon
+// serializes window service — one armed window at a time, ~10 s of airtime
+// per 16-chunk window (~0.6-0.7 s/chunk: 240 B = 250 ms of E32 UART feed at
+// 9600 plus the card read and interleaved telemetry) — and it processes the
+// NEXT window request only after the current window drains. A request that
+// queues behind an active window therefore sees 8-12 s of silence that is
+// NOT a stall (base40.log:929->981, ~10 s between window 32..47's last chunk
+// and window 48..62's first). The 8 s clock expired mid-lead-in three times
+// (seq 18/20/22), each premature re-request TX landing on the streaming
+// window's tail chunks — the deterministic "stalls a chunk or two short of
+// total, then heals" pattern. 15000 clears the worst observed lead-in with
+// margin; a genuinely dead stream now takes 15 s to its first heal instead
+// of 8 — the cheap side of the trade.
+static constexpr uint32_t IMG_WINDOW_STALL_MS        = 15000;
 
 // Bounded push/window interleaving (02-05 / CR-03 fix a): when an armed
 // window's entry has waited longer than this, the balloon PREEMPTS its own
 // push work to service one window chunk. Must stay STRICTLY below
-// IMG_WINDOW_STALL_MS (8000) — the base's stall clock resets on every
+// IMG_WINDOW_STALL_MS (15000) — the base's stall clock resets on every
 // accepted chunk, so a window serviced within this bound can never trip the
-// base's 8 s stall while the balloon still holds it armed.
+// base's stall clock while the balloon still holds it armed.
 static constexpr uint32_t IMG_WINDOW_SERVICE_PREEMPT_MS = 5000;
 
 // Inter-window RX-settle gap (01-12 / G-01-7 lever 3): after a window's last
@@ -165,8 +185,8 @@ static constexpr uint32_t IMG_WINDOW_SERVICE_PREEMPT_MS = 5000;
 // chunks never arrived — the half-duplex immediate-retransmit turnaround-
 // collision class: a re-request answered instantly collides with the link
 // still turning around. INVARIANT CHAIN: settle (500) < preempt (5000) < stall
-// (8000) — a settled window still preempts push work inside the 5000 ms bound
-// and can never trip the base's 8000 ms stall clock.
+// (15000) — a settled window still preempts push work inside the 5000 ms bound
+// and can never trip the base's stall clock.
 static constexpr uint32_t IMG_WINDOW_RX_SETTLE_MS     = 500;
 
 // Oversize-thumbnail heal fallback (02-05 / CR-01 base half): an oversize
@@ -176,8 +196,9 @@ static constexpr uint32_t IMG_WINDOW_RX_SETTLE_MS     = 500;
 // push provably drained the queue elsewhere) is the only remaining evidence
 // the push finished — after it, the base may heal a stalled thumbnail even
 // without a same-id FULL slot, and the D-24 3-pass bound then resolves the
-// row honestly instead of an infinite RECEIVING stall. 24 s = 3x the stall
-// window, beyond any plausible queued-push wait.
+// row honestly instead of an infinite RECEIVING stall. 24 s stays above the
+// (now 15 s) stall window with margin — beyond any plausible queued-push
+// wait.
 static constexpr uint32_t IMG_THUMB_HEAL_IDLE_MS      = 24000;
 
 static constexpr uint32_t IMG_ENTRY_TTL_MS           = 900000;

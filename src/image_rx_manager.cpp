@@ -123,7 +123,7 @@ void ImageRxManager::process() {
             // half-duplex immediate-retransmit turnaround-collision class;
             // the settle gap breaks the collision. The check is NESTED in
             // this branch, so during the settle window no pass is charged and
-            // the stall branch below cannot fire (settle 500 << stall 8000).
+            // the stall branch below cannot fire (settle 500 << stall 15000).
             if ((millis() - pull->lastProgressMs) < IMG_WINDOW_RX_SETTLE_MS) {
                 return;   // settle holds this pass — no request, no stall path
             }

@@ -64,7 +64,7 @@
 // Memory Management
 #define MAX_STORED_PACKETS    100     // Max packets to keep in memory
 #define MAX_STORED_IMAGES     20      // Max images to keep in memory
-#define MAX_IMAGE_SIZE        50000   // Max image size in bytes
+#define MAX_IMAGE_SIZE        204800  // Max image size in bytes (200 KB — raised 09-01 with IMG_MAX_IMAGE_SIZE; static_assert-pinned in image_rx_manager.cpp)
 
 // Flash Storage (optional)
 #define ENABLE_FLASH_STORAGE  true

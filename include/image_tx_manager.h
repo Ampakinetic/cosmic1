@@ -134,6 +134,18 @@ struct ImageTxEntry {
     // thumbnail cap (37 chunks at 223 B) with margin.
     uint64_t thumbAcked;
 
+    // Base-confirmed FULL chunk bitmap (09-01 bench fix, base40.log): bit i
+    // set = a WINDOW_COMPLETE receipt says full chunk i is persisted base-
+    // side. RAM-only (unlike thumbAcked — full delivery is base-PULLED, so a
+    // boot resume re-discovers through the base's resume path, not through
+    // this map). Consumers: serviceWindowChunk's skip — a stall/tail
+    // re-request re-arms a span and resets the cursor, and without this map
+    // every heal re-blasted all 16 chunks (~10 s airtime, fresh collision
+    // windows) to recover the 1-2 the base was actually missing. 16xu64 =
+    // 1024 bits covers the wire cap (IMG_MAX_IMAGE_SIZE 204800 / 223 = 919
+    // chunks; widened from 4xu64/256 bits with the 09-01 cap raise to 200 KB).
+    uint64_t fullAcked[16];
+
     ImageTxEntryState state;
     uint16_t nextThumbChunk;  // 0-based index of the next chunk to push
     // WR-08 (01-17): consecutive same-index transmit failures in the push

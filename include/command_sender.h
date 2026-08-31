@@ -22,13 +22,32 @@ static constexpr uint8_t MAX_PENDING_COMMANDS = 5;
 // for the quiet gap that necessarily follows every window/push completion
 // (windows complete, pushes drain; the RX settle + request/ACK round trip
 // at window boundaries is the landing slot — far above this threshold).
-static constexpr uint32_t CMD_TX_CHANNEL_QUIET_MS = 750;
+//
+// 09-01 bench recalibration (base40.log): 750 ms sat BELOW the stream's real
+// cadence — a chunk costs ~600-700 ms end to end (240 B = 250 ms of E32 UART
+// feed at 9600, plus the card read and the interleaved telemetry/beacon work),
+// so ordinary inter-chunk jitter breached the gate every few chunks. The web
+// UI's GET_STATUS (seq=3, base40.log:427-431) logged "transmit held" and then
+// transmitted on the next jitter gap — the two chunks on air (13, 14) died,
+// the 25-chunk thumbnail push ended 23/25, and the stall machinery burned a
+// heal pass on them. 2000 ms clears the worst inter-chunk gap with margin
+// while the inter-window pause (settle 500 + quiet 2000 + flight + balloon
+// settle 500 ≈ 3-4 s) still opens it for requests, receipts, and polls.
+static constexpr uint32_t CMD_TX_CHANNEL_QUIET_MS = 2000;
 
 // Bound on the quiet hold: a sustained chunk stream can never strand a
 // command indefinitely — at this bound the command transmits best-effort
 // with a named log, and the honest D-05/D-07 terminal semantics apply to
 // that attempt like any other.
-static constexpr uint32_t CMD_TX_CHANNEL_HOLD_MAX_MS = 30000;
+//
+// 09-01: raised 30000 -> 120000. A thumbnail push free-runs ~25 chunks
+// (~18-20 s of chunk frames with no 2 s quiet gap), and a push interleaved
+// with preempted window service stretches further — a 30 s bound GUARANTEED
+// a best-effort transmit into a live stream, the exact collision class this
+// gate exists to prevent (the 750 ms gate was already leaking; the bound
+// would have made it unconditional). 120 s still bounds stranding well past
+// any observed continuous stream.
+static constexpr uint32_t CMD_TX_CHANNEL_HOLD_MAX_MS = 120000;
 
 // IMAGE_ACK (0x15) receipt queue (image-transfer rework). Receipts are
 // UNTRACKED: no ACK of the ACK, no retry — a lost receipt is recovered by

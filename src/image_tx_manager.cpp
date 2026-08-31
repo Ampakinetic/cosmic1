@@ -349,11 +349,16 @@ bool ImageTxManager::sendTelemetryBeacon() {
     // nonzero raw ADC reading. Otherwise batteryMilliV stays 0 (from the {}
     // init) with bit1 clear, and the base renders the honest absent state.
     bool batteryValid = false;
-    float batteryV = PowerMgr().getBatteryVoltage();
-    if (batteryV >= 1.8f && batteryV <= 8.0f && analogRead(BATTERY_SENSE_PIN) != 0) {
-        body.batteryMilliV = static_cast<uint16_t>(lroundf(batteryV * 1000.0f));
+    #ifdef BATTERY_SENSE_PIN
+        float batteryV = PowerMgr().getBatteryVoltage();
+        if (batteryV >= 1.8f && batteryV <= 8.0f && analogRead(BATTERY_SENSE_PIN) != 0) {
+            body.batteryMilliV = static_cast<uint16_t>(lroundf(batteryV * 1000.0f));
+            batteryValid = true;
+        }
+    #else
         batteryValid = true;
-    }
+    #endif
+    
     body.flags = static_cast<uint8_t>((gpsValid ? 0x01 : 0x00) | (batteryValid ? 0x02 : 0x00));
 
     TelemetryBeaconPacket pkt = createTelemetryBeaconPacket(body); // factory owns the 0x14 type byte
@@ -919,7 +924,7 @@ void ImageTxManager::pushPending() {
     // for this pass's single transmit. The armed entry's lastActivityMs
     // advances only via its own transmits and re-arms, so a neighbor
     // capture's push naturally ages it; preempting at 5000 ms — strictly
-    // below the base's 8000 ms IMG_WINDOW_STALL_MS, whose clock resets on
+    // below the base's 15000 ms IMG_WINDOW_STALL_MS, whose clock resets on
     // every accepted chunk — means the base's stall can never trip while the
     // balloon holds an armed window. PRI-01 non-regression: this preemption
     // lives INSIDE the chunk branch — the beacon early-return in process()
@@ -1551,6 +1556,21 @@ bool ImageTxManager::handleImageAck(const ImageAckBody& ack) {
                               (unsigned)ack.bitmap, newlySet);
             }
         } else {
+            // 09-01 bench fix (base40.log): the receipt is no longer log-only.
+            // Merge the window bitmap into fullAcked so serviceWindowChunk's
+            // skip can jump confirmed chunks on a re-armed span — a 1-2 chunk
+            // tail heal instead of a 16-chunk re-blast. The log line stays
+            // byte-identical for bench-log tooling.
+            for (uint8_t b = 0; b < 32; b++) {
+                if ((ack.bitmap & (1UL << b)) == 0) {
+                    continue;
+                }
+                const uint16_t chunk = ack.windowBase + b;
+                if (chunk >= entry->fullTotalChunks || chunk >= 1024) {
+                    continue;   // bounds: wire cap and bitmap width
+                }
+                entry->fullAcked[chunk >> 6] |= (1ULL << (chunk & 63));
+            }
             Serial.printf("ImageTx: image %u FULL window receipt (win=%u bm=%08X st=%u)\n",
                           static_cast<unsigned>(entry->imageId),
                           static_cast<unsigned>(ack.windowBase),
@@ -1595,7 +1615,13 @@ bool ImageTxManager::handleImageAck(const ImageAckBody& ack) {
         Serial.printf("ImageTx: image %u thumbnail CRC rejected by base - receipt state cleared (heal re-pushes)\n",
                       static_cast<unsigned>(entry->imageId));
     } else {
-        Serial.printf("ImageTx: image %u FULL CRC rejected by base - entry kept (base re-pulls)\n",
+        // 09-01: the verdict invalidates every receipt bit too — fullAcked
+        // says "the base holds these bytes", and the base just swore it does
+        // NOT. Leaving the map set would make the re-pull's skip loop jump
+        // exactly the chunks the base rejected, and the pull could never
+        // heal. Same discipline as the thumbnail branch above.
+        memset(entry->fullAcked, 0, sizeof(entry->fullAcked));
+        Serial.printf("ImageTx: image %u FULL CRC rejected by base - entry kept, receipt map cleared (base re-pulls)\n",
                       static_cast<unsigned>(entry->imageId));
     }
     return true;
@@ -1715,10 +1741,44 @@ bool ImageTxManager::serviceWindowChunk(ImageTxEntry& entry) {
     // answering a re-request instantly collides with the link still turning
     // around. A re-armed span re-settles (windowArmedAtMs refreshes at every
     // arming); mid-window continuation is unaffected, and the settle (500 ms)
-    // sits far below both the preempt (5000 ms) and stall (8000 ms) clocks.
+    // sits far below both the preempt (5000 ms) and stall (15000 ms) clocks.
     if (entry.windowNextIndex == entry.windowStart &&
         (millis() - entry.windowArmedAtMs) < IMG_WINDOW_RX_SETTLE_MS) {
         return true;   // no transmit this pass — the settle window holds
+    }
+
+    // Base-confirmed skip (09-01 bench fix, base40.log) — the FULL-kind
+    // mirror of pushThumbChunk's thumbAcked skip: a stall/tail re-request
+    // re-arms the span and (re-)resets the cursor to windowStart, so without
+    // this loop every heal re-blasted the whole window (~10 s of airtime and
+    // fresh half-duplex collision windows) to recover the 1-2 chunks the
+    // base was actually missing. Chunks a WINDOW_COMPLETE receipt confirmed
+    // are jumped in one pass; if that drains the span, the window completes
+    // without spending a single packet — the SERVED marker is honest (the
+    // base's own receipt, not a TX success, is the evidence). THUMBNAIL
+    // windows consult thumbAcked through the push path only — never this map.
+    if (entry.windowKind == static_cast<uint8_t>(ImageKind::FULL_IMAGE)) {
+        uint8_t skipped = 0;
+        while (entry.windowNextIndex < entry.windowStart + entry.windowCount &&
+               entry.windowNextIndex < entry.fullTotalChunks &&
+               entry.windowNextIndex < 1024 &&
+               ((entry.fullAcked[entry.windowNextIndex >> 6] >>
+                 (entry.windowNextIndex & 63)) & 1ULL)) {
+            entry.windowNextIndex++;
+            skipped++;
+        }
+        if (skipped > 0) {
+            Serial.printf("ImageTx: window re-request for image %u - skipping %u base-confirmed chunk(s)\n",
+                          entry.imageId, skipped);
+        }
+        if (entry.windowNextIndex >= entry.windowStart + entry.windowCount) {
+            entry.windowArmed = false;
+            if (static_cast<uint32_t>(entry.windowStart) + entry.windowCount >=
+                entry.fullTotalChunks) {
+                entry.state = ImageTxEntryState::SERVED;
+            }
+            return true;   // span already held base-side — no transmit this pass
+        }
     }
 
     // KIND-SELECTED source (D-22 / CR-01): the armed window names which bytes
@@ -2063,6 +2123,7 @@ void ImageTxManager::freeEntry(ImageTxEntry& entry) {
     entry.thumbTotalChunks = 0;
     entry.nextThumbChunk = 0;
     entry.thumbAcked = 0;             // image-transfer rework: a recycled slot carries no base-confirmed bits
+    memset(entry.fullAcked, 0, sizeof(entry.fullAcked));   // 09-01: same discipline for the FULL receipt map
     entry.manifestAttempts = 0;   // CR-02/WR-01: a recycled slot starts with a clean manifest budget
     entry.thumbChunkFailStreak = 0;   // WR-08: a recycled slot starts with clean fail streaks
     entry.windowChunkFailStreak = 0;
