@@ -245,6 +245,48 @@ static RTC_NOINIT_ATTR uint32_t s_rtcTickMagic;
 static RTC_NOINIT_ATTR uint32_t s_rtcTickStamp[2];
 static RTC_NOINIT_ATTR uint32_t s_rtcTickCcount[2];
 
+// SESSION-35 ADDITION (G-01-10 round #25): the SCHEDULER-STATE PROBE
+// [SCHEDSNAP] — §37.10 Q2's pre-written route for the branch the splitter's
+// first bench took (§38.5: IDLE1 == IDLE0 within 1 ms in ALL FIVE balloon32
+// deaths — stage 1 is SCHEDULER-GLOBAL). What is still unknown is WHICH
+// global wedge: a scheduler left SUSPENDED (a vTaskSuspendAll whose
+// xTaskResumeAll never ran) or a RUNNING scheduler whose context switches
+// never happen (ready-queue/yield wedge). Two halves, one RTC trail:
+//
+//   1. TASK-SIDE MIRROR (loopTask's 1 Hz block, below): the three values
+//      the scheduler itself publishes — scheduler state, task count, tick
+//      count — refreshed into these volatile RAM words every second. Dies
+//      with loopTask at the freeze BY DESIGN: it is the last task-side
+//      observation, at most ~1 s stale.
+//   2. HOOK-SIDE RTC SNAPSHOT (inside tickStampHook, below): the tick ISR
+//      is the one context §38.5 proves SURVIVES the freeze (+2 ms .. +9.1
+//      min of live stamping past it, both card states, both builds). Every
+//      1024th dispatch (either core, shared benign-race stride counter ≈ 2
+//      snapshots/s) the hook copies the RAM mirror plus a FRESH hook-side
+//      esp_timer t and the dispatch count into these RTC_NOINIT words —
+//      so the scheduler's belief AT THE FREEZE rides out a silent tail and
+//      a silent reset on the tick layer's back.
+//
+// IRAM discipline unchanged (the balloon29 lesson): the hook's snapshot is
+// word stores and volatile loads only — NO flash-resident call added to
+// tick context; the flash-resident scheduler APIs run ONLY in the task-side
+// 1 Hz refresh. Readout at boot (setup(), below): the [SCHEDSNAP] line,
+// magic-gated and re-armed after print, same discipline as
+// [STAMP]/[TICKSTAMP]. Pre-written readings: §38.10 P1-P5. G-01-10;
+// REMOVAL CONDITION: strips WITH the [MEM]/B1/B2 instrumentation after
+// G-01-10 closes on bench evidence.
+#define RTC_SCHED_MAGIC 0x5C4EDBA1u
+static RTC_NOINIT_ATTR uint32_t s_rtcSchedMagic;
+static RTC_NOINIT_ATTR uint32_t s_rtcSchedState;      // xTaskGetSchedulerState: 0/1/2
+static RTC_NOINIT_ATTR uint32_t s_rtcSchedTasks;      // uxTaskGetNumberOfTasks
+static RTC_NOINIT_ATTR uint32_t s_rtcSchedTick;       // xTaskGetTickCount at refresh
+static RTC_NOINIT_ATTR uint32_t s_rtcSchedDispatches; // tick-hook dispatch count at snapshot (both cores)
+static RTC_NOINIT_ATTR uint32_t s_rtcSchedTimerMs;    // hook-side esp_timer ms at snapshot
+static volatile uint32_t s_schedState = 0;            // task-side mirror (1 Hz refresh)
+static volatile uint32_t s_schedTasks = 0;
+static volatile uint32_t s_schedTick = 0;
+static volatile uint32_t s_schedDispatchCount = 0;    // hook-side stride counter (RAM; resets per boot)
+
 static void IRAM_ATTR tickStampHook(void) {
     const uint32_t core = xPortGetCoreID();
     // SYSTIMER-BASED stamp — deliberately the wedge PROBE: session-18's
@@ -275,6 +317,24 @@ static void IRAM_ATTR tickStampHook(void) {
     // the tick stamp and ccount stamp of the SAME core, never absolute
     // ages across clocks.
     s_rtcTickCcount[core] = (uint32_t)(esp_cpu_get_cycle_count() / 240000u);
+    // SESSION-35: the [SCHEDSNAP] hook-side half (see the declaration block
+    // above). Every 1024th dispatch on EITHER core (shared counter — a
+    // benign race whose worst case is one snapshot ±1 stride), copy the
+    // task-side 1 Hz mirror into the RTC words with a fresh hook-side t and
+    // the dispatch count. After the freeze the mirror is frozen but THIS
+    // code keeps running — the words then hold the scheduler's belief at
+    // the freeze, plus proof the snapshot channel itself survived the tail
+    // (the pre-written P4 reading checks `at t=` against T_f for that).
+    // Word stores + the volatile mirror loads ONLY: nothing flash-resident
+    // is called from tick context.
+    const uint32_t dispatches = ++s_schedDispatchCount;
+    if ((dispatches & 0x3FFu) == 0) {
+        s_rtcSchedState = s_schedState;
+        s_rtcSchedTasks = s_schedTasks;
+        s_rtcSchedTick = s_schedTick;
+        s_rtcSchedDispatches = dispatches;
+        s_rtcSchedTimerMs = s_rtcTickStamp[core];
+    }
 }
 
 // G-01-10 round #14 instrument [STACK] (01-32) — CRASH-FIX REVISION
@@ -485,6 +545,30 @@ void setup() {
     Serial0.printf("[TICKSTAMP] hooks registered cpu0=%d cpu1=%d (G-01-10)\n",
                    tickHookErr0 == ESP_OK ? 1 : 0, tickHookErr1 == ESP_OK ? 1 : 0);
 
+    // [SCHEDSNAP] (SESSION-35, see the declaration block): the scheduler's
+    // own belief at the previous boot's freeze, delivered through the tick
+    // hook — the one context that survives it. Read out BEFORE anything can
+    // disturb the words, then re-arm (magic set; values zeroed so a crash
+    // before the first 1 Hz refresh reads as 0/0/0, never as stale data —
+    // the P3 reading distinguishes that case). Pre-written readings §38.10
+    // P1-P5. G-01-10; REMOVAL CONDITION unchanged.
+    if (s_rtcSchedMagic == RTC_SCHED_MAGIC) {
+        Serial0.printf("[SCHEDSNAP] prev boot: state=%lu (0=NOT_STARTED 1=RUNNING 2=SUSPENDED), tasks=%lu, tick=%lu, hook-dispatches=%lu, at t=%lu ms (G-01-10)\n",
+                       static_cast<unsigned long>(s_rtcSchedState),
+                       static_cast<unsigned long>(s_rtcSchedTasks),
+                       static_cast<unsigned long>(s_rtcSchedTick),
+                       static_cast<unsigned long>(s_rtcSchedDispatches),
+                       static_cast<unsigned long>(s_rtcSchedTimerMs));
+    } else {
+        Serial0.println("[SCHEDSNAP] no prev-boot snapshot (POWERON or RTC-domain reset) (G-01-10)");
+    }
+    s_rtcSchedMagic = RTC_SCHED_MAGIC;
+    s_rtcSchedState = 0;
+    s_rtcSchedTasks = 0;
+    s_rtcSchedTick = 0;
+    s_rtcSchedDispatches = 0;
+    s_rtcSchedTimerMs = 0;
+
     delay(SETUP_DELAY_MS);
     
     // Print welcome message immediately after serial init
@@ -669,6 +753,17 @@ void loop() {
     static uint32_t lastOledMs = 0;
     if (millis() - lastOledMs >= 1000) {
         lastOledMs = millis();
+
+        // SESSION-35: [SCHEDSNAP] task-side mirror refresh (see the
+        // declaration block). loopTask refreshes the scheduler's published
+        // state every second until the freeze; the tick hook then carries
+        // the last refresh into RTC on the only context that survives.
+        // The scheduler APIs here are flash-resident and run in TASK
+        // context only — the IRAM tick hook never calls them (balloon29
+        // discipline). G-01-10; REMOVAL CONDITION unchanged.
+        s_schedState = static_cast<uint32_t>(xTaskGetSchedulerState());
+        s_schedTasks = static_cast<uint32_t>(uxTaskGetNumberOfTasks());
+        s_schedTick = static_cast<uint32_t>(xTaskGetTickCount());
 
         // G-01-10 round #13 instrument [IDLE0] (01-30) per §9.6: sample the
         // CPU0 idle-tick counter at 1 Hz. delta==0 over a full second = IDLE0

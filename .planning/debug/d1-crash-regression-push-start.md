@@ -4620,3 +4620,408 @@ stop and record before trusting any readout.
   delivery-era work.
 
 (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 38 — SESSION-35 (balloon32 bench, 2026-08-31): the round-#24 splitter's first bench ANSWERS §37.10 Q2's stage-1 split — IDLE1 == IDLE0 within 1 ms in ALL FIVE deaths: stage 1 is SCHEDULER-GLOBAL — but the tick-vs-freeze relationship is MIXED within one arm (+15000 ×2, +2, +37, +536900): the card-out "+15000 signature" is not the arm's shape, it is the SILENT-death shape (n=4 IRAM-clean) — the long tail recurs card-out (second exposure, ccount-verified, console cross-check answers: zero task-side lines in the whole 9.1-minute tail) — all three dumps re-photograph the both-cores systimer spin (nine exposures, three builds, both card states; EPC1 residual 9/9) — the silent saved PCs shift to ROM addresses — and the scheduler-state probe [SCHEDSNAP] is wired as Q2's pre-written GLOBAL-branch route (committed beside this record)
+
+### 38.1 Provenance (performed before any decode)
+
+The operator ran the round-#24 interrogation bench as ONE balloon console
+capture at repo root — `balloon32.log` (1,574 lines, **card OUT** — the
+§37.10 routing held). **NO `base32.log` exists** — the base-side capture
+was skipped per the round-#24 "base-side optional" note; the absence is
+recorded and the delivery chain is UNVERIFIED this round (38.6).
+
+On-disk `firmware.elf` at bench time: SHA256
+`9bfbb953c90e388acd8b3d7ae1a7aae9661bec0c9c54d8dfca9da8d712a09b92` —
+exactly §37.9's recorded round-#24 build identity (verified before this
+session's decodes ran; the ELF has since been superseded by this round's
+rebuild, 38.9 — **every decode in this section ran against the round-#24
+ELF before the rebuild**). Banner census: `Build: Aug 31 2026 20:09:08`
+×12 (6 boots × 2 banner lines — the established double-print pattern);
+×0 of the 17:57:04 session-34 image. All three panic dumps carry
+`ELF file SHA256: 9bfbb953c` — the deployed build IS round #24; the
+flash took. The bench's PRE-VERIFY items all PASS: `[IDLE1] hook cpu1
+registered=1` at EVERY boot (×6: :37, :307, :583, :861, :1128, :1440);
+card-out regime correct at every boot (`SD_MMC.begin failed (1-bit
+SDMMC pins CLK=39 CMD=38 D0=40)` + `SD card store unavailable -
+captures take the volatile fallback` + the no-rescan line, :110-117/
+:380-387/:656-663/:934-941/:1201-1208/:1513-1520).
+
+**Pre-verify correction (convention):** the orchestrator census said
+"the fifth death may lack a readout if the console ended on it —
+check." CHECKED: death 5 HAS its readout (:1423-1424) — boot 6
+continued 160 lines past the reset before the operator ended it; all
+FIVE deaths read out. No readout is missing.
+
+### 38.2 Census (corrected raw-byte grep) — balloon32
+
+| grep | count (lines) |
+|---|---|
+| rst:0x1 POWERON | 1 (:12) |
+| rst:0x7 TG0WDT | 2 (:281, :1414) — both SILENT |
+| rst:0x8 TG1WDT | 0 |
+| rst:0xc RTC_SW_CPU_RST | 3 (:557, :835, :1102) — all post-dump |
+| rst:0x3 RTC_SW_SYS_RST | 0 |
+| Guru panic | 3 (:487, :764, :1033 — all `Interrupt wdt timeout on CPU1`) |
+| stack canary | 0 |
+| Cache error | 0 |
+| assert / abort | 0 |
+| raw EF BF BD | **0** |
+| ┬░ (healthy degree) | 118 |
+| ΓÇö (healthy em-dash) | 6 |
+| [STAMP] / [TICKSTAMP] readouts | 5 / 5 (every death read out) |
+| [IDLE1] registered=1 | 6 (every boot) |
+| [CAPWIN] pre-id / deferred-commit done | 5 / 4 (ids 5,6,7,8 — id 9's deferral never fired) |
+| IMMEDIATE markers / SET_RESOLUTION | 0 / 0 |
+
+Boots: 6 = 1 POWERON + 5 deaths (2 silent rst:0x7 + 3 INT-WDT dumps
+ending rst:0xc); boot 6 operator-ended at :1574 mid-normal-traffic
+(its base had just had an IMAGE_WINDOW_REQUEST for image 9 correctly
+rejected — the volatile image died with boot 5, delivery-side, out of
+scope). Captures: 5 (IDs 5-9 at :223/:459/:736/:1006/:1395 — every
+capture volatile-fallback with its `persistCapture image N skipped -
+no card mounted` line; §37.10's "≥6 captures" was not reached — the
+deaths kept pace and the operator ended boot 6 before its capture).
+Every capture-boot died; only the capture-less boot 6 survived.
+Resolution pinned all session.
+
+### 38.3 THE THREE DUMPS — one photograph, nine exposures
+
+All three INT-WDT panics decode FRAME-IDENTICAL on both cores
+(independent `xtensa-esp32s3-elf-addr2line -pfiaC` re-decode against
+the verified on-disk round-#24 ELF — zero disagreement with the
+in-log symbolation):
+
+- **Core in panic** (CPU1 ×3): PC/EPC4 in
+  `systimer_hal_get_counter_value` (systimer_hal.c:51) — the
+  three-instruction spread again (0x40381f54/0x40381f57/0x40381f5a
+  across `systimer_ll_is_counter_value_valid`, systimer_ll.h:95,
+  inlined) — **the unbounded valid-bit spin**. Backtrace: #1
+  `esp_timer_impl_get_time`; #2 **tickStampHook (main_balloon.cpp:265
+  — the line moved from 251 by the IDLE1 insertion; frame-identity
+  ACROSS the insertion is itself the cross-build decode check)**; #3-#6
+  the SysTick dispatch chain; #7-#9 the interrupted context:
+  `esp_cpu_wait_for_intr` ← `esp_vApplicationIdleHook`
+  (freertos_hooks.c:58) ← `prvIdleTask` — each core interrupted in its
+  own idle (the established stack-base pair 0x3fc98750 / 0x3fc97f20).
+- Both cores wedged in the same spin, interrupted in their own idle —
+  **the balloon30b:953 photograph exactly.** Stale EXCCAUSE 0x6
+  (IntegerDivideByZero) ×6 — the usual stale-cause class.
+- EPC1 = `uart_hal_write_txfifo` (uart_hal_iram.c:27, 0x420605f7) in
+  **all three** — **9/9** now (30b + the round-#23 five + these
+  three). Recorded UNRESOLVED; do not build on it.
+- `ELF file SHA256: 9bfbb953c` in all three.
+
+**Classification: 3/3 = the both-cores systimer-spin shape.** The
+photograph now has NINE exposures across THREE builds and BOTH card
+states. Stage 2's site is unchanged by the IDLE1 instrument — the
+instrument converted silent deaths into dumps again (3 dumps this
+session vs 2 silents) without moving the wedge.
+
+### 38.4 Saved-PC census — all decodes vs the on-disk round-#24 ELF
+
+| death | log:line | Saved PC | decode |
+|---|---|---|---|
+| 32 b2 (post-dump) | :558 | 0x4201cfcb | `panic_handler` (panic_handler.c:174) — dumped-boot residue |
+| 32 b3 (post-dump) | :836 | 0x4201cfcb | `panic_handler` |
+| 32 b4 (post-dump) | :1103 | 0x4201cfcb | `panic_handler` |
+| 32 b1 (SILENT) | :282 | 0x40000dd7 | **`??` — ROM region, not in the app ELF** |
+| 32 b5 (SILENT) | :1415 | 0x400478cf | **`??` — ROM region, not in the app ELF** |
+
+The post-dump residues are the established panic-path class (caution
+recorded: session-34's residue address 0x4201cf67 decodes as
+`system_early_init` on THIS ELF — addresses never transfer across
+ELFs, only classes do). **The silent-death saved PCs SHIFTED CLASS**:
+session-34's two silents saved PCs in IRAM tick-layer code
+(`xTaskIncrementTick` / `esp_vApplicationTickHook`); both of this
+session's silents saved PCs in the S3 masked-ROM range (0x40000dd7,
+0x400478cf — `??` against the app ELF, unresolvable here). The TG0WDT
+hardware latches a PC at expiry; a ROM-region latch at a +15.000 s
+expiry is a NEW fingerprint datum. Honest limits: ROM content cannot
+be symbolated from the app ELF, the latch may be stale rather than
+live, and n=2 — recorded, NOT over-read, no mechanism built on it.
+
+### 38.5 THE MEASUREMENT — the splitter's first readings, the mixed tick axis, and the ccount verification
+
+The five-death [STAMP]/[TICKSTAMP] table (both cores' tick stamps
+identical to the millisecond in EVERY death, as established; gaps in
+ms; T_l = loop stamp, T_i = IDLE0, T_i1 = IDLE1, T_f = tick stamps):
+
+| boot | death | readout | T_l | T_i | T_i1 | T_f c0/c1 | tick−T_i | T_i1−T_i | T_l−T_i | class |
+|---|---|---|---|---|---|---|---|---|---|---|
+| b1 | silent :281 | :290-291 | 36149 | 36591 | 36591 | 51591/51591 | **+15000** | 0 | −442 | family S |
+| b2 | dump :487 | :566-567 | 14129 | 14581 | 14582 | 14583/14583 | **+2** | +1 | −452 | probe-photograph |
+| b3 | dump :764 | :844-845 | 16469 | 16698 | 16698 | 16735/16735 | **+37** | 0 | −229 | probe-photograph |
+| b4 | dump :1033 | :1111-1112 | 13683 | 14135 | 14136 | 551035/551035 | **+536900** | +1 | −452 | LONG-TAIL #2 |
+| b5 | silent :1414 | :1423-1424 | 45761 | 46389 | 46389 | 61389/61389 | **+15000** | 0 | −628 | family S |
+
+**Ccount-phase identity check (the §37.5 disposition-2 method) on ALL
+FIVE** — predicted phase = (T_f mod 17895.7) + per-core offset band
+(core0 +159..+166, core1 +1..+48, as measured §37.5):
+
+| death | T_f mod 17895.7 | core0 predicted | core0 obs | core1 predicted | core1 obs |
+|---|---|---|---|---|---|
+| b1 | 15799.6 | 15958.6–15965.6 | 15959 | 15800.6–15847.6 | 15801 |
+| b2 | 14583.0 | 14742–14749 | 14748 | 14584–14631 | 14585 |
+| b3 | 16735.0 | 16894–16901 | 16900 | 16736–16783 | 16783 |
+| b4 | 14164.0 | 14323–14330 | 14329 | 14165–14212 | 14212 |
+| b5 | 7701.9 | 7860.9–7867.9 | 7868 (edge) | 7702.9–7749.9 | 7750 (edge) |
+
+**5/5 match (b5's edges sit +0.1/+0.1 outside the round-#23-derived
+band — band drift across builds, not a mismatch). Every T_f in this
+session is a REAL live-tick reading** — including the 9.1-minute tail.
+
+**Disposition 1 — stage 1 is SCHEDULER-GLOBAL (Q2's GLOBAL branch
+fires).** IDLE1−T_i1 = IDLE0 within 0/+1 ms across all five deaths:
+core 1's idle task froze WITH core 0's, in the same millisecond, while
+both cores' tick ISRs kept stamping. §37.10 Q2's core-0-local branch
+is DEAD. §21.3's surviving candidate narrows to the scheduler-global
+class: something stops BOTH cores' task layers while leaving both
+cores' interrupt machinery alive.
+
+**Disposition 2 — the tick axis is MIXED, and the pre-written split
+did not anticipate it.** Within ONE arm (card-out), ONE build: +15000,
++2, +37, +536900, +15000. §37.10's Q2 split treated the tick layer as
+the stable backdrop against which stage 1 would resolve; the stage-1
+answer stands cleanly on its own five readings, but the SAME bench
+showed the backdrop itself varying by five orders of magnitude. The
+card-out "+15000 signature" of session-34 (n=2) does NOT stably repeat
+as the arm's shape. Honest statement: the pre-written split got a
+clean answer to the question it asked, and the data opened a new
+question it had no branch for. Both are recorded as findings.
+
+**Disposition 3 — the DUMP-vs-SILENT split tracks stage-2 latency,
+not card state.** Collating all 13 measured deaths across sessions
+34-35 (both builds, both card states): systimer break ≤37 ms after
+the freeze (9 deaths) → the tick hook's spin is photographed by the
+INT-WDT within ~300 ms → DUMP → rst:0xc. Systimer break late (4
+deaths) → silent TG0WDT-family reset → rst:0x7. The four silents are
+EXACTLY the four +15000-exact readings (IRAM-clean n=4: 31a b1/b3 +
+32 b1/b5 — plus the round-#22 historical ×12); the one late-break
+exception is the long tail (below). One stage-1 freeze; stage-2
+latency ∈ {+2 ms .. +551871 ms} and the terminal watchdog is whichever
+acts first after the break.
+
+**Disposition 4 — the long tail's SECOND exposure, card-out, with the
+console cross-check answered.** 32 b4: tasks frozen at 14.1 s, tick
+ISRs stamped live to 551.035 s (~9.2 min), ccount-verified — the
+shape now has two exposures across two builds and both card states
+(session-34's +551871 card-in, this +536900 card-out). The §37
+orchestrator-flagged cross-check (death-4's console window, :1006 →
+:1033) ANSWERS: the boot's last app lines are the capture-8 push
+itself — `[CAPWIN] deferred id-commit id=8 written=2` → two E32
+transmit lines → `chunk(image 8 kind 0, 3/15, 223 B) sent` — then
+ZERO console lines until the Guru dump. **loopTask's lines stop AT
+the freeze (T_i = 14.135 s, the chunk-push moment); the only live
+thing in the 9.1-minute tail was the tick layer (the stamps prove
+it); no beacon, no E32 line, no task-side print of any kind
+continued.** The console corroborates the RTC words end to end:
+scheduler-global stage 1, ISR-only tail, then the systimer break and
+the INT-WDT dump.
+
+**Disposition 5 — the +15000 owner question SHARPENS.** The long-tail
+boot CONTRADICTS the simplest reading (a TG0 MWDT hardware stage armed
+to fire 15 s after the last feed): boot 4's tasks froze at 14.1 s and
+NO TG0WDT fired for 9.1 minutes — hardware stages do not skip boots.
+Yet boots b1/b5 reset at EXACTLY T_i+15000 (rst:0x7, silent, no dump —
+the TG0WDT landed before the INT-WDT could photograph the systimer
+break that T_f dates at the same instant). Whatever produces 15.000 s
+(×4 IRAM-clean + ×12 historical) is NOT an unconditional countdown
+from the freeze. Eliminated this round by source reading: the app's
+Debug-layer watchdog (inert — `watchdogEnabled=false` at init,
+`enableWatchdog` never called, `feedWatchdog` writes a timestamp only,
+no hardware) and the base-side 15000 ms ACK window
+(command_sender.cpp:44 — wrong side of the wire). The owner is
+UNNAMED; audit item logged at 38.8.
+
+### 38.6 Write family, delivery chain, base32 absence
+
+- **Writes: 4/4 START→done** (`[CAPWIN] deferred id-commit START` +
+  `id=N written=2` for ids 5,6,7,8), **landing PROVEN for id=8** (boot
+  5 restored next=9 from NVS). Id 9's deferral never fired — boot 5
+  froze before it (the pre-commit window is also a non-death window —
+  the freeze does not need the write). Zero Cache-errors, zero deaths
+  inside any write window. **R5 clean — the write family STAYS closed,
+  4th consecutive round.**
+- **The CAPWIN adjacency, recorded as correlation with its confound
+  named:** all three dump-deaths froze 2-4 console lines AFTER a
+  cleanly-completed deferred commit (b2: 2 lines; b3: 4; b4: 3);
+  death 1 froze ~5 s after its commit; death 5 froze before its
+  commit. The freeze is never INSIDE the flash op (every observed
+  commit completed; zero Cache-errors) — but 3/3 dumps cluster just
+  after commit-completion. Confound: captures are command-driven
+  (base CAPTURE_NOW) and the commit lands ~2 s after each capture, so
+  commit-adjacency and capture-adjacency are nearly the same
+  timestamp. Recorded for the next bench's snapshot to sit against;
+  NOT taken as a trigger.
+- **base32.log: ABSENT** (recorded, per the round-#24 "base-side
+  optional" note). The delivery chain is UNVERIFIED this round — the
+  balloon side pushed manifests, chunks, and beacons normally up to
+  each freeze; what the base received cannot be checked. The
+  delivery-era debt (the 117-class retry exhaustion, §37.6) is
+  untouched by this absence.
+
+### 38.7 Verdicts — taking §37.10's Q1-Q5 honestly
+
+1. **Q1 (deaths stop card-out): NO.** 5 deaths in 6 card-out boots —
+   R2's verdict stands at larger n (card-out deaths now 8 across two
+   builds); card-correlation stays dead; the SD-line class stays
+   demoted (§37.7).
+2. **Q2 (the splitter): ANSWERED — GLOBAL branch.** IDLE1 == IDLE0
+   within 1 ms in all five deaths. The pre-written two-way split
+   received the clean answer it was built for, and the record says
+   plainly: the split's premise — the tick layer as stable backdrop —
+   is itself now part of the finding (38.5, disposition 2). The
+   stage-1 verdict rests on the five IDLE1 readings alone and is not
+   weakened by the tick axis. Route taken: Q2's pre-written
+   GLOBAL-branch next step — **the scheduler-state probe — wired this
+   round (38.9).**
+3. **Q3 (classify by signature first): held.** 2× family S (silent,
+   +15000 exact, IRAM-clean n=4 total), 2× probe-photograph (+2/+37 —
+   the corrected dump-tail band extends to +37), 1× long-tail (#2,
+   ccount-verified). Zero deaths outside the three named classes.
+4. **Q4 (T_l IRAM-trustworthy): held.** Loop-first ×5 (−442/−452/
+   −229/−452/−628); no >1 s loopTask-only block; no app print past
+   T_l in any death window. Band edge: −628 exceeds the previous
+   −500 deep edge (b5) — a band-edge datum, not a new shape.
+5. **Q5 (Cache-error): zero anywhere.** Both stamp readers IRAM + the
+   IRAM loop stamp held; no flash-resident execution photographed;
+   the instrument family is clean of the balloon29 class.
+
+### 38.8 The candidate space after the splitter (routing evidence, not levers)
+
+- **Core-0-local stage 1: ELIMINATED** (38.5, disposition 1).
+- **The scheduler-global wedge** is THE surviving stage-1 class; its
+  own next split — scheduler SUSPENDED vs RUNNING-but-never-switching
+  — is exactly what [SCHEDSNAP] reads (38.9). No lever ships ahead of
+  that reading (the honesty guard holds: no mechanism is named yet).
+- **The +15000 owner:** the audit item is logged — esp_task_wdt's
+  MWDT stage programming on the S3, and every other TG0-MWDT consumer
+  in the built image, against the measured facts (reset at exactly
+  T_i+15000 in 4 boots; NO reset for 9.1 min post-freeze in a fifth;
+  no TWDT print ever; §37.11's verified 5 s/10 s ladder fits neither).
+  Docs/source audit on the operator-call pattern of §37.8; not a code
+  lever this round.
+- **The long-tail T_f killer** (the systimer handshake break, +2 ms
+  to +9.1 min after the freeze): still unnamed; [SCHEDSNAP]'s P4
+  reading (38.10) will time-stamp the snapshot channel against it.
+- **The ROM saved-PC shift** (38.4): fingerprint datum; n=2;
+  unresolvable against the app ELF; no mechanism built.
+
+### 38.9 The round (committed beside this record) — G-01-10 round #25 instrument: [SCHEDSNAP], the scheduler-state probe
+
+One instrument change, instruments-only under the honesty guard (no
+mechanism is named; the probe IS §37.10 Q2's pre-written
+GLOBAL-branch route):
+
+**[SCHEDSNAP] — what the scheduler itself believes at the freeze.**
+Two halves, one RTC trail:
+
+1. **Task-side mirror (1 Hz, loopTask's existing 1 Hz block):**
+   `xTaskGetSchedulerState()` + `uxTaskGetNumberOfTasks()` +
+   `xTaskGetTickCount()` written to volatile RAM words every second.
+   Dies with loopTask at T_i — by design: it is the last task-side
+   observation, ≤1 s stale at the freeze.
+2. **Hook-side RTC snapshot (the wedge-surviving half, inside the
+   existing IRAM tickStampHook):** every 1024th dispatch on either
+   core (a shared benign-race stride counter ≈ 2 snapshots/s), the
+   hook copies the RAM mirror + a fresh hook-side `t` + the dispatch
+   count into new RTC_NOINIT words. IRAM discipline unchanged: word
+   stores and the hook's existing IRAM reads only — NO flash-resident
+   call added to tick context (the balloon29 lesson stands). After
+   the freeze the mirror is frozen but the hook keeps snapshotting
+   it — **the words carry the scheduler's belief AT the freeze out
+   through a silent tail and a silent reset**, delivered by the one
+   context (the tick ISR) that §38.5 proves survives.
+3. **Readout at boot:** a `[SCHEDSNAP] prev boot: state=… tasks=…
+   tick=… hook-dispatches=… at t=… ms` line, magic-gated, re-armed
+   after print (the [STAMP]/[TICKSTAMP] arming discipline).
+
+At the next death it splits the scheduler-global wedge's two members:
+**state=2 (SUSPENDED)** names a vTaskSuspendAll-without-resume wedge;
+**state=1 (RUNNING)** names the switch/yield layer (the scheduler
+believes it runs while no task context is ever resumed). Classification:
+instruments-only (G-01-10 family; same removal condition — strips
+WITH the [MEM]/B1/B2 instrumentation after G-01-10 closes on bench
+evidence). New ELF SHA256
+`b58099238fba66b76ed856d864247c5735d0272a1fecfa9b90131a48fe55e26f`
+(build SUCCESS, 139.9 s; all seven instrument symbols verified present
+by nm — the six RTC_NOINIT words at 0x50000200-0x50000214 in RTC slow
+memory, the RAM mirror at 0x3fc9d7b0; NOT yet deployed — the next
+bench flashes it).
+
+### 38.10 The re-armed bench — the scheduler-state interrogation, card-out again
+
+Routing decision: **one session, card REMOVED, round-#25 build, ≥6
+captures, resolution pinned** — unchanged from §37.10's rationale:
+card-out is where all three death shapes now live (the mixed axis was
+measured there), and card-in remains the flight config for any later
+confirmation run.
+
+Pre-verify: banner must be the round-#25 build (b5809923… — the
+§36/§37-round SHAs 8bcb5470 and 9bfbb953 are the two PRIOR images);
+`[IDLE1] hook cpu1 registered=1` at EVERY boot; **a `[SCHEDSNAP]`
+boot line present at EVERY boot** (a missing line is an instrument
+failure — stop and record before trusting any readout); card-out
+regime correct at every boot.
+
+- **P1 — a death's snapshot reads state=2 (SUSPENDED):** a
+  vTaskSuspendAll whose xTaskResumeAll never ran — the
+  scheduler-suspension wedge is NAMED (§21.3 member 1). Route: code
+  audit of suspend/resume pairing in the image + the mechanism-class
+  fix becomes a NAMED lever (the guard's condition is met). Also
+  cross-tab the stage-2 latency: if SUSPENDED appears only in some
+  latency classes, the mechanism stratifies.
+- **P2 — a death's snapshot reads state=1 (RUNNING):** the scheduler
+  believes it is running while every task context stopped being
+  resumed — the switch/yield layer is the wedge (§21.3 member 2).
+  Honest limit pre-written: RUNNING is the scheduler's BELIEF, not
+  proof switches happened — the wedge candidate IS that they don't.
+  Route: the next discriminator WITHIN P2 is decided when P2 fires
+  (candidates: kernel ready-queue/yield machinery vs port-level
+  context-restore break); no speculative lever now.
+- **P3 — a snapshot reads state=0/tasks=0/tick=0 with valid magic:**
+  the freeze struck before the first 1 Hz refresh (T_i < ~1 s — no
+  death has ever frozen that early; a NEW shape — decode before
+  routing), or the mirror never refreshed (instrument failure —
+  record and re-run).
+- **P4 — a long tail again:** the snapshot's `at t=` should read ≈
+  T_f (within ~1 s — the hook kept snapshotting through the tail). If
+  `at t=` reads ≈ T_i while T_f >> T_i, the snapshot channel died
+  early — instrument-failure class, record. Either way the snapshot's
+  STATE values describe the wedged steady state (frozen mirror), and
+  `hook-dispatches` counts SysTick dispatches — a third independent
+  liveness count for the tail.
+- **P5 — any Cache-error:** as §37.10 (the known-flash-resident list
+  is empty; decode before acting; major finding).
+- **Every death, classify by signature FIRST** (the §37.10 Q3 rule
+  stands): +15000±1 silent = family S; +2..+37-with-dump = the
+  probe-photograph class (band extended); anything else = a NEW
+  shape — decode before routing. Record stage-2 latency (T_f−T_i)
+  beside every snapshot: the latency × state cross-tab is round
+  #26's analysis.
+
+### 38.11 Honest remainder
+
+- The stage-1 verdict (scheduler-global) rests on n=5, one build, one
+  arm, one session — the splitter's first bench. Confident, young.
+- The stage-2 latency distribution (+2 ms .. +9.1 min, 13 deaths
+  measured across sessions 34-35) has NO mechanism; the +15000.000
+  exactness (×4 IRAM-clean + ×12 historical) remains unexplained; the
+  long-tail contradiction (no TG0WDT for 9.1 min post-freeze) breaks
+  every simple watchdog-ladder story, and §37.11's TWDT-ladder tension
+  (no print ever, resets never at +5/+10) DEEPENS.
+- [SCHEDSNAP] reads the scheduler's belief, not the truth: SUSPENDED
+  would name a mechanism; RUNNING narrows without convicting. Either
+  reading is progress; neither alone closes G-01-10.
+- The silent saved-PC ROM shift: n=2, unresolvable against the app
+  ELF; recorded, not built on.
+- EPC1 = `uart_hal_write_txfifo`: **9/9**; unresolved; do not build
+  on it.
+- The CAPWIN commit-adjacency (3/3 dumps 2-4 lines after a completed
+  commit): unresolved correlation; capture-adjacency confound named;
+  not taken as a trigger.
+- Delivery chain unverified (no base32.log); the delivery-era debt is
+  untouched.
+
+(01-UAT.md G-01-10, WINDOWS 15.)
