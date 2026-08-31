@@ -1,14 +1,16 @@
 # Name,   Type,  SubType, Offset,   Size,    Flags
-# G-01-10 (session-28, balloon25 verdict): nvs RELOCATED out of the 0x9000
-# region (24 bench sessions of per-capture churn put the 20 KB partition into
-# per-write garbage-collection, whose 4 KB sector erase loses the 300 ms
-# INT-WDT race - see debug doc section 31) and GROWN 4x into fresh flash at
-# 0xF00000. Consequence, accepted and recorded: reflashing with this table
-# wipes NVS content - the image-ID sequence restarts at 1 (the base re-issues
-# filenames for re-captured IDs; bench-only exposure, G-01-6 re-read) and the
-# base's stored WiFi credentials reset (re-enter after flashing).
+# G-01-10 (session-30, debug doc section 33): nvs REVERTED to 0x9000 - test E.
+# The session-28 relocation to 0xF00000 did not stop the write deaths
+# (balloon25/26 card-out, balloon27 card-in+claimed), and the verified
+# survivor matrix now reads: (old, card-in)=survived the whole SD era;
+# (old, card-out), (new, card-out), (new, card-in) all die. Test E
+# (old + card-in + current code) isolates the LOCATION factor: survive ->
+# the high-flash region is the trigger (permanent config = this table);
+# die -> location exonerated, the 08-30+ code deltas are bisected next.
+# Balloon25-27's ID restarts (1..8) are already on the base's card - a
+# reissue collision with those bench rows is accepted for the bench.
+nvs,      data,  nvs,     0x9000,   0x5000,
 otadata,  data,  ota,     0xe000,   0x2000,
 app0,     app,   ota_0,   0x10000,  0x3c0000,
 fr,       data,        ,  0x3d0000, 0x20000,
 coredump, data,  coredump,0x3f0000, 0x10000,
-nvs,      data,  nvs,     0xf00000, 0x10000,

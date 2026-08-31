@@ -3280,3 +3280,78 @@ Pre-written readings:
   SD-era TG0WDT family may simply have resumed with the card back.
 
 (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 33 — SESSION-30 (balloon27 bench, 2026-08-31): §32.3's second branch taken — card-in+claimed STILL dies at the writes — the survivor matrix is verified and broken open — test E isolates the NVS location factor (the partition is reverted)
+
+### 33.1 The verdict
+
+`balloon27.log` (~790 lines, 4 boots: 1 POWERON + 3 `rst:0x8 TG1WDT_SYS_RST`) /
+`base27.log`, 2026-08-31 13:26, round-#19 image (`85c8c68`: SDMMC arm retired),
+card IN, `SdStore: card mounted, /images ready`, rescan ran the full SD-era
+path (latch withholds, 0 admitted). Three captures (images 6/7/8), each
+persisted to the SD card (`SdStore: persisted image N … commit META` — the
+SDMMC write path working), each followed ~1.5 s later by
+
+> `[CAPWIN] deferred id-commit START` → ESP-ROM banner → `rst:0x8`
+
+(three-for-three, done-line never printed; Saved PCs `0x403743c0`
+`_DoubleExceptionVector` ×2 + `0x403782ac` the restart-path HAL — the era's
+fault machinery unchanged). **§32.3's second branch: the card-in
+configuration does NOT protect the writes.** The one new positive fact:
+boot 1 lived 87.7 s before its capture-and-death ([STAMP] t=87713 ms) —
+the SD persist, window arming, and chunk service all ran clean right up to
+the write.
+
+### 33.2 The verified survivor matrix (the SD-era premise CHECKED, not assumed)
+
+The §32.2 survivor premise was re-verified against the era's logs BEFORE
+any conclusion: balloon4-16 boots opened the NVS successfully (zero
+`NVS unavailable` lines; `restored from NVS` ×2..12 per log) and the ID
+sequence ADVANCED across their reboots (balloon6: next-ID 47 → 48 across
+12 boots; balloon16: 67 → 68) — **capture-time writes on the OLD 0x9000
+partition, card in, SDMMC claimed, landed and persisted, in boots living
+minutes.** The write-death family therefore faces this matrix:
+
+| NVS location | Card / SDMMC | Era | Writes |
+|---|---|---|---|
+| old 0x9000 | in / claimed | balloon4-16 | **SURVIVE** |
+| old 0x9000 | out (either claim state) | balloon18-23 | die |
+| new 0xF00000 | out / unclaimed | balloon25-26 | die |
+| new 0xF00000 | in / claimed | balloon27 | die |
+
+One consistent reading: **two independent triggers, either sufficient** —
+(1) writes to the NEW high-flash region die (cells C, D), and (2) writes
+with the CARD OUT die (cells B, C). The untested cell that isolates
+factor 1 is **E: old partition + card in + current code** — balloon16's
+cell has never been re-run since the code moved. The clean split inside
+balloon27 sharpens the dying-op class: SDMMC card writes succeeded
+seconds before each SPI1-flash write died — the flash WRITE op (its
+program-completion tail per §32.1) is the death site, not "flash
+activity" in general.
+
+### 33.3 The round (committed beside this record)
+
+`partitions.csv`: nvs REVERTED to 0x9000/0x5000 (the relocation comment
+replaced by the test-E record; the 25-27 ID restarts 1..8 are already on
+the base's card — reissue collision accepted for the bench). Everything
+else byte-identical: card in, claimed, deferred commit, [CAPWIN]
+START/done pair.
+
+Pre-written readings (the next bench decides):
+
+- **E SURVIVES** (multi-capture session, START→done pairs landing, zero
+  deaths) → the high-flash region is NAMED as trigger 1: this board's
+  flash misbehaves on writes to the top 64 KB (protect-region / timing /
+  die-topology candidates — a flash-chip diagnosis for the record, not a
+  blocker). **The working configuration is then SHIPPED AS IS**: this
+  table, card in (flight carries the archive anyway), deferred commit.
+  Factor 2 (card-out) becomes a recorded flight constraint, fixable by
+  the §23.3 rewire whenever the archive-off regime is wanted. G-01-10's
+  write family CLOSES.
+- **E DIES** → the location factor is exonerated; the differentiator
+  collapses onto the 08-30+ code deltas (the four commits since balloon16:
+  gate fix, QQVGA retire, deferral, instruments) — bisect them, deferral
+  timing first (capture-time write on old+in recreates cell A exactly).
+- **A death NOT at a write** → census discipline as always.
+
+(01-UAT.md G-01-10, WINDOWS 15.)
