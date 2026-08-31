@@ -91,6 +91,13 @@ bool AutoCapture::begin(CameraManager* camera) {
         Serial.println("AutoCapture: NVS unavailable - image IDs will NOT survive reboot (fail-open)");
     }
 
+    // G-01-10 (session-31, debug doc section 34): A/B arm marker. The armed
+    // build relocates the id-commit to capture time (see allocateImageId);
+    // the marker makes the armed state unmistakable in the bench log.
+#if defined(G01_ID_COMMIT_IMMEDIATE)
+    Serial.println("[CAPWIN] G01_ID_COMMIT_IMMEDIATE armed - id-commit runs at capture time this session (A/B, G-01-10)");
+#endif
+
     if (DEBUG_AUTO_CAPTURE) {
         Serial.println("AutoCapture: Initialized");
     }
@@ -362,10 +369,32 @@ uint16_t AutoCapture::allocateImageId() {
     // at most the last ID's persistence — the fail-open trade this NVS layer
     // has always accepted. A failed write still degrades to RAM-only for the
     // boot (logged at the deferred write, 01-11 contract preserved).
+#if defined(G01_ID_COMMIT_IMMEDIATE)
+    // [A/B arm — G-01-10 session-31, debug doc section 34] The deferral-
+    // timing bisect: balloon28 broke determinism (1 of 11 era writes
+    // completed; 10 died at START) and left the post-balloon16 code deltas
+    // as the only factor present in every death cell. This arm restores the
+    // pre-3211fb5 placement — the putUShort+commit INSIDE the capture
+    // window, bracketed by its own START/done pair — so a session on the old
+    // partition with the card in recreates survivor cell A exactly
+    // (balloon4-16). Default OFF (flag commented in platformio.ini): the
+    // deferred path below runs byte-for-byte as round-#20 shipped it.
+    // Removal: with the G-01-10 instrument family once the bisect verdict
+    // lands.
+    if (imageIdPrefsOpen) {
+        Serial.println("[CAPWIN] id-commit IMMEDIATE START (A/B, G-01-10)");
+        Serial.flush();
+        size_t writtenNow = imageIdPrefs.putUShort(kImageIdKey, lastImageId);
+        Serial.printf("[CAPWIN] id-commit IMMEDIATE id=%u written=%u (A/B, G-01-10)\n",
+                      static_cast<unsigned>(lastImageId), static_cast<unsigned>(writtenNow));
+        Serial.flush();
+    }
+#else
     if (imageIdPrefsOpen) {
         idPersistPending = true;
         idPersistReqMs = millis();
     }
+#endif
 
     Serial.println("[CAPWIN] post-id (G-01-10)");
     Serial.flush();
