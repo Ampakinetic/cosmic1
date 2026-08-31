@@ -1,5 +1,7 @@
 #include "camera_manager.h"
 #include <esp_heap_caps.h>   // heap_caps_malloc — PSRAM-first image buffer (WR-07)
+#include <JPEGDEC.h>         // 09-01: software thumbnail downscale (decode side)
+#include <JPEGENC.h>         // 09-01: software thumbnail downscale (encode side)
 
 // CR-03 (01-13) thumbnail payload plausibility bound. Bench distribution:
 // correct QQVGA quality-20 thumbnails were 1341-1703 B; full-sized impostors
@@ -136,13 +138,25 @@ bool CameraManager::initCamera() {
     // operator-settable values apply the CACHED settings so a re-init never
     // silently resets them (boot is bit-identical — the constructor defaults
     // these to 0); the static optimizations below stay hardcoded.
+    //
+    // 09-01 natural-auto pass (operator: "default to the most natural
+    // automatic settings possible"): every auto loop is explicitly ENABLED
+    // after each (re-)init — auto exposure, auto gain, auto white balance
+    // (wb_mode 0) — and the manual-gain poke is gone (set_agc_gain(0) wrote
+    // the manual gain register to its floor; redundant while AGC is auto,
+    // and wrong the moment it isn't). The gain ceiling moves 2X -> 16X: 2X
+    // handicapped indoor auto exposure into murk — "auto" should be allowed
+    // to actually adapt. Everything color-static stays neutral: saturation
+    // 0 (cached), no special effect, lens correction + gamma + white-pixel
+    // correction on.
     s->set_saturation(s, currentSaturation);  // cached operator saturation
     s->set_special_effect(s, 0);  // No special effects
-    s->set_wb_mode(s, currentWBMode);  // cached operator white-balance mode
+    s->set_wb_mode(s, currentWBMode);  // cached operator white-balance mode (0 = auto WB)
     s->set_ae_level(s, currentExposure);  // cached operator exposure level
-    s->set_aec2(s, 1);  // Auto exposure control
-    s->set_agc_gain(s, 0);  // Auto gain control
-    s->set_gainceiling(s, GAINCEILING_2X);  // Gain ceiling
+    s->set_exposure_ctrl(s, 1);  // auto exposure ON (09-01 natural-auto)
+    s->set_aec2(s, 1);  // DSP auto exposure control
+    s->set_gain_ctrl(s, 1);  // auto gain ON (09-01 — replaces the manual set_agc_gain(0) poke)
+    s->set_gainceiling(s, GAINCEILING_16X);  // gain ceiling 16X (09-01: 2X capped indoor auto gain)
     s->set_bpc(s, 0);  // Black pixel correction
     s->set_wpc(s, 1);  // White pixel correction
     s->set_raw_gma(s, 1);  // Raw gamma
@@ -173,14 +187,21 @@ void CameraManager::configureCameraForBalloon() {
     cameraConfig.pin_sccb_scl = SIOC_GPIO_NUM;
     cameraConfig.pin_pwdn = PWDN_GPIO_NUM;
     cameraConfig.pin_reset = RESET_GPIO_NUM;
-    // XCLK 10 MHz, NOT 20 (the D1 session-23 lever, balloon20 verdict):
-    // fb1 did not stop the capture-moment deaths (balloon20 = balloon18/19
-    // byte-identical), so the standing-DMA theory is refuted and the wedge
-    // sits in the capture path itself. XCLK 10 MHz halves the sensor and
-    // LCD_CAM signal-domain rate — the standard first reduction for
-    // S3 LCD_CAM capture instability. Cost: slower captures (irrelevant at
-    // the balloon's interval cadence).
-    cameraConfig.xclk_freq_hz = 10000000;
+    // XCLK 20 MHz — the OV2640's native operating point and the esp32-camera
+    // default, restored 09-01. The 10 MHz reduction was the D1 session-23
+    // lever ("the signal-domain reduction"), wired while the capture-path
+    // crash hunt was open. The G-01-10 verdict has since attributed the D1
+    // deaths to the SCHEDULER (IDLE1==IDLE0, stage 1 scheduler-global — the
+    // byte-identical deaths across all four camera configs said the camera
+    // config was never the trigger), so the lever's reason is gone. What
+    // replaced it is a color defect: the OV2640's register set and its AWB/
+    // AEC statistics windows are calibrated for ~20 MHz — at half clock the
+    // auto white balance under-runs and captures take on a yellow cast
+    // (operator report, log42 era: "pictures look yellow recently", which
+    // begins exactly at the 10 MHz builds). 20 MHz also halves per-capture
+    // exposure latency; the WHEN_EMPTY grab below still means the DMA only
+    // runs while a capture is pending.
+    cameraConfig.xclk_freq_hz = 20000000;
     cameraConfig.pixel_format = PIXFORMAT_JPEG;
     // grab_mode WHEN_EMPTY, NOT LATEST (the D1 session-24 lever — the one
     // variable every prior test left constant): CAMERA_GRAB_LATEST means
@@ -198,21 +219,26 @@ void CameraManager::configureCameraForBalloon() {
     
     // PSRAM configuration
     if (psramFound()) {
-        // Frame buffer in DRAM, NOT PSRAM (the D1 session-23 second lever,
-        // wired with the XCLK reduction): the S3's LCD_CAM DMA writes
-        // frame buffers into PSRAM through the EDMA/cache path — the
-        // highest-risk specific of the S3 capture pipeline, and the
-        // wedge lands post-fb_get (after "Image captured" returns, during
-        // the buffer handling). A DRAM fb (SVGA JPEG at the balloon's
-        // sizes, 6-23 KB, fits the internal heap comfortably at one
-        // buffer) takes the EDMA/PSRAM-cache path entirely out of the
-        // capture. If deaths stop, the S3 EDMA/PSRAM-cache interaction
-        // under LCD_CAM DMA is named; if they persist with XCLK also at
-        // 10 MHz, the driver itself is the suspect (version audit next).
-        cameraConfig.fb_location = CAMERA_FB_IN_DRAM;
+        // Frame buffer in PSRAM (09-01, balloon41 verdict) — REVERSING the
+        // D1 session-23 DRAM-fb lever. That lever existed to take the
+        // S3 EDMA/PSRAM-cache path out of the capture during the D1 wedge
+        // hunt, with its own exit clause: "if deaths stop, the EDMA/PSRAM
+        // interaction is named". The deaths stopped long ago via the OTHER
+        // levers (GRAB_WHEN_EMPTY + 10 MHz XCLK below, both kept), and the
+        // DRAM fb has since become a HARD CEILING instead of a probe:
+        // balloon41 boot #4 — XGA (wire 11) re-init died with
+        // "cam_hal: frame buffer malloc failed" because an XGA JPEG fb no
+        // longer fits the internal heap's largest block, and UXGA (the
+        // OV2640 maximum, the resolution the operator wants) never could.
+        // PSRAM holds 8 MB with <100 KB used — every framesize the sensor
+        // offers allocates trivially. fb_count stays 1 and the DMA still
+        // only runs when a capture is pending, so the conditions that made
+        // the hunt's PSRAM-fb config wobble (standing GRAB_LATEST DMA at
+        // 20 MHz) remain off.
+        cameraConfig.fb_location = CAMERA_FB_IN_PSRAM;
         cameraConfig.fb_count = 1;
         if (DEBUG_CAMERA) {
-            Serial.println("Camera: frame buffer in DRAM (session-23 wedge hunt)");
+            Serial.println("Camera: frame buffer in PSRAM (09-01 — max-resolution support)");
         }
     } else {
         cameraConfig.fb_location = CAMERA_FB_IN_DRAM;
@@ -342,6 +368,65 @@ bool CameraManager::captureImageToBuffer() {
     return true;
 }
 
+// ===========================
+// Software thumbnail downscale (09-01 bench fix)
+// ===========================
+// Over-budget full frames get a REAL thumbnail again, entirely in software:
+// JPEGDEC decodes the PSRAM-held full frame at 1/2..1/8 scale into a small
+// RGB565 staging buffer, JPEGENC re-encodes it under THUMB_MAX_BYTES. This
+// restores what the D1 session-25 lever gave up (thumbnails for every
+// resolution whose full frame exceeds the budget — UXGA q10 ≈ 14 KB) while
+// PRESERVING the invariant that lever bought: the sensor holds its
+// configured size/quality boot to boot. The old second-capture thumbnail
+// was the wedge site in every D1 death since balloon18 (a live sensor
+// switch + drain fetch + thumbnail fetch immediately after the full
+// capture) — this path does zero sensor operations.
+//
+// The decoder/encoder objects carry ~20 KB + ~4 KB of internal working RAM
+// (huffman tables, pixel/MCU buffers) — far too big for the capture path's
+// stack, so they live as file-static BSS. Single-threaded by construction:
+// the capture path runs only on loopTask.
+static JPEGDEC s_thumbDecoder;
+static JPEGENC s_thumbEncoder;
+
+// Staging descriptor threaded to the decoder's draw callback through
+// JPEGDRAW::pUser — scaled RGB565 rows land at their (x, y) with the
+// right/bottom edge blocks clipped to the staging bounds.
+struct ThumbStage {
+    uint16_t* pixels;   // sw*sh RGB565
+    int pitch;          // pixels per row (= sw)
+    int width;          // sw
+    int height;         // sh
+};
+
+static int thumbDrawCallback(JPEGDRAW* pDraw) {
+    // Defensive (balloon41): a NULL pUser means the staging descriptor never
+    // reached the decoder — abort the decode here rather than dereference
+    // (this exact NULL — stage->height, struct offset 0x0C — was the
+    // LoadProhibited panic in balloon41.log when the setUserPointer call
+    // below was missing).
+    if (pDraw == nullptr || pDraw->pUser == nullptr || pDraw->pPixels == nullptr) {
+        return 0;   // stop the decode; the caller reads decode()'s result
+    }
+    ThumbStage* stage = static_cast<ThumbStage*>(pDraw->pUser);
+    const int srcPitch = pDraw->iWidthUsed;   // edge-clipped block width
+    for (int row = 0; row < pDraw->iHeight; row++) {
+        const int dy = pDraw->y + row;
+        if (dy >= stage->height) {
+            break;
+        }
+        const int copy = (srcPitch < stage->width - pDraw->x)
+                             ? srcPitch : (stage->width - pDraw->x);
+        if (copy <= 0) {
+            continue;   // block entirely past the right edge
+        }
+        memcpy(stage->pixels + dy * stage->pitch + pDraw->x,
+               pDraw->pPixels + row * srcPitch,
+               static_cast<size_t>(copy) * sizeof(uint16_t));
+    }
+    return 1;   // keep decoding
+}
+
 bool CameraManager::createThumbnail(const ImageData& source, ThumbnailData& thumbnail) {
     // D1 session-25 lever (balloon22 verdict): the thumbnail used to be a
     // SECOND capture — a live sensor resolution switch (setFrameSize QQVGA
@@ -353,13 +438,12 @@ bool CameraManager::createThumbnail(const ImageData& source, ThumbnailData& thum
     // Four capture-pipeline configs (fb2/fb1, PSRAM/DRAM fb, 20/10 MHz
     // XCLK, SDMMC claimed or not, GRAB_LATEST/WHEN_EMPTY) produced
     // byte-identical deaths because the switch ran in ALL of them.
-    // THE SWITCH IS GONE: the thumbnail IS the full frame's bytes when
-    // they fit the IMG-02 thumbnail budget (THUMB_MAX_BYTES); over-budget
-    // frames take the honest no-thumbnail path the enqueue already
-    // handles (the base pulls the full). No sensor ops, no second fetch,
-    // no switch — the sensor holds its configured size/quality boot to
-    // boot. The old CR-04 dangling-member discipline is preserved (every
-    // early return nulls the member and clears valid).
+    // THE SWITCH STAYS GONE (09-01): small frames still take the zero-cost
+    // byte-copy path below; over-budget frames take the software downscale
+    // path (decode + re-encode, no sensor ops) instead of the honest
+    // no-thumbnail fallback they have had since session 25. The old CR-04
+    // dangling-member discipline is preserved (every early return nulls
+    // the member and clears valid).
     thumbnail.buffer = nullptr;
     thumbnail.valid = false;
 
@@ -367,33 +451,173 @@ bool CameraManager::createThumbnail(const ImageData& source, ThumbnailData& thum
         captureErrorCount++;
         return false;
     }
-    if (source.length > THUMB_MAX_BYTES) {
-        if (DEBUG_CAMERA) {
-            Serial.printf("Camera: full frame %u B exceeds thumbnail budget %u B - no thumbnail (base pulls the full)\n",
-                          static_cast<unsigned>(source.length),
-                          static_cast<unsigned>(THUMB_MAX_BYTES));
+
+    // Fast path (unchanged): a frame already inside the budget IS the
+    // thumbnail — byte copy, no decode cost, no sensor ops.
+    if (source.length <= THUMB_MAX_BYTES) {
+        thumbnail.buffer = (uint8_t*)malloc(source.length);
+        if (!thumbnail.buffer) {
+            if (DEBUG_CAMERA) {
+                Serial.printf("Camera: Failed to allocate %u bytes for thumbnail\n",
+                              static_cast<unsigned>(source.length));
+            }
+            captureErrorCount++;
+            return false;
         }
-        return false;
+
+        memcpy(thumbnail.buffer, source.buffer, source.length);
+        thumbnail.length = source.length;
+        thumbnail.width = source.width;
+        thumbnail.height = source.height;
+        thumbnail.quality = source.quality;
+        thumbnail.timestamp = millis();
+        thumbnail.valid = true;
+
+        return true;
     }
 
-    thumbnail.buffer = (uint8_t*)malloc(source.length);
-    if (!thumbnail.buffer) {
+    // ---- Software downscale path (over-budget frames only) ----
+    const uint32_t t0 = millis();
+
+    // Scale pick: land the output in the ~128-256 px band a gallery
+    // thumbnail wants (1/8 of UXGA/SXGA/XGA, 1/4 of SVGA/VGA, 1/2 below).
+    int scaleOpt;
+    uint16_t sw, sh;
+    if (source.width >= 1024) {
+        scaleOpt = JPEG_SCALE_EIGHTH;
+        sw = static_cast<uint16_t>((source.width + 7) >> 3);
+        sh = static_cast<uint16_t>((source.height + 7) >> 3);
+    } else if (source.width >= 512) {
+        scaleOpt = JPEG_SCALE_QUARTER;
+        sw = static_cast<uint16_t>((source.width + 3) >> 2);
+        sh = static_cast<uint16_t>((source.height + 3) >> 2);
+    } else {
+        scaleOpt = JPEG_SCALE_HALF;
+        sw = static_cast<uint16_t>((source.width + 1) >> 1);
+        sh = static_cast<uint16_t>((source.height + 1) >> 1);
+    }
+
+    // Staging: PSRAM first (60 KB at UXGA 1/8) with an internal-RAM fallback
+    // so non-PSRAM builds keep working (WR-07 idiom).
+    const size_t stageBytes = static_cast<size_t>(sw) * sh * sizeof(uint16_t);
+    uint16_t* stageBuf =
+        (uint16_t*)heap_caps_malloc(stageBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!stageBuf) {
+        stageBuf = (uint16_t*)malloc(stageBytes);
+    }
+    if (!stageBuf) {
         if (DEBUG_CAMERA) {
-            Serial.printf("Camera: Failed to allocate %u bytes for thumbnail\n",
-                          static_cast<unsigned>(source.length));
+            Serial.printf("Camera: Failed to allocate %u bytes for thumbnail staging\n",
+                          static_cast<unsigned>(stageBytes));
         }
         captureErrorCount++;
         return false;
     }
 
-    memcpy(thumbnail.buffer, source.buffer, source.length);
-    thumbnail.length = source.length;
-    thumbnail.width = source.width;
-    thumbnail.height = source.height;
-    thumbnail.quality = source.quality;
+    ThumbStage stage = { stageBuf, sw, sw, sh };
+
+    // Decode. JPEGDEC's success convention is 1 (decode/openRAM), unlike the
+    // encoder's JPEGE_SUCCESS(0) — kept explicit so neither reads backwards.
+    // setUserPointer MUST precede decode(): openRAM memsets the decoder
+    // state, and without it pDraw->pUser reaches the callback NULL (the
+    // balloon41 LoadProhibited — the guard in thumbDrawCallback is the
+    // second net under this wire).
+    bool decoded = false;
+    if (s_thumbDecoder.openRAM(source.buffer, static_cast<int>(source.length),
+                               thumbDrawCallback) == 1) {
+        s_thumbDecoder.setUserPointer(&stage);
+        decoded = (s_thumbDecoder.decode(0, 0, scaleOpt) == 1);
+    }
+    s_thumbDecoder.close();
+    if (!decoded) {
+        if (DEBUG_CAMERA) {
+            Serial.printf("Camera: thumbnail decode failed for %ux%u frame (%u B)\n",
+                          source.width, source.height,
+                          static_cast<unsigned>(source.length));
+        }
+        free(stageBuf);
+        captureErrorCount++;
+        return false;
+    }
+
+    // Encode under the budget, stepping quality down. The output buffer IS
+    // the thumbnail buffer (THUMB_MAX_BYTES — an encode that does not fit
+    // errors out against the encoder's high-water check rather than
+    // overflowing), so an accepted size needs no second copy.
+    thumbnail.buffer = (uint8_t*)malloc(THUMB_MAX_BYTES);
+    if (!thumbnail.buffer) {
+        if (DEBUG_CAMERA) {
+            Serial.printf("Camera: Failed to allocate %u bytes for thumbnail encode\n",
+                          static_cast<unsigned>(THUMB_MAX_BYTES));
+        }
+        free(stageBuf);
+        captureErrorCount++;
+        return false;
+    }
+
+    // Gallery thumbnails do not need JPEGE_Q_HIGH; MED usually lands under
+    // budget at 160-260 px, LOW is the honest last step. Practical upper
+    // bound for a 200x150 4:2:0 MED encode is well inside 8 KB.
+    //
+    // Return semantics (balloon42 verdict — the first bench run logged
+    // "encode failed at every quality step" because this loop demanded a
+    // positive size from addFrame): JPEGAddFrame returns JPEGE_SUCCESS(0)
+    // on success and an error code on failure — NEVER a size. The size
+    // materializes only in close()/JPEGEncodeEnd, which also writes the
+    // EOI and returns the final byte count (0 when a prior error poisoned
+    // the encode). The encoder's own high-water guard caps output at
+    // THUMB_MAX_BYTES - 512, so an overflow surfaces as JPEGE_NO_BUFFER
+    // from addFrame and the ladder steps down.
+    static const uint8_t qLadder[] = { JPEGE_Q_MED, JPEGE_Q_LOW };
+    size_t outLen = 0;
+    uint8_t usedQ = 0;
+    for (const uint8_t q : qLadder) {
+        if (s_thumbEncoder.open(thumbnail.buffer, THUMB_MAX_BYTES) != JPEGE_SUCCESS) {
+            break;
+        }
+        JPEGENCODE jpe;
+        int rc = s_thumbEncoder.encodeBegin(&jpe, sw, sh, JPEGE_PIXEL_RGB565,
+                                            JPEGE_SUBSAMPLE_420, q);
+        if (rc == JPEGE_SUCCESS) {
+            rc = s_thumbEncoder.addFrame(&jpe, (uint8_t*)stageBuf,
+                                         sw * sizeof(uint16_t));
+        }
+        const int sz = s_thumbEncoder.close();   // EOI + final size (0 on prior error)
+        if (rc == JPEGE_SUCCESS && sz > 0 &&
+            static_cast<size_t>(sz) <= THUMB_MAX_BYTES) {
+            outLen = static_cast<size_t>(sz);
+            usedQ = q;
+            break;
+        }
+    }
+    free(stageBuf);
+    stageBuf = nullptr;
+
+    if (outLen == 0) {
+        if (DEBUG_CAMERA) {
+            Serial.printf("Camera: thumbnail encode failed for %ux%u source (%u B) at every quality step\n",
+                          sw, sh, static_cast<unsigned>(source.length));
+        }
+        free(thumbnail.buffer);
+        thumbnail.buffer = nullptr;
+        captureErrorCount++;
+        return false;
+    }
+
+    thumbnail.length = outLen;
+    thumbnail.width = sw;
+    thumbnail.height = sh;
+    thumbnail.quality = usedQ;
     thumbnail.timestamp = millis();
     thumbnail.valid = true;
 
+    if (DEBUG_CAMERA) {
+        Serial.printf("Camera: thumbnail downscaled %ux%u %u B -> %ux%u %u B (q%u) in %lu ms\n",
+                      source.width, source.height,
+                      static_cast<unsigned>(source.length),
+                      sw, sh, static_cast<unsigned>(outLen), usedQ,
+                      static_cast<unsigned long>(millis() - t0));
+    }
     return true;
 }
 
