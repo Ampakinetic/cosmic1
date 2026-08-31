@@ -189,6 +189,20 @@ static volatile uint32_t s_idle0TickCount = 0;
 static RTC_NOINIT_ATTR uint32_t s_rtcStampMagic;
 static RTC_NOINIT_ATTR uint32_t s_rtcLoopLastPassMs;
 static RTC_NOINIT_ATTR uint32_t s_rtcIdle0LastTickMs;
+// SESSION-34 ADDITION (balloon31/31a round, G-01-10 round #24): core 1's
+// idle task gets its own stamp word — the STAGE-1 SPLITTER. Every family-S
+// death measured so far froze IDLE0 (core 0's idle) while BOTH cores' tick
+// ISRs kept running (§21.2); what has never been measured is core 1's idle
+// task. At the next death the new word splits §21.3's surviving stage-1
+// candidates:
+//   IDLE1-t advances PAST IDLE0's freeze -> stage 1 is CORE-0-LOCAL (a
+//     core-0 scheduling/resource wedge — the dead-owner-lock candidate
+//     narrows to core-0 holders);
+//   IDLE1-t freezes WITH IDLE0        -> stage 1 stops BOTH cores' task
+//     layers while interrupts stay alive — a scheduler-global wedge.
+// Readout: the [STAMP] line. G-01-10; REMOVAL CONDITION: strips WITH the
+// [MEM]/B1/B2 instrumentation after G-01-10 closes on bench evidence.
+static RTC_NOINIT_ATTR uint32_t s_rtcIdle1LastTickMs;
 
 // G-01-10 round-#18 instrument [TICKSTAMP] (§18.4 routing item 1, session-17
 // follow-up): the [STAMP] pattern moved to the TICK side. balloon14's
@@ -292,6 +306,15 @@ static bool idle0TickHook(void) {
     // flash-path stall named; stamp still freezes at T → the first stage is
     // scheduling-level, not fetch-level. G-01-10.
     s_rtcIdle0LastTickMs = (uint32_t)(esp_timer_get_time() / 1000ULL);   // [STAMP] — see the block above
+    return true;
+}
+
+// SESSION-34 ADDITION (G-01-10 round #24): the mirror hook for core 1's
+// idle task — see the s_rtcIdle1LastTickMs declaration block above for the
+// stage-1 splitter rationale. Registered AFTER the boot readout re-arms the
+// word (same arming discipline as the tick hooks), for CPU1 only.
+static bool idle1TickHook(void) {
+    s_rtcIdle1LastTickMs = (uint32_t)(esp_timer_get_time() / 1000ULL);   // [STAMP] — see the block above
     return true;
 }
 
@@ -424,9 +447,10 @@ void setup() {
     // this readout printed at ITS next boot. REMOVAL CONDITION: strips WITH
     // the [MEM]/B1/B2 instrumentation after G-01-10 closes.
     if (s_rtcStampMagic == RTC_STAMP_MAGIC) {
-        Serial0.printf("[STAMP] prev boot: loopTask last pass t=%lu ms, IDLE0 last tick t=%lu ms, gap %ld ms (loop minus idle) (G-01-10)\n",
+        Serial0.printf("[STAMP] prev boot: loopTask last pass t=%lu ms, IDLE0 last tick t=%lu ms, IDLE1 last tick t=%lu ms, gap %ld ms (loop minus idle) (G-01-10)\n",
                        static_cast<unsigned long>(s_rtcLoopLastPassMs),
                        static_cast<unsigned long>(s_rtcIdle0LastTickMs),
+                       static_cast<unsigned long>(s_rtcIdle1LastTickMs),
                        static_cast<long>(static_cast<int32_t>(s_rtcLoopLastPassMs - s_rtcIdle0LastTickMs)));
     } else {
         Serial0.println("[STAMP] no prev-boot stamps (POWERON or RTC-domain reset) (G-01-10)");
@@ -434,6 +458,7 @@ void setup() {
     s_rtcStampMagic = RTC_STAMP_MAGIC;
     s_rtcLoopLastPassMs = 0;
     s_rtcIdle0LastTickMs = 0;
+    s_rtcIdle1LastTickMs = 0;
 
     // [TICKSTAMP] (see the declaration block): read out the PREVIOUS boot's
     // per-core tick stamps (systimer-based AND ccount-based), re-arm, and
@@ -514,6 +539,10 @@ void setup() {
 #ifndef G01_D1_IDLE_HOOK_DISABLED
     esp_err_t idle0HookErr = esp_register_freertos_idle_hook_for_cpu(idle0TickHook, 0);
     Serial0.printf("[IDLE0] hook cpu0 registered=%d (G-01-10)\n", idle0HookErr == ESP_OK ? 1 : 0);
+    // SESSION-34: the stage-1 splitter registration — inside the same A/B
+    // guard so a DISABLED-image run stays hook-free on both cores.
+    esp_err_t idle1HookErr = esp_register_freertos_idle_hook_for_cpu(idle1TickHook, 1);
+    Serial0.printf("[IDLE1] hook cpu1 registered=%d (G-01-10)\n", idle1HookErr == ESP_OK ? 1 : 0);
 #else
     Serial0.printf("[IDLE0] hook cpu0 DISABLED for A/B (G-01-10)\n");
 #endif
@@ -578,7 +607,19 @@ void loop() {
     // [STAMP] (G-01-10, see the declaration block): last-pass stamp written
     // EVERY pass, before any subsystem work — if this pass is the one that
     // wedges, the RTC word holds its start time, not a stale earlier pass.
-    s_rtcLoopLastPassMs = loopStartTime;
+    // SESSION-34 REVISION (balloon31/31a round): the stamp now reads
+    // esp_timer_get_time()/1000 directly — VALUE-IDENTICAL (Arduino's
+    // millis() wraps exactly this: esp32-hal-misc.c) but IRAM end-to-end.
+    // balloon31 boot 5 photographed the ambiguity this retires: its loop
+    // stamp froze at t=28421 ms while the boot provably lived to t=580360
+    // ms (tick stamps ccount-phase coherent) — with a FLASH-resident
+    // reader, a frozen T_l can never be distinguished between a real
+    // loopTask stop and a stalled flash fetch of millis(); the round-#22
+    // card-in "+15000 ms" family signature is suspect on exactly this
+    // ground (§37.5). IRAM makes every future T_l a task-side truth.
+    // loopStartTime stays millis() for the pass metrics below (same value).
+    // G-01-10; REMOVAL CONDITION unchanged.
+    s_rtcLoopLastPassMs = (uint32_t)(esp_timer_get_time() / 1000ULL);
 
     // WR-09: no try/catch — ESP32 Arduino builds compile with exceptions
     // disabled (and even enabled, faults on this platform abort/reboot

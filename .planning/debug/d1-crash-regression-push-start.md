@@ -4236,3 +4236,387 @@ Interpretation guide + pre-written readings:
   delivery-era work, out of G-01-10 scope.
 
 (01-UAT.md G-01-10, WINDOWS 15.)
+
+## 37 — SESSION-34 (balloon31/31a bench, 2026-08-31): the round-#23 card-out A/B ANSWERS — R2 FIRES (deaths CONTINUE card-out: the SD-line class is EXONERATED as family S's necessary trigger on this build/era) — the five silents-turned-dumps ALL photograph the balloon30b:953 both-cores systimer spin (the campaign's most-reproduced fact, now six exposures across two builds and both card states) — the card-out silents reproduce +15000 ms EXACTLY on the IRAM reader (a real 15-second structure, n=2) — one +551871 ms outlier is proven a REAL 9.67-minute live tail by the ccount-phase identity check — and the round-#22 card-in "+15000×12" signature falls under reader-artifact suspicion — the IDLE1 stage-1 splitter is wired and the loop stamp made IRAM (committed beside this record)
+
+### 37.1 Provenance (performed before any decode)
+
+The operator ran the round-#23 A/B bench as TWO balloon console captures
+at repo root — `balloon31.log` (111,439 B, 2,096 lines, **card IN**
+control) and `balloon31a.log` (73,208 B, 1,542 lines, **card OUT** arm) —
+with `base31.log` (42,628 B, 1,001 lines) consolidating the base side of
+the whole session (37.6). **NO `base31a.log` exists** — the base side was
+not kept separate for the card-out arm, per §36's "base-side optional"
+note; the single base capture spans both arms and is cross-checked at
+37.6.
+
+On-disk `firmware.elf` at bench time: SHA256
+`8bcb54701fae31625d235f7de412a77d93ea7d1a6e8742964ff7e7f84eed9516` —
+exactly §36.9's recorded round-#23 build identity (verified before this
+session's decodes ran; the ELF has since been superseded by this round's
+rebuild, 37.9 — **every decode in this section ran against the round-#23
+ELF before the rebuild**). Banner census: `Build: Aug 31 2026 17:57:04`
+×12 in balloon31 (6 boots × 2 banner lines each — the app prints its
+banner twice per boot, ~103-127 lines apart, the established pattern) and
+×6 in balloon31a (3 bannered boots × 2 — **boot 1 is banner-less: the
+first console line is already mid-session**, the monitor attached after
+boot 1 started, PIO preamble at :1-8); ×0 of the old 16:19:56 banner.
+Every one of the five panic dumps carries `ELF file SHA256: 8bcb54701` —
+the deployed build IS round #23; the flash took.
+
+**Pre-verify corrections (conventions):** balloon31a's rst:0x1 count is 0
+because of the ATTACH, not because no power-on occurred — boot 1's
+provenance is its readout (:167-168) plus its capture lines (:61/:67),
+not a reset line. balloon31's boot-5 rst:0x7 (:1714) ends a boot whose
+READOUT lands at :1723-1724 in boot 6 — the death line and the readout of
+the same death are 9 lines apart; do not double-count.
+
+### 37.2 Census (corrected raw-byte grep) — both arms + base31
+
+| grep | balloon31 | balloon31a | base31 |
+|---|---|---|---|
+| rst:0x1 POWERON | 1 (:12) | 0 (mid-session attach) | 0 |
+| rst:0x7 TG0WDT | 1 (:1714) | 2 (:158, :901) | 0 |
+| rst:0x8 TG1WDT | 0 | 0 | 0 |
+| rst:0xc RTC_SW_CPU_RST | 4 (:404, :714, :1018, :1475) | 1 (:585) | 0 |
+| rst:0x3 RTC_SW_SYS_RST | 0 | 0 | 0 |
+| Guru panic | 4 (:335, :645, :947, :1405) | 1 (:516) | 0 |
+| stack canary | 0 | 0 | 0 |
+| raw EF BF BD | **0** | **0** | **0** |
+| ┬░ (healthy degree) | 233 | 362 | — |
+| ΓÇö (healthy em-dash) | 2 | 3 | — |
+| [CAPWIN] | 10 (2 captures × 5) | 5 (1 capture × 5) | 0 |
+| [STAMP] / [TICKSTAMP] | 6 / 12 | 3 / 6 | 0 / 0 |
+| IMMEDIATE markers | 0 | 0 | 0 |
+| SET_RESOLUTION | 0 | 0 | 0 |
+
+Boots: balloon31 = 6 (1 POWERON + 5 deaths: FOUR int-wdt panics + ONE
+silent rst:0x7; boot 6 operator-ended at :2096 mid-normal-traffic).
+balloon31a = 4 (banner-less boot 1 + 3; deaths: 2 silent rst:0x7 + 1
+panic; boot 4 operator-ended at :1542). Resolution PINNED all session
+(zero SET_RESOLUTION). Card mounted at EVERY balloon31 boot (:106/:499/
+:809/:1113/:1570/:1809); balloon31a printed the card-out regime at every
+full boot (`SD_MMC.begin failed (1-bit SDMMC pins CLK=39 CMD=38 D0=40)` +
+`SD card store unavailable - captures take the volatile fallback` + `no
+rescan`, :256-263/:683-690/:999-1006) — **the §23.2 gate fix is visibly
+working**: capture ID 4 flowed via the volatile fallback (:61) with
+`persistCapture image 4 skipped - no card mounted` (:67), and the resume
+path reported honestly (`no rescan; nothing to resume`, volatile
+regime).
+
+### 37.3 THE FIVE DUMPS — one photograph, five exposures, both arms
+
+All five int-wdt panics decode FRAME-IDENTICAL on both cores
+(independent `xtensa-esp32s3-elf-addr2line -pfiaC` re-decode against the
+verified on-disk round-#23 ELF — zero disagreement with the in-log
+symbolation):
+
+- **Core in panic** (CPU1 ×3: 31 b1/b2/b4; CPU0 ×1: 31 b3; CPU1 ×1: 31a
+  b2): PC/EPC4 in `systimer_hal_get_counter_value` (systimer_hal.c:51) —
+  the three observed PCs (0x40381f5a/0x40381f54/0x40381f57, with 31 b3's
+  core-0 companion at 0x40381f51 = `systimer_ll_counter_snapshot`,
+  systimer_ll.h:90) are a 3-instruction spread across ONE spin loop:
+  `systimer_ll_is_counter_value_valid` (systimer_ll.h:95, inlined) —
+  **the unbounded valid-bit spin**. Backtrace: #1
+  `esp_timer_impl_get_time` (esp_timer_impl_systimer.c:72); #2
+  **tickStampHook (main_balloon.cpp:251) — the IRAM tick hook executing
+  CLEAN and converting the wedge into a photograph, in BOTH arms**; #3-#6
+  the SysTick dispatch chain; #7-#9 the interrupted context:
+  `esp_cpu_wait_for_intr` ← `esp_vApplicationIdleHook`
+  (freertos_hooks.c:58) ← `prvIdleTask` — plain idle on the interrupted
+  core, and the companion core's dump is the SAME chain on its own idle
+  stack (e.g. 31 b1: core-1 stack base 0x3fc98750 vs core-0 0x3fc97f20).
+- **Both cores wedged in the same spin, in the same millisecond, each
+  interrupted in its own idle — the balloon30b:953 photograph exactly.**
+  Stale EXCCAUSE 0x6 ("IntegerDivideByZero", ×4) / 0x5 ("Alloca", ×1) —
+  the usual stale-cause misnomer class, recorded not over-read.
+- EPC1 = `uart_hal_write_txfifo` (uart_hal_iram.c:27) in **all five** —
+  the same residual as balloon30b's dump (six exposures now); recorded
+  UNRESOLVED, do not build on it.
+- `ELF file SHA256: 8bcb54701` in all five — build identity confirmed per
+  dump.
+
+**Classification: 5/5 = the balloon30b:953 both-cores systimer-spin
+shape.** The prior photograph now has SIX exposures (30b b5 + these
+five) across two builds and BOTH card states. Stage 2's SITE is the
+most-reproduced fact in the campaign; what this session adds is WHERE it
+strikes relative to stage 1 (37.5) — and that the expression now DEPENDS
+on the arm.
+
+### 37.4 Saved-PC census — all decodes vs the on-disk round-#23 ELF
+
+| death | log:line | Saved PC | decode |
+|---|---|---|---|
+| 31 b1 | :405 | 0x4201cf67 | `panic_handler` (panic_handler.c:174) — dumped-boot residue |
+| 31 b2 | :715 | 0x4201cf67 | `panic_handler` |
+| 31 b3 | :1019 | 0x4037ca99 | `esp_restart_noos` (system_internal.c:164) — census first |
+| 31 b4 | :1476 | 0x4201cf67 | `panic_handler` |
+| 31 b5 | :1715 | 0x4037e9f4 | `xTaskIncrementTick` (tasks.c:3225, inside `prvTaskEnterCriticalSafeSMPOnly`/`vPortEnterCritical`, inlined) — census first, SILENT class |
+| 31a b2 | :586 | 0x4201cf67 | `panic_handler` |
+| 31a b3 | :902 | 0x4037c8d3 | `esp_vApplicationTickHook` (freertos_hooks.c:39) — the §36 tick-hook family |
+
+4/5 dumped boots carry `panic_handler` (the panic path's own residue);
+31 b3 carries `esp_restart_noos` — the restart path itself, a new residue
+class. The TWO silent-class saved PCs both land in TICK-LAYER code:
+`xTaskIncrementTick` inside its critical-section entry (31 b5) and the
+tick-hook dispatch (31a b3). The standing honest limit applies: saved PCs
+for silent resets are post-fault residuals — a fingerprint, not a proof.
+
+### 37.5 THE MEASUREMENT — the split, the anomalies dispositioned, and the round-#23 discriminator answered
+
+The full [STAMP]/[TICKSTAMP] table, both arms (tick−IDLE0 in ms; both
+cores' tick stamps identical to the millisecond in EVERY death, as
+§21.2 established):
+
+**Card IN (balloon31):**
+
+| boot | death | readout | loop T_l | IDLE0 T_i | ticks T_f | tick−IDLE0 | class |
+|---|---|---|---|---|---|---|---|
+| b1 | panic :335 | :413-414 | 51799 | 52299 | 52302/52302 | **+3** | dump tail |
+| b2 | panic :645 | :723-724 | 30886 | 31332 | 31334/31334 | **+2** | dump tail |
+| b3 | panic :947 | :1027-1028 | 29389 | 29839 | 29855/29855 | **+16** | dump tail |
+| b4 | panic :1405 | :1484-1485 | 62014 | 62465 | 62500/62500 | **+35** | dump tail |
+| b5 | silent :1714 | :1723-1724 | 28421 | 28489 | 580360/580360 | **+551871** | WILD — see below |
+
+**Card OUT (balloon31a):**
+
+| boot | death | readout | loop T_l | IDLE0 T_i | ticks T_f | tick−IDLE0 | class |
+|---|---|---|---|---|---|---|---|
+| b1 | silent :158 | :167-168 | 44600 | 44693 | 59693/59693 | **+15000 EXACT** | family S |
+| b2 | panic :516 | :594-595 | 80066 | 80105 | 80136/80136 | **+31** | dump tail |
+| b3 | silent :901 | :910-911 | 70778 | 70842 | 85842/85842 | **+15000 EXACT** | family S |
+
+[STAMP] gaps (loop minus idle): card-in −500/−446/−450/−451/−68 ms,
+card-out −93/−39/−64 ms — loopTask's stamp froze first in all EIGHT
+(two-stage shape −446..−500 ×4, instantaneous −39..−93 ×4; the §36.6
+band structure recurs). App-level behavior at every death: normal
+traffic to an INSTANTANEOUS stop — 31 b5's last line is `window
+chunk(image 119 kind 1, 6/7) sent`, 31a b1's `chunk(image 4 kind 0,
+17/26) sent`, 31a b3's a telemetry packet — then zero app lines for the
+whole tail, then the reset.
+
+**Disposition 1 — the +15000-exact card-out reappearance (the R4
+split's headline).** The round-#23 rationale (§36.9) worried the
+round-#22 "+15000 exactly" might be a FLASH-reader artifact: the old
+idle stamp read millis() from flash, so a stalled fetch could freeze
+T_i early. The card-out silents answer with the IRAM reader in place:
+**+15000 EXACTLY, twice** — a structure the IRAM reader cannot fake.
+§36.9's second branch FIRES for the card-out silents: the IDLE0 stamp
+still freezes at T_i while ticks run exactly 15000 more ms — **the
+fetch-stall candidate is ELIMINATED for the idle anchor card-out, and
+the 15-second structure is REAL in the card-out regime (n=2)**. R3's
+pre-written classifier held: +15000±1 = family S.
+
+**Disposition 2 — the +551871 outlier (31 b5) is a REAL 9.67-minute
+live tail.** The naive reading (tick stamp 580360 ms in a ~120-line
+boot) looks impossible; the ccount-phase identity check proves it: the
+tick hooks stamp systimer-t and CCOUNT **in the same dispatch**, and
+CCOUNT is an independent clock wrapping at 2^32/240 MHz = 17895.7 ms.
+Predicted ccount phase = T_f mod 17895.7 plus that boot's per-core
+offset (core0 +159..+166, core1 +1..+48 across the eight readouts):
+580360 mod 17895.7 = 7697.7 → predicted 7863.0/7745.7 — observed
+7863/7746. **Both cores match to 1 ms. The boot genuinely lived
+580.36 s**: task stamps frozen at 28.4/28.5 s, tick ISRs stamping LIVE
+for 9.2 more minutes (log silent the whole tail), then a silent
+TG0WDT-family reset mid-pull. This breaks any "the tail is always
+15 s" story and is recorded as the era's THIRD death shape.
+
+**Disposition 3 — the card-in conversion and the round-#22 signature's
+demotion.** Card-in took a shape §36.9 pre-wrote no branch for: the
+deaths became DUMPS with +2..+35 ms tails (the probes photographing
+stage 2 within milliseconds of stage 1). Two consequences, stated
+separately: (a) R3's "+11..200 ms panic tail" band was a guess — the
+measured dump-tail band is +2..+35 ms; the dumps exist and are decoded,
+so the classification stands. (b) **The round-#22 card-in "+15000×12"
+signature is now SUSPECT**: that build's idle stamp was the
+flash-resident millis(), and a reader that stalls exactly 15.000 s
+before the true stop produces precisely the old signature (T_i_old =
+T_true − 15000). If the artifact hypothesis is right, the old deaths'
+TRUE gap looked like today's +2..+35. THE HONEST LIMIT: the artifact
+hypothesis explains the stamps but NOT why the old build never dumped
+at stage 2 with the same IRAM tick probes this build has — the
+expression-shift hypothesis (the reader swap genuinely changes the
+death's timing) remains open. Neither arm's round-#22 signature
+transfers to the fixed build; the card-out +15000 (IRAM-clean) is the
+only clean measurement of the 15-second structure.
+
+**The universal core, now sharper:** in all eight deaths the IDLE0
+stamp (IRAM reader — cannot stall silently) froze at T_i; the tick
+layer + esp_timer stayed alive for +2 ms to +9.2 min afterward; the
+app went silent at T_i in every case; and every observed wedge site is
+the systimer valid-bit spin. Stage 1 = the task-layer stop (T_i);
+stage 2 = the systimer handshake break (+0 to +551871 ms later, arm-
+and-boot dependent); the TG0WDT reset or the INT-WDT dump ends it.
+
+### 37.6 Write family, delivery chain, base31 cross-check
+
+- **Writes: 3/3 START→done, 2/2 landings proven** (31 b1 id=2 → boot 2
+  restored next=3; 31a b1 id=4 volatile-fallback → boot 2 restored
+  next=5; 31 b6 id=3 done at :1987, session ended before its landing
+  proof). Zero Cache-errors, zero deaths in any capture or write window
+  (31 b1's death came ~60 lines AFTER its write completed, mid-beacon
+  traffic). **R5 clean — the write family STAYS closed on the fixed
+  build, third consecutive round.**
+- **base31.log**: 1,001 lines, ZERO resets all session (monitor
+  preamble at head — harmless). Delivery through eight deaths: image 2
+  full COMPLETE 27/27 5817 B (:248-249); **image 119 thumb COMPLETE
+  28/28 6043 B (:443-444)** — the very image whose 6/7-chunk push was
+  interrupted by 31 b5's death, healed and delivered by a later boot;
+  image 3 COMPLETE 16/16 3432 B (:543-544); **image 4 INCOMPLETE 16/26
+  after 3 passes (:766-767)** — the volatile-fallback capture, its push
+  retry-exhausted across the deaths. 131 beacons accepted, ACKs
+  continuous to seq 42. The latch/heal/resume chain held end to end;
+  the one incomplete is a delivery-level retry exhaustion (the 117
+  class, §36.7) — out of G-01-10 scope, noted for the delivery era.
+- Card-state noise in balloon31: torn captures 47/48 skipped, the
+  standing resume-latch withholding — expected behavior, not
+  crash-relevant.
+
+### 37.7 Verdicts — taking §36.10's pre-written readings
+
+1. **R2 FIRED: deaths CONTINUE card-out.** Three deaths in four
+   card-out boots, spontaneous (31a b3 died in a boot with NO capture
+   at all; 31a b1 died ~15 s after a capture+write that had already
+   completed). Balloon17's card-less quiet does NOT repeat on the
+   fixed build with captures running — exactly the §36.10 caveat. **The
+   SD-line class is EXONERATED as family S's necessary trigger on this
+   build/era.** The §22.4 ladder re-orders: (1) SD-line class DEMOTED
+   (correlated historically, not necessary now — a residual
+   second-order candidate); (2) the erratum/supply arm REOPENS (its
+   §23 prediction "deaths continue card-less" is CONFIRMED on the fixed
+   build) — and is answered EMPTY on the documented-erratum member
+   (37.8); (3) **stage 1 — the task-layer freeze — becomes THE open
+   mechanism question**, now instrumented (37.9).
+2. **The can_stall lever STAYS UNSHIPPED** — §36.10's R2 pre-routing:
+   "the lever is then a no-op guess." Its licensing condition (a
+   mechanism tying the counter stop to stall-by-CPU) is unmet, and the
+   halt family it addresses was already the record's weakest arm
+   (§22.1: nothing on the USB-SJ port; §21.3: not a spurious
+   debug-halt; §36.6: both cores' tick layers ran through the window a
+   halt would have frozen).
+3. **R4 answered** — §36.9's discriminator: second branch card-out
+   (scheduling-level first stage, fetch-stall eliminated for the
+   anchor); card-in CONVERSION recorded with the artifact suspicion
+   (37.5, disposition 3).
+4. **R5 clean** — no Cache-error anywhere; write family closed.
+5. **R3 worked as designed** — signature-first classification, with the
+   dump-tail band corrected to +2..+35 ms.
+
+### 37.8 The errata search (§20.6 item 3 — the operator-call option, taken this round)
+
+The official **ESP32-S3 Series SoC Errata** (Espressif chip-errata
+documentation, fetched complete this round) enumerates EIGHT errata,
+all affecting every shipping revision (v0.0/v0.1/v0.2): **CACHE-126**
+(cache hit error during cache write-backs), **RTC-126** (RTC register
+read error after light-sleep wake), **ANALOG-160** (chip damage when
+BIAS_SLEEP=0 with PD_CUR=1), **LCD-239** (LCD unreliable at certain
+clock dividers), **USBOTG-4289** (USB-OTG download unavailable),
+**RMT-176** (RMT continuous-TX idle level error), **TOUCH-100**
+(touch scan-done raw data undefined), **ADC-183** (ADC2 DMA
+inoperative). **NO SYSTIMER ERRATUM EXISTS in the official document.**
+The erratum arm's documented member is empty: no published silicon bug
+describes a systimer counter/handshake stop. Honest limits: an
+UNdocumented erratum cannot be excluded by a document's silence, and
+the arm's supply/XTAL member is not addressed by the errata list at
+all (though §22.4 already demoted board-supply primacy — the deaths
+traveled across two independent supplies). Adjacency noted, not
+taken: CACHE-126 is a writeback hit-error — a different mechanism from
+the write family's photographed cache-DISABLED fetch (closed), and
+family S's dumps show no cache error.
+
+### 37.9 The round (committed beside this record) — G-01-10 round #24 instruments
+
+Two instrument changes, both instruments-only under the honesty guard
+(no mechanism is named for stage 1; no lever ships):
+
+1. **IDLE1 stamp — the stage-1 splitter.** Core 1's idle task gets its
+   own RTC word (`s_rtcIdle1LastTickMs`) stamped by a new
+   `idle1TickHook` registered via `esp_register_freertos_idle_hook_
+   for_cpu(..., 1)` (inside the existing G01_D1_IDLE_HOOK_DISABLED A/B
+   guard, so a DISABLED image stays hook-free on both cores); the
+   [STAMP] readout gains `IDLE1 last tick t=%lu ms`. At the next death
+   it splits §21.3's surviving candidates: **IDLE1 advancing past
+   IDLE0's freeze = stage 1 is CORE-0-LOCAL** (a core-0 scheduling/
+   resource wedge); **IDLE1 freezing WITH IDLE0 = a scheduler-GLOBAL
+   stop** with interrupts alive.
+2. **Loop-side stamp made IRAM.** The loop() stamp now reads
+   `esp_timer_get_time()/1000` directly — value-identical (Arduino's
+   millis() wraps exactly this), IRAM end-to-end; `loopStartTime`
+   stays millis() for the pass metrics (same value). This retires the
+   LAST known latent flash-read in the instrument path (R5's standing
+   note) — after 31 b5, a flash-stalled millis() read is a
+   DEMONSTRATED artifact class (37.5, disposition 3), so every future
+   T_l is a task-side truth.
+
+Classification: instruments-only (G-01-10 family; same removal
+condition — strips WITH the [MEM]/B1/B2 instrumentation after G-01-10
+closes on bench evidence). New ELF SHA256
+`9bfbb953c90e388acd8b3d7ae1a7aae9661bec0c9c54d8dfca9da8d712a09b92`
+(build verified; NOT yet deployed — the next bench flashes it).
+
+### 37.10 The re-armed bench — the stage-1 interrogation, card-out first
+
+Routing decision: **one session, card REMOVED, round-#24 build
+(9bfbb953), ≥6 captures, resolution pinned.** Rationale: the card-out
+regime carries the only clean 15-second structure (37.5, disposition 1)
+and its deaths run silent — the IDLE1 splitter reads out at every one;
+card-in's deaths now express as dumps (site already photographed six
+times) and card-in remains the flight config for any later
+confirmation run.
+
+Pre-verify: banner must be the round-#24 build (8bcb5470 = this
+session's image; c07a2cda = two rounds back); `[IDLE1] hook cpu1
+registered=1` at EVERY boot — a registered=0 is an instrument failure,
+stop and record before trusting any readout.
+
+- **Q1 — deaths STOP card-out** (≥6 captures, zero deaths): this would
+  CONTRADICT R2 at larger n (card-out would stand at n=2 deaths vs n≥6
+  clean boots — the A/B verdict flips back toward card-correlation).
+  Record, then re-run card-in to arbitrate before any routing change.
+- **Q2 — deaths CONTINUE card-out**: read IDLE1 at EVERY death (the
+  splitter):
+  - **IDLE1-t advances to ≈ the tick T_f** → stage 1 is CORE-0-LOCAL;
+    §21.3 narrows to core-0-owned locks/resources; route to a per-task
+    heartbeat census instrument next (which named task died with which
+    core's idle).
+  - **IDLE1-t freezes ≈ with IDLE0** → stage 1 is a scheduler-GLOBAL
+    stop with both cores' interrupts alive; route to a scheduler-state
+    probe (what the scheduler itself believes at the 1 Hz sampler).
+- **Q3 — any death, either arm, classify by signature FIRST**:
+  +15000±1 = the 15-second structure (now IRAM-clean); +2..+40 with a
+  dump = the probe-photograph class; anything ELSE = a NEW shape —
+  decode before routing.
+- **Q4 — T_l is now IRAM-trustworthy**: the expected gap shape stays
+  −39..−500 ms (loop first). A death where T_l−T_i exceeds ~1 s WHILE
+  app prints continued past T_l would name a loopTask-only block — a
+  new sub-shape; record separately.
+- **Q5 — any Cache-error panic**: with BOTH stamp readers IRAM, the
+  known-flash-resident-instance list is EMPTY — a Cache-error would
+  name a flash-resident execution OUTSIDE the instrument family
+  entirely. Decode before acting; treat as a major finding.
+
+### 37.11 Honest remainder
+
+- The card-out +15000 structure is IRAM-clean but n=2; Q2's splitter is
+  its first interrogation. The +551871 shape is n=1 (the ccount-phase
+  check makes the reading solid, not the population).
+- The card-in old-vs-new contrast (round-#22: 12 silent +15000;
+  round-#23: 4 dumps +2..35) is UNRESOLVED: the reader-artifact
+  hypothesis explains the stamps but not the old build's failure to
+  dump at stage 2 with the same tick probes. Both hypotheses stay open.
+- **The TG0WDT-ladder tension DEEPENS, it does not resolve**: with the
+  idle feed dead from T_i, the verified ladder (CONFIG_ESP_TASK_WDT_
+  TIMEOUT_S=5, PANIC=1, IDLE0 watched; stage0 INT @+5 s, stage1 RESET
+  @+10 s) predicts a TWDT panic print at +5 s and a reset at +10 s.
+  Measured: no TWDT print EVER, resets at +15.000 s (×2), +551.871 s
+  (×1), and none at all in the panic boots (the INT-WDT won at
+  ~+300 ms). No standard-ladder story survives the instruments; the
+  mechanism behind the eventual TG0WDT-family reset is UNNAMED.
+- The errata census is a document search, not silicon truth.
+- EPC1 = `uart_hal_write_txfifo`: 6/6 dumps now; recorded unresolved;
+  do not build on it.
+- Delivery-side: image 4's push retry-exhausted (16/26) — the second
+  instance of the 117 class; out of G-01-10 scope, noted for the
+  delivery-era work.
+
+(01-UAT.md G-01-10, WINDOWS 15.)
