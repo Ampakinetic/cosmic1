@@ -176,8 +176,14 @@ static volatile uint32_t s_idle0TickCount = 0;
 // reset except a true power-on, where its content is garbage — the magic
 // word gates the readout (collision odds 1 in 2^32, accepted). Written
 // every pass/tick — one 32-bit RTC-SLOW store each, no locks (the
-// idle-side value is millis(), an esp_timer register read, legal in idle
-// context). G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2
+// idle-side stamp read esp_timer_get_time() since the session-33 round —
+// before that it was millis(), which the balloon29 Cache-error dump proved
+// FLASH-resident here, NOT "an esp_timer register read": the claim in this
+// comment was the same false assumption 3d9cf22 corrected for the tick
+// hook). The loop-side stamp still reads millis() from loopTask — same
+// value, latent flash-read class left in place deliberately (minimal
+// change; the metrics subtractions at :602/:702 mix readers otherwise).
+// G-01-10; REMOVAL CONDITION: strips WITH the [MEM]/B1/B2
 // instrumentation after G-01-10 closes on bench evidence.
 #define RTC_STAMP_MAGIC 0xC05C1C5u
 static RTC_NOINIT_ATTR uint32_t s_rtcStampMagic;
@@ -271,7 +277,21 @@ static void IRAM_ATTR tickStampHook(void) {
 // idle stack — that shift is the fix working, not new headroom appearing.
 static bool idle0TickHook(void) {
     s_idle0TickCount++;
-    s_rtcIdle0LastTickMs = millis();   // [STAMP] — see the block above
+    // SESSION-33 REVISION (balloon30/30a/30b round): the stamp read was
+    // millis() — FLASH-resident (nm on the deployed round-#22 ELF:
+    // 0x4201510c), the same latent class 3d9cf22 removed from tickStampHook
+    // below; the declaration-block comment above still carried the disproved
+    // "an esp_timer register read, legal in idle context" claim — corrected
+    // there too. One line, VALUE-IDENTICAL (millis() is
+    // esp_timer_get_time()/1000 wrapped): the IRAM read (0x4037779c) can no
+    // longer be frozen silently by a stuck flash-bus stall. This reader is
+    // the anchor of family S's newly-measured death structure — the tick
+    // stamps froze at EXACTLY IDLE0-t + 15000 ms on all 12 silent deaths
+    // across balloon29/30/30b (§36.6) — so its next-bench behavior
+    // discriminates the first stage: stamp keeps advancing through a stall →
+    // flash-path stall named; stamp still freezes at T → the first stage is
+    // scheduling-level, not fetch-level. G-01-10.
+    s_rtcIdle0LastTickMs = (uint32_t)(esp_timer_get_time() / 1000ULL);   // [STAMP] — see the block above
     return true;
 }
 
