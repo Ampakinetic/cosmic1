@@ -625,6 +625,129 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
                 grid-template-columns: repeat(2, 1fr);
             }
         }
+        /* ---------- antenna pointing (ANT-01) ---------- */
+        .antenna-card {
+            background: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .ant-top {
+            display: flex;
+            gap: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .ant-arrow-wrap {
+            flex: 0 0 180px;
+            width: 180px;
+            height: 180px;
+            margin: 0 auto;
+        }
+        .ant-arrow-wrap svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+        }
+        /* Needle rotation is a setAttribute('transform') — SVG rotate()
+           turns about the user-space origin (0,0), which IS the pivot in
+           the centered viewBox. CSS transform-origin would resolve against
+           the viewBox corner and swing the needle around the wrong point. */
+        .ant-readout {
+            flex: 1 1 220px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            min-width: 200px;
+        }
+        .ant-command {
+            font-size: 26px;
+            font-weight: 700;
+            color: #f8fafc;
+            min-height: 34px;
+        }
+        .ant-command.on-target { color: #22c55e; }
+        .ant-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+            gap: 8px;
+        }
+        .ant-grid .status-item {
+            background: #0f172a;
+            border-radius: 8px;
+            padding: 8px 10px;
+        }
+        .ant-controls {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .ant-controls button {
+            padding: 8px 14px;
+            font-size: 14px;
+        }
+        .ant-stepper {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        .ant-stepper button {
+            padding: 4px 10px;
+            font-size: 14px;
+        }
+        #ant-offset {
+            min-width: 52px;
+            text-align: center;
+            color: #e2e8f0;
+            font-weight: 600;
+        }
+        .ant-manual {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        .ant-manual input {
+            width: 118px;
+            padding: 6px 8px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #e2e8f0;
+            font-size: 14px;
+        }
+        .ant-chips {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .ant-chip {
+            font-size: 13px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            color: #94a3b8;
+        }
+        .ant-chip.ok { color: #22c55e; border-color: #166534; }
+        .ant-chip.warn { color: #eab308; border-color: #854d0e; }
+        .ant-hint {
+            display: none;
+            font-size: 13px;
+            color: #fbbf24;
+            background: #292524;
+            border: 1px solid #78350f;
+            border-radius: 8px;
+            padding: 8px 10px;
+        }
     </style>
 </head>
 <body>
@@ -632,6 +755,7 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         <div class="nav-inner">
             <a href="#alerts">Alerts</a>
             <a href="#map">Map</a>
+            <a href="#antenna">Antenna</a>
             <a href="#capture">Capture</a>
             <a href="#queue">Queue</a>
             <a href="#gallery">Gallery</a>
@@ -1902,6 +2026,10 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             // Map + trajectory (WEB-02) — same poll payload, one renderer
             renderMap(data);
 
+            // Antenna pointing (ANT-01) — balloon side of the math arrives
+            // with the poll; the sensor side pushes on its own events
+            renderAntenna(data);
+
             // Auto-capture chip — display-only until the command ACKs
             const chip = document.getElementById('autocapture-chip');
             setText(chip, data.autoCapture ? ('ON · every ' + data.autoCaptureInterval + 's') : 'OFF');
@@ -1965,6 +2093,278 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             updateAgeTile();
             renderStaleBadge();
         }, 1000);
+
+        // ---------- antenna pointing (ANT-01, 2026-08-27 todo) ----------
+        // The tablet is mounted back-to-back with the Yagi on the tripod
+        // pivot (portrait, upright, screen to the operator): its compass is
+        // the rig heading, its GPS the observer position. ALL sensor reads
+        // and the great-circle math live here in the browser — the poll only
+        // supplies the balloon side (telemetry.lat/lon/altitudeM). Portrait
+        // upright geometry: rig tilt = beta - 90 (upright = horizon), and
+        // the reported heading is the direction the tablet's BACK faces —
+        // i.e. the boresight — so the offset defaults to 0 and exists for
+        // field calibration only.
+        const ANT_STORE_KEY = 'c1-antenna';
+        const ANT = {
+            on: false,               // sensors enabled
+            headingDeg: null,        // compass heading, deg clockwise from north
+            headingAbs: false,       // true when from an absolute source
+            headingMs: 0,
+            rigTiltDeg: null,        // rig elevation (beta - 90)
+            obsLat: null, obsLon: null, obsAccM: null, obsSrc: null, // 'gps'|'manual'
+            offsetDeg: 0,
+            tele: null,              // balloon telemetry, refreshed per poll
+            lastNeedleDeg: null,
+            lastSensorRenderMs: 0
+        };
+        const ANT_EL = {};
+        ['ant-enable', 'ant-needle', 'ant-command', 'ant-elev', 'ant-dist',
+         'ant-balt', 'ant-rigtilt', 'ant-tiltcmd', 'ant-offset',
+         'ant-offset-minus', 'ant-offset-plus', 'ant-manlat', 'ant-manlon',
+         'ant-manual-use', 'ant-chip-compass', 'ant-chip-gps',
+         'ant-chip-balloon', 'ant-hint'].forEach(function (id) {
+            ANT_EL[id] = document.getElementById(id);
+        });
+
+        function antPersist() {
+            try {
+                localStorage.setItem(ANT_STORE_KEY, JSON.stringify({
+                    offsetDeg: ANT.offsetDeg,
+                    manLat: ANT_EL['ant-manlat'].value,
+                    manLon: ANT_EL['ant-manlon'].value
+                }));
+            } catch (e) { /* storage unavailable — calibration is per-session */ }
+        }
+        function antRestore() {
+            try {
+                const s = JSON.parse(localStorage.getItem(ANT_STORE_KEY) || '{}');
+                if (typeof s.offsetDeg === 'number') {
+                    ANT.offsetDeg = s.offsetDeg;
+                }
+                if (typeof s.manLat === 'string') ANT_EL['ant-manlat'].value = s.manLat;
+                if (typeof s.manLon === 'string') ANT_EL['ant-manlon'].value = s.manLon;
+            } catch (e) { /* fresh session */ }
+            setText(ANT_EL['ant-offset'], Math.round(ANT.offsetDeg) + '°');
+        }
+
+        function antNorm180(d) {
+            return ((d + 540) % 360) - 180;
+        }
+        // Great-circle initial bearing (deg true north, clockwise) and
+        // haversine ground distance (m)
+        function antGreatCircle(lat1, lon1, lat2, lon2) {
+            const R = 6371008.8, rad = Math.PI / 180;
+            const f1 = lat1 * rad, f2 = lat2 * rad, dl = (lon2 - lon1) * rad;
+            const y = Math.sin(dl) * Math.cos(f2);
+            const x = Math.cos(f1) * Math.sin(f2) -
+                      Math.sin(f1) * Math.cos(f2) * Math.cos(dl);
+            const a = Math.sin((f2 - f1) / 2) * Math.sin((f2 - f1) / 2) +
+                      Math.cos(f1) * Math.cos(f2) *
+                      Math.sin(dl / 2) * Math.sin(dl / 2);
+            return {
+                bearing: (Math.atan2(y, x) / rad + 360) % 360,
+                distM: 2 * R * Math.asin(Math.min(1, Math.sqrt(a)))
+            };
+        }
+
+        function antChip(el, cls, text) {
+            setClass(el, 'ant-chip ' + cls);
+            setText(el, text);
+        }
+
+        function antShowHint(text) {
+            setText(ANT_EL['ant-hint'], text);
+            ANT_EL['ant-hint'].style.display = 'block';
+        }
+
+        function antOnOrientation(ev) {
+            if (ev.webkitCompassHeading != null) {
+                ANT.headingDeg = ev.webkitCompassHeading;   // already clockwise from TRUE north
+                ANT.headingAbs = true;
+            } else if (ev.alpha != null) {
+                // alpha runs counter-clockwise; absolute events are true-north
+                ANT.headingDeg = (360 - ev.alpha) % 360;
+                ANT.headingAbs = ev.absolute === true;
+            }
+            if (ev.beta != null) {
+                ANT.rigTiltDeg = ev.beta - 90;   // portrait upright: 0 = horizon, + = tilted back (up)
+            }
+            ANT.headingMs = Date.now();
+            const now = Date.now();
+            if (now - ANT.lastSensorRenderMs >= 100) {
+                ANT.lastSensorRenderMs = now;
+                antRender();
+            }
+        }
+
+        function antOnGeo(pos) {
+            ANT.obsLat = pos.coords.latitude;
+            ANT.obsLon = pos.coords.longitude;
+            ANT.obsAccM = pos.coords.accuracy;
+            ANT.obsSrc = 'gps';
+            antRender();
+        }
+        function antOnGeoErr(err) {
+            antChip(ANT_EL['ant-chip-gps'], 'warn', 'tablet GPS: ' +
+                (err && err.code === 1 ? 'permission denied' : 'unavailable'));
+        }
+
+        function antEnableSensors() {
+            if (ANT.on) return;
+            ANT.on = true;
+            ANT_EL['ant-enable'].disabled = true;
+            setText(ANT_EL['ant-enable'], 'Sensors on');
+            if (!window.isSecureContext) {
+                // Chrome serves compass + GPS only to secure contexts; the
+                // base's AP origin is plain HTTP. The one-time per-tablet
+                // workaround is the origin flag — document it, but still
+                // attach the listeners: some Android builds fire
+                // deviceorientation regardless.
+                antShowHint('Chrome gives this page no compass/GPS on plain HTTP. One-time fix on the tablet: open chrome://flags, search "insecure", enable "Unsafely treat insecure origin as secure" with value http://192.168.4.1 and relaunch. Numeric pointing still works meanwhile.');
+            }
+            try {
+                if (typeof DeviceOrientationEvent !== 'undefined' &&
+                        typeof DeviceOrientationEvent.requestPermission === 'function') {
+                    DeviceOrientationEvent.requestPermission().catch(function () {
+                        antChip(ANT_EL['ant-chip-compass'], 'warn', 'compass: denied');
+                    });
+                }
+                if ('ondeviceorientationabsolute' in window) {
+                    window.addEventListener('deviceorientationabsolute', antOnOrientation, true);
+                } else {
+                    window.addEventListener('deviceorientation', antOnOrientation, true);
+                }
+            } catch (e) {
+                antChip(ANT_EL['ant-chip-compass'], 'warn', 'compass: unavailable');
+            }
+            try {
+                if (navigator.geolocation) {
+                    navigator.geolocation.watchPosition(antOnGeo, antOnGeoErr,
+                        { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+                } else {
+                    antChip(ANT_EL['ant-chip-gps'], 'warn', 'tablet GPS: unavailable');
+                }
+            } catch (e) {
+                antChip(ANT_EL['ant-chip-gps'], 'warn', 'tablet GPS: blocked');
+            }
+        }
+
+        function antRender() {
+            const tele = ANT.tele;
+            const t = (tele && tele.gpsValid) ? tele : null;
+
+            // Balloon chip: honest states only — no fabricated target
+            if (!tele) {
+                antChip(ANT_EL['ant-chip-balloon'], '', 'balloon GPS: no beacon');
+            } else if (!tele.gpsValid) {
+                antChip(ANT_EL['ant-chip-balloon'], 'warn', 'balloon GPS: no fix');
+            } else {
+                const ageS = Math.round(((Date.now() - lastTeleRcvMs) + lastTeleAgeMs) / 1000);
+                antChip(ANT_EL['ant-chip-balloon'], ageS > 15 ? 'warn' : 'ok',
+                    'balloon GPS: fix · ' + ageS + ' s old');
+            }
+
+            // Compass chip
+            if (!ANT.on || ANT.headingDeg == null) {
+                antChip(ANT_EL['ant-chip-compass'], '', 'compass: off');
+            } else if (!ANT.headingAbs) {
+                antChip(ANT_EL['ant-chip-compass'], 'warn',
+                    'compass: ~' + Math.round(ANT.headingDeg) + '° (relative)');
+            } else {
+                antChip(ANT_EL['ant-chip-compass'], 'ok',
+                    'compass: ' + Math.round(ANT.headingDeg) + '°');
+            }
+
+            // GPS chip (unless the error handler just wrote a state)
+            if (ANT.obsSrc === 'gps' && ANT.obsLat != null) {
+                antChip(ANT_EL['ant-chip-gps'], 'ok',
+                    'tablet GPS: ±' + Math.round(ANT.obsAccM || 0) + ' m');
+            } else if (ANT.obsSrc === 'manual' && ANT.obsLat != null) {
+                antChip(ANT_EL['ant-chip-gps'], 'warn', 'tablet GPS: manual');
+            }
+
+            const canAim = t && ANT.obsLat != null && ANT.headingDeg != null;
+            if (!canAim) {
+                setText(ANT_EL['ant-command'], ANT.on ? 'Waiting for heading + balloon fix…' : 'Enable sensors to aim');
+                setText(ANT_EL['ant-elev'], '—');
+                setText(ANT_EL['ant-dist'], '—');
+                setText(ANT_EL['ant-balt'],
+                    tele ? (tele.altitudeM != null ? tele.altitudeM.toFixed(0) + ' m' : '—') : '—');
+                setText(ANT_EL['ant-rigtilt'],
+                    ANT.rigTiltDeg != null ? ANT.rigTiltDeg.toFixed(0) + '°' : '—');
+                setText(ANT_EL['ant-tiltcmd'], '—');
+                if (ANT.lastNeedleDeg !== null) {
+                    ANT.lastNeedleDeg = null;
+                    ANT_EL['ant-needle'].setAttribute('transform', 'rotate(0)');
+                }
+                return;
+            }
+
+            const gc = antGreatCircle(ANT.obsLat, ANT.obsLon, t.lat, t.lon);
+            const rel = antNorm180(gc.bearing - (ANT.headingDeg + ANT.offsetDeg));
+            const needleDeg = (rel + 360) % 360;
+            if (ANT.lastNeedleDeg === null || Math.abs(needleDeg - ANT.lastNeedleDeg) >= 0.5) {
+                ANT.lastNeedleDeg = needleDeg;
+                ANT_EL['ant-needle'].setAttribute('transform', 'rotate(' + needleDeg.toFixed(1) + ')');
+            }
+
+            // Elevation from the barometric balloon altitude vs the observer's
+            // GPS altitude (both AMSL-ish; approximation fine for pointing)
+            const obsAlt = 0;
+            const elevDeg = Math.atan2((t.altitudeM - obsAlt), gc.distM) * 180 / Math.PI;
+            const distKm = gc.distM / 1000;
+
+            setText(ANT_EL['ant-elev'], elevDeg.toFixed(1) + '°');
+            setText(ANT_EL['ant-dist'], distKm >= 10 ? distKm.toFixed(1) + ' km' : distKm.toFixed(2) + ' km');
+            setText(ANT_EL['ant-balt'], t.altitudeM.toFixed(0) + ' m');
+            setText(ANT_EL['ant-rigtilt'],
+                ANT.rigTiltDeg != null ? ANT.rigTiltDeg.toFixed(0) + '°' : '—');
+
+            // Aim commands with deadbands (a trembling operator is not data)
+            const el = ANT_EL['ant-command'];
+            if (Math.abs(rel) <= 4) {
+                setClass(el, 'ant-command on-target');
+                setText(el, 'Azimuth ON TARGET');
+            } else {
+                setClass(el, 'ant-command');
+                setText(el, 'Rotate ' + Math.abs(rel).toFixed(0) + '° ' + (rel > 0 ? 'right ↻' : 'left ↺'));
+            }
+            const tiltEl = ANT_EL['ant-tiltcmd'];
+            if (ANT.rigTiltDeg == null) {
+                setText(tiltEl, '—');
+            } else {
+                const dt = elevDeg - ANT.rigTiltDeg;
+                if (Math.abs(dt) <= 3) {
+                    setClass(tiltEl, 'status-value');
+                    setColor(tiltEl, '#22c55e');
+                    setText(tiltEl, 'ON TARGET');
+                } else {
+                    setColor(tiltEl, '#e2e8f0');
+                    setText(tiltEl, (dt > 0 ? 'up ' : 'down ') + Math.abs(dt).toFixed(0) + '°');
+                }
+            }
+        }
+        function renderAntenna(data) {
+            ANT.tele = data.telemetry;
+            antRender();
+        }
+
+        ANT_EL['ant-enable'].addEventListener('click', antEnableSensors);
+        ANT_EL['ant-offset-minus'].addEventListener('click', function () {
+            ANT.offsetDeg -= 5; setText(ANT_EL['ant-offset'], Math.round(ANT.offsetDeg) + '°'); antPersist(); antRender();
+        });
+        ANT_EL['ant-offset-plus'].addEventListener('click', function () {
+            ANT.offsetDeg += 5; setText(ANT_EL['ant-offset'], Math.round(ANT.offsetDeg) + '°'); antPersist(); antRender();
+        });
+        ANT_EL['ant-manual-use'].addEventListener('click', function () {
+            const la = parseFloat(ANT_EL['ant-manlat'].value);
+            const lo = parseFloat(ANT_EL['ant-manlon'].value);
+            if (isFinite(la) && isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180) {
+                ANT.obsLat = la; ANT.obsLon = lo; ANT.obsAccM = null; ANT.obsSrc = 'manual';
+                antPersist(); antRender();
+            }
+        });
+        antRestore();
 
         updateNavCurrent();
         pollOnce();
@@ -2332,6 +2732,57 @@ void handleRoot() {
     html += "<div id=\"map-offline\" class=\"map-offline-chip\">Offline — tiles unavailable, showing plotted track.</div>";
     html += "</div>";
 
+    html += "</section>";
+
+    // ---- Antenna Pointing section (ANT-01, 2026-08-27 todo) ----
+    // The tablet is mounted back-to-back with the Yagi on the tripod pivot:
+    // the tablet's own compass (DeviceOrientationEvent) is the rig heading
+    // and the tablet's own GPS (Geolocation API) is the observer position —
+    // both read by the BROWSER, so this section is pure markup and every
+    // value below is a renderer target (footer script). The great-circle
+    // math runs client-side against the balloon GPS already flowing in
+    // /api/state — no firmware round-trip in the aiming loop.
+    html += "<section id=\"antenna\">";
+    html += "<h2>📡 Antenna Pointing</h2>";
+    html += "<div class=\"antenna-card\">";
+    // Big arrow: fixed boresight tick at 12 o'clock, rotating needle points
+    // where the balloon is RELATIVE to the rig (rotate clockwise = turn right).
+    html += "<div class=\"ant-top\">";
+    html += "<div class=\"ant-arrow-wrap\">";
+    html += "<svg viewBox=\"-100 -100 200 200\" role=\"img\" aria-label=\"Balloon direction relative to the antenna\">";
+    html += "<circle cx=\"0\" cy=\"0\" r=\"92\" fill=\"none\" stroke=\"#334155\" stroke-width=\"3\"/>";
+    html += "<polygon points=\"-9,-92 9,-92 0,-72\" fill=\"#94a3b8\"/>";
+    html += "<g id=\"ant-needle\">";
+    html += "<line x1=\"0\" y1=\"0\" x2=\"0\" y2=\"-78\" stroke=\"#38bdf8\" stroke-width=\"7\" stroke-linecap=\"round\"/>";
+    html += "<polygon points=\"-14,-70 14,-70 0,-96\" fill=\"#38bdf8\"/>";
+    html += "<circle cx=\"0\" cy=\"0\" r=\"7\" fill=\"#38bdf8\"/>";
+    html += "</g>";
+    html += "</svg>";
+    html += "</div>";
+    html += "<div class=\"ant-readout\">";
+    html += "<div class=\"ant-command\" id=\"ant-command\">Enable sensors to aim</div>";
+    html += "<div class=\"ant-grid\">";
+    html += "<div class=\"status-item\"><div class=\"status-label\">Balloon elevation</div><div class=\"status-value\" id=\"ant-elev\">—</div></div>";
+    html += "<div class=\"status-item\"><div class=\"status-label\">Ground distance</div><div class=\"status-value\" id=\"ant-dist\">—</div></div>";
+    html += "<div class=\"status-item\"><div class=\"status-label\">Balloon altitude</div><div class=\"status-value\" id=\"ant-balt\">—</div></div>";
+    html += "<div class=\"status-item\"><div class=\"status-label\">Rig tilt</div><div class=\"status-value\" id=\"ant-rigtilt\">—</div></div>";
+    html += "<div class=\"status-item\"><div class=\"status-label\">Tilt command</div><div class=\"status-value\" id=\"ant-tiltcmd\">—</div></div>";
+    html += "</div>";
+    html += "</div>";
+    html += "</div>";
+    html += "<div class=\"ant-controls\">";
+    html += "<button id=\"ant-enable\" type=\"button\">Enable sensors</button>";
+    html += "<span class=\"ant-stepper\">Boresight offset <button id=\"ant-offset-minus\" type=\"button\">−5°</button><span id=\"ant-offset\">0°</span><button id=\"ant-offset-plus\" type=\"button\">+5°</button></span>";
+    html += "</div>";
+    html += "<div class=\"ant-manual\">Manual position (no tablet GPS): ";
+    html += "<input id=\"ant-manlat\" type=\"number\" step=\"0.000001\" placeholder=\"lat\"><input id=\"ant-manlon\" type=\"number\" step=\"0.000001\" placeholder=\"lon\"><button id=\"ant-manual-use\" type=\"button\">Use</button></div>";
+    html += "<div class=\"ant-chips\">";
+    html += "<span class=\"ant-chip\" id=\"ant-chip-compass\">compass: off</span>";
+    html += "<span class=\"ant-chip\" id=\"ant-chip-gps\">tablet GPS: off</span>";
+    html += "<span class=\"ant-chip\" id=\"ant-chip-balloon\">balloon GPS: —</span>";
+    html += "</div>";
+    html += "<div class=\"ant-hint\" id=\"ant-hint\"></div>";
+    html += "</div>";
     html += "</section>";
 
     // ---- Capture & Settings section (D-45 locked order) ----
