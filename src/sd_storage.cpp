@@ -493,6 +493,43 @@ static int galleryEntryCompare(const void* a, const void* b) {
     return (ia > ib) ? -1 : (ia < ib) ? 1 : 0;
 }
 
+// Post-sort index pass (feature: capture markers): one sidecar read per
+// indexed image fills the capture position the base stamped at finalize
+// (lat/lon/alt from the then-latest beacon). Honest rules: absent sidecar,
+// absent telemetry block, or an invalid flag all leave hasGps false —
+// nothing is fabricated. Cost: +1 small file read per image at boot
+// (~2-4 s extra at the 1000-image cap on the 1-bit SDMMC bus), paid once
+// in exchange for sidecar-free marker serving at request time.
+void SdStorage::fillIndexGps() {
+    SdImageMetadata meta;
+    uint16_t gpsCount = 0;
+    for (uint16_t i = 0; i < galleryCount; i++) {
+        SdGalleryEntry* e = &galleryIndex[i];
+        e->hasGps = false;
+        if (!e->hasFullSidecar && !e->hasThumbSidecar) {
+            continue;
+        }
+        // Full sidecar preferred (both carry the telemetry triple); thumb
+        // sidecar covers thumbnails whose full transfer never completed
+        const bool thumb = !e->hasFullSidecar;
+        if (!readSidecarMeta(e->id, thumb, &meta)) {
+            continue;
+        }
+        if ((meta.present & SD_SC_PRESENT_TELEMETRY) == 0 || !meta.telemetryValid) {
+            continue;
+        }
+        e->latE6 = lroundf(meta.lat * 1000000.0f);
+        e->lonE6 = lroundf(meta.lon * 1000000.0f);
+        e->altM  = static_cast<int16_t>(constrain(meta.altitudeM, -1000.0f, 32000.0f));
+        e->hasGps = true;
+        gpsCount++;
+    }
+    if (DEBUG_SD_STORAGE) {
+        Serial.printf("SdStorage: index GPS pass — %u capture position(s)\n",
+                      static_cast<unsigned>(gpsCount));
+    }
+}
+
 void SdStorage::buildIndex() {
     galleryCount = 0;
     indexedVersion = indexVersion;   // single-threaded loop: no interleaving
@@ -530,6 +567,7 @@ void SdStorage::buildIndex() {
     dir.close();
 
     sortIndexDescending();
+    fillIndexGps();
 
     if (DEBUG_SD_STORAGE) {
         Serial.printf("SdStorage: gallery index built — %u image(s)%s\n",
@@ -572,6 +610,10 @@ void SdStorage::mergeIntoIndex(uint16_t id, uint8_t galleryFlags, uint32_t fullS
         e->hasThumbSidecar = false;
         e->hasFullSidecar = false;
         e->fullSize = 0;
+        e->hasGps = false;
+        e->latE6 = 0;
+        e->lonE6 = 0;
+        e->altM = 0;
     }
     if (galleryFlags & GF_FULL) {
         e->hasFull = true;

@@ -160,6 +160,7 @@ void handleWifiSwitch();
 void handleRequestFull();
 void handleSdClear();
 void handleApiState();
+void handleApiMarkers();
 void handleLeafletJs();
 void handleLeafletCss();
 void handleImage(const String& uri);
@@ -1225,12 +1226,49 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                 mapEls.leaflet.style.display = 'block';
                 mapEls.zoomInd.style.display = 'block';
                 updateZoomInd();
+                refreshCaptureMarkers();
                 mapState.leaf.invalidateSize();
                 // D-37 backstop: ~8 s with zero successful tiles escalates
-                // toward the offline fallback (chain: local -> OSM -> canvas);
-                // hard tile errors arm the same chain sooner (2.5 s)
+                // to the offline fallback (local layer dead -> canvas);
+                // hard tile errors arm the same clock sooner (2.5 s)
                 armEscalate(8000);
             }
+        }
+
+        // Capture markers (feature: capture-position markers): one small
+        // circle per GPS-tagged capture, banded by capture altitude to read
+        // as part of the track's altitude language; clicking one opens the
+        // SAME detail card as tapping a gallery thumbnail. Sourced from
+        // /api/markers (boot-index truth — no per-marker IO); refreshed
+        // when the map first shows and whenever the gallery list refetches,
+        // so new arrivals appear on the next gallery interaction.
+        const captureMarkers = { group: null, raw: [] };
+        function refreshCaptureMarkers() {
+            fetch('/api/markers', { cache: 'no-store' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (j) {
+                    captureMarkers.raw = (j && j.m) || [];
+                    drawCaptureMarkers();
+                })
+                .catch(function () { /* markers are additive — stay silent */ });
+        }
+        function drawCaptureMarkers() {
+            if (!mapState.leaf) return;
+            if (!captureMarkers.group) {
+                captureMarkers.group = L.layerGroup().addTo(mapState.leaf);
+            }
+            captureMarkers.group.clearLayers();
+            captureMarkers.raw.forEach(function (m) {
+                L.circleMarker([m[1] / 1e6, m[2] / 1e6], {
+                    radius: 6,
+                    color: '#0f172a',
+                    weight: 2,
+                    fillColor: bandColor(m[3]),
+                    fillOpacity: 0.95
+                }).bindTooltip('Image #' + m[0])
+                  .on('click', function () { openGalleryDetail(m[0]); })
+                  .addTo(captureMarkers.group);
+            });
         }
 
         // Track polylines — altitude-banded, rebuilt ONLY when trajCount
@@ -2007,6 +2045,9 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
         }
 
         function renderGalleryList(j) {
+            // Gallery activity doubles as the marker refresh trigger — new
+            // arrivals reach the map on the next gallery render
+            refreshCaptureMarkers();
             const empty = document.getElementById('gallery-empty');
             const grid = document.getElementById('gallery-grid');
             const pager = document.getElementById('gallery-pager');
@@ -2819,6 +2860,7 @@ void initWebServer() {
     // transfers inside the handler. POST-only (never a GET side effect).
     server.on("/sd-clear", HTTP_POST, handleSdClear);
     server.on("/api/state", HTTP_GET, handleApiState);
+    server.on("/api/markers", HTTP_GET, handleApiMarkers);
     server.on("/status", HTTP_GET, handleApiState);  // legacy alias — same serializer
     server.on("/gallery", HTTP_GET, handleGalleryList);  // /gallery/{id} rides handleNotFound (parameter)
     // Embedded Leaflet (WEB-02): gzipped PROGMEM assets with Content-Encoding
@@ -4187,6 +4229,38 @@ void handleApiState() {
                    (unsigned)json.length(), beacon.valid ? 1 : 0,
                    (unsigned)beacon.seq);
 
+    server.send(200, "application/json", json);
+}
+
+// GET /api/markers (feature: capture markers) — compact [id,latE6,lonE6,altM]
+// rows for every indexed image whose sidecar carried a valid telemetry
+// triple. Pure RAM index serialization: the GPS pass at boot already paid
+// the sidecar reads, so this handler does zero file IO. Coordinates ship
+// as integer micro-degrees to keep the payload small and formatting cheap;
+// the client divides.
+void handleApiMarkers() {
+    SdStorage& sd = SDStorage();
+    const uint16_t total = sd.getTotalCount();
+    String json = "{\"m\":[";
+    bool first = true;
+    SdGalleryEntry buf[SD_GALLERY_PAGE_SIZE];
+    const uint16_t pages =
+        static_cast<uint16_t>((total + SD_GALLERY_PAGE_SIZE - 1) / SD_GALLERY_PAGE_SIZE);
+    for (uint16_t p = 1; p <= pages; p++) {
+        const uint8_t n = sd.getIndexPage(p, buf, SD_GALLERY_PAGE_SIZE);
+        for (uint8_t i = 0; i < n; i++) {
+            if (!buf[i].hasGps) {
+                continue;
+            }
+            if (!first) {
+                json += ",";
+            }
+            first = false;
+            json += "[" + String(buf[i].id) + "," + String(buf[i].latE6) + "," +
+                    String(buf[i].lonE6) + "," + String(buf[i].altM) + "]";
+        }
+    }
+    json += "]}";
     server.send(200, "application/json", json);
 }
 

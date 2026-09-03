@@ -96,6 +96,15 @@ struct SdGalleryEntry {
     bool     hasThumbSidecar;  // IMG_{id}_T.JSON exists
     bool     hasFullSidecar;   // IMG_{id}.JSON exists
     uint32_t fullSize;         // IMG_{id}.JPG size in bytes (0 when absent)
+
+    // Capture position (feature: capture markers) — filled by the
+    // post-sort index pass reading one sidecar per image. hasGps is false
+    // unless the sidecar carried a valid telemetry triple; the base
+    // stamped lat/lon/alt at finalize from the then-latest beacon.
+    bool     hasGps;
+    int32_t  latE6;            // degrees * 1e6
+    int32_t  lonE6;
+    int16_t  altM;
 };
 
 // Index capacity — an EDITABLE constant. ~1000 images ≈ 5.5 h at the 20 s
@@ -256,7 +265,7 @@ private:
     uint32_t thumbPersistedBytes;
 
     // RAM gallery index (03-04): fixed static array sorted descending by id
-    // (~12 B × 1000 = ~12 KB — static storage, no heap)
+    // (~24 B × 1000 with GPS fields = ~24 KB — static storage, no heap)
     SdGalleryEntry galleryIndex[SD_GALLERY_MAX_ENTRIES];
     uint16_t       galleryCount;     // live entries in galleryIndex
     uint32_t       indexVersion;     // bumped by finalizeImage (both kinds)
@@ -266,6 +275,11 @@ private:
     // or evicting-at-cap as needed — the cap keeps the NEWEST entries).
     void mergeIntoIndex(uint16_t id, uint8_t galleryFlags, uint32_t fullSize);
     void sortIndexDescending();
+
+    // Post-sort pass: one sidecar read per indexed image fills the capture
+    // position (lat/lon/alt stamped at finalize). Paid once at boot so the
+    // map's marker endpoint never touches sidecar IO per request.
+    void fillIndexGps();
 
     void degrade(const char* reason);
     void fileFor(uint8_t kind, File** out, uint16_t** outId, uint32_t** outPersisted);
