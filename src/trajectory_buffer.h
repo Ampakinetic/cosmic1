@@ -43,6 +43,11 @@ public:
     // point when the beacon seq advances with a valid GPS fix.
     void process();
 
+    // Mission start (feature: missions): wipe the ring so the live track
+    // shows THIS flight only — the previous flight lives in its mission's
+    // track.jsonl on the card
+    void reset();
+
     // Live point count (0..TRAJ_MAX_POINTS)
     uint16_t getCount() const { return count; }
 

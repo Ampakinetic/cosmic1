@@ -50,6 +50,10 @@ struct SdImageMetadata {
     int8_t   exposure;
     uint8_t  wbMode;
 
+    // Mission provenance (feature: missions) — the base-stamps active
+    // mission id at finalize; 0 = no mission was active
+    uint16_t missionId;
+
     // Chunk accounting (bitmap truth from ImageRxManager)
     uint16_t chunksReceived;
     uint16_t chunksTotal;
@@ -78,7 +82,8 @@ static constexpr uint16_t SD_SC_PRESENT_TELEMETRY   = 0x0004;  // altitude/lat/l
 static constexpr uint16_t SD_SC_PRESENT_CAMERA      = 0x0008;  // cameraSettings{}
 static constexpr uint16_t SD_SC_PRESENT_CHUNKS      = 0x0010;  // chunks n/m
 static constexpr uint16_t SD_SC_PRESENT_COMPLETE    = 0x0020;  // complete
-static constexpr uint16_t SD_SC_PRESENT_STORED      = 0x0040;  // storedToSd
+static constexpr uint16_t SD_SC_PRESENT_STORED      = 0x0040;
+static constexpr uint16_t SD_SC_PRESENT_MISSION     = 0x0080;  // missionId  // storedToSd
 
 // ===========================
 // Gallery Index (IMG-06, 03-04)
@@ -105,6 +110,10 @@ struct SdGalleryEntry {
     int32_t  latE6;            // degrees * 1e6
     int32_t  lonE6;
     int16_t  altM;
+
+    // Mission provenance (feature: missions) — 0 = captured outside any
+    // mission or the sidecar predates the field
+    uint16_t missionId;
 };
 
 // Index capacity — an EDITABLE constant. ~1000 images ≈ 5.5 h at the 20 s

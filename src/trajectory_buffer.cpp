@@ -1,4 +1,5 @@
 #include "trajectory_buffer.h"
+#include "mission_manager.h"   // mission track tee (feature: missions)
 
 // ===========================
 // Static Instance
@@ -63,12 +64,25 @@ void TrajectoryBuffer::process() {
 
     // Store at wire precision: degrees x 1e6 (same scale the beacon
     // carries) and whole meters — no float kept per point.
-    append(lroundf(snap.lat * 1e6f),
-           lroundf(snap.lon * 1e6f),
-           lroundf(snap.altitudeM));
+    const int32_t latE6 = lroundf(snap.lat * 1e6f);
+    const int32_t lonE6 = lroundf(snap.lon * 1e6f);
+    const int32_t altM  = lroundf(snap.altitudeM);
+    append(latE6, lonE6, altM);
+
+    // Mission tee (feature: missions): an active mission persists every
+    // fix to its track.jsonl — the flight log survives reboots, unlike
+    // this RAM ring
+    MISSIONS().logTrackPoint(latE6, lonE6, altM);
 
     lastRecordedSeq = snap.seq;
     hasLastSeq = true;
+}
+
+void TrajectoryBuffer::reset() {
+    head = 0;
+    count = 0;
+    lastRecordedSeq = 0;
+    hasLastSeq = false;
 }
 
 void TrajectoryBuffer::append(int32_t latE6, int32_t lonE6, int32_t altM) {

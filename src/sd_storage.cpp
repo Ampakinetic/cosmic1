@@ -1,5 +1,6 @@
 #include "sd_storage.h"
 #include "base_station_config.h"   // SD_CLK_PIN / SD_CMD_PIN / SD_DATA_PIN
+#include "mission_manager.h"       // mission provenance + capture tee (feature: missions)
 
 // Debug configuration
 #ifndef DEBUG_SD_STORAGE
@@ -327,6 +328,10 @@ bool SdStorage::finalizeImage(const SdImageMetadata& meta) {
     // never claim a newer image's persisted bytes.
     SdImageMetadata m = meta;
     m.storedToSd = (*handleId == meta.imageId) && (*persistedBytes > 0);
+    // Mission provenance (feature: missions): stamp the active mission id
+    // into the sidecar so the gallery can filter by mission without any
+    // extra storage pass. 0 = captured outside a mission.
+    m.missionId = static_cast<uint16_t>(MISSIONS().activeId());
 
     bool ok = writeSidecar(m);
     Serial.printf("SdStorage: finalized %s (%u/%u chunks, %u B persisted, complete=%s)%s\n",
@@ -334,6 +339,13 @@ bool SdStorage::finalizeImage(const SdImageMetadata& meta) {
                   static_cast<unsigned>(*persistedBytes),
                   meta.complete ? "true" : "false",
                   ok ? "" : " — SIDECAR WRITE FAILED");
+    // Mission event tee: one capture event per COMPLETED image (the full
+    // kind finalizes once; thumbnails finalize separately and would
+    // double-log). Logged on the finalize call itself — the capture
+    // happened whether or not the sidecar write landed.
+    if (m.kind == static_cast<uint8_t>(ImageKind::FULL_IMAGE)) {
+        MISSIONS().logCapture(m.imageId);
+    }
     return ok;
 }
 
@@ -375,6 +387,12 @@ bool SdStorage::writeSidecar(const SdImageMetadata& meta) {
         json += "\"lon\":" + String(meta.lon, 6) + ",";
     } else {
         json += "\"altitudeM\":null,\"lat\":null,\"lon\":null,";
+    }
+
+    // Mission provenance (feature: missions) — emitted only when captured
+    // inside a mission (absent-field omission, D-47 discipline)
+    if (meta.missionId != 0) {
+        json += "\"missionId\":" + String(static_cast<unsigned>(meta.missionId)) + ",";
     }
 
     json += "\"cameraSettings\":{";
@@ -506,6 +524,7 @@ void SdStorage::fillIndexGps() {
     for (uint16_t i = 0; i < galleryCount; i++) {
         SdGalleryEntry* e = &galleryIndex[i];
         e->hasGps = false;
+        e->missionId = 0;
         if (!e->hasFullSidecar && !e->hasThumbSidecar) {
             continue;
         }
@@ -514,6 +533,11 @@ void SdStorage::fillIndexGps() {
         const bool thumb = !e->hasFullSidecar;
         if (!readSidecarMeta(e->id, thumb, &meta)) {
             continue;
+        }
+        // Mission provenance is independent of the GPS triple — an image
+        // captured inside a mission without a fix still belongs to it
+        if ((meta.present & SD_SC_PRESENT_MISSION) != 0) {
+            e->missionId = meta.missionId;
         }
         if ((meta.present & SD_SC_PRESENT_TELEMETRY) == 0 || !meta.telemetryValid) {
             continue;
@@ -614,6 +638,7 @@ void SdStorage::mergeIntoIndex(uint16_t id, uint8_t galleryFlags, uint32_t fullS
         e->latE6 = 0;
         e->lonE6 = 0;
         e->altM = 0;
+        e->missionId = 0;
     }
     if (galleryFlags & GF_FULL) {
         e->hasFull = true;
@@ -883,6 +908,14 @@ bool SdStorage::readSidecarMeta(uint16_t imageId, bool thumb, SdImageMetadata* o
         out->altitudeM = alt;
         out->telemetryValid = true;   // doubles as the detail view's gpsValid
         out->present |= SD_SC_PRESENT_TELEMETRY;
+    }
+
+    // Mission provenance (feature: missions) — present only on sidecars
+    // written while a mission was active
+    pos = jsonValuePos(buf, "missionId");
+    if (pos >= 0 && jsonUintAt(buf, pos, 0xFFFFFFFFUL, &u)) {
+        out->missionId = static_cast<uint16_t>(u);
+        out->present |= SD_SC_PRESENT_MISSION;
     }
 
     // Camera settings: the writer always emits the 7-field block as a unit —

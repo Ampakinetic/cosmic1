@@ -20,6 +20,7 @@
 #include "sd_storage.h"
 #include "trajectory_buffer.h"
 #include "alert_engine.h"
+#include "mission_manager.h"
 #include "wifi_manager.h"
 #include "web_assets.h"
 #include "status_display.h"
@@ -161,6 +162,10 @@ void handleRequestFull();
 void handleSdClear();
 void handleApiState();
 void handleApiMarkers();
+void handleApiMission();
+void handleMissionStart();
+void handleMissionEnd();
+void handleMissionFile(const String& uri);
 void handleLeafletJs();
 void handleLeafletCss();
 void handleImage(const String& uri);
@@ -1242,7 +1247,7 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
         // /api/markers (boot-index truth — no per-marker IO); refreshed
         // when the map first shows and whenever the gallery list refetches,
         // so new arrivals appear on the next gallery interaction.
-        const captureMarkers = { group: null, raw: [] };
+        const captureMarkers = { group: null, raw: [], missionFilter: 0 };
         function refreshCaptureMarkers() {
             fetch('/api/markers', { cache: 'no-store' })
                 .then(function (r) { return r.ok ? r.json() : null; })
@@ -1259,6 +1264,10 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             }
             captureMarkers.group.clearLayers();
             captureMarkers.raw.forEach(function (m) {
+                // Mission replay filters the markers to that mission's
+                // captures; live view shows everything (m[4] = missionId)
+                if (captureMarkers.missionFilter &&
+                        (m[4] || 0) !== captureMarkers.missionFilter) return;
                 L.circleMarker([m[1] / 1e6, m[2] / 1e6], {
                     radius: 6,
                     color: '#0f172a',
@@ -1270,6 +1279,255 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                   .addTo(captureMarkers.group);
             });
         }
+
+        // ---------- missions (feature: missions) ----------
+        // Lifecycle panel + replay. Replay feeds the SAME renderers the
+        // live view uses (rebuildTrack / updateMarker / setView) with a
+        // synthetic time cursor — one data path, two sources. While replay
+        // is on, live map rendering pauses (telemetry keeps flowing into
+        // lastTraj; exiting replay restores the live view immediately).
+        const missionState = {
+            replayOn: false, pts: [], evs: [], t0: 0, t1: 0,
+            cursor: 0, timer: null
+        };
+        const REPLAY_TICK_MS = 100;
+        const REPLAY_SPEED = 60;   // play advances mission time at 60x — a
+                                   // 3 h flight scrubs through in ~3 min
+        function msToClock(ms) {
+            const s = Math.max(0, Math.floor(ms / 1000));
+            return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+        }
+
+        function loadMissionPanel() {
+            fetch('/api/mission', { cache: 'no-store' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (j) {
+                    if (!j) return;
+                    const st = document.getElementById('mission-status');
+                    if (j.active) {
+                        st.textContent = '● Recording "' + j.active.name +
+                                         '" (mission ' + j.active.id + ')';
+                        st.style.color = '#22c55e';
+                    } else {
+                        st.textContent = 'No active mission';
+                        st.style.color = '#94a3b8';
+                    }
+                    const sel = document.getElementById('replay-select');
+                    sel.innerHTML = '';
+                    (j.missions || []).forEach(function (m) {
+                        const opt = document.createElement('option');
+                        opt.value = m.id;
+                        opt.textContent = m.name +
+                            (m.durMs >= 0 ? ' — ' + msToClock(m.durMs) : ' (open)');
+                        sel.appendChild(opt);
+                    });
+                })
+                .catch(function () { });
+        }
+
+        function missionMsg(text, ok) {
+            const el = document.getElementById('mission-msg');
+            el.textContent = text;
+            el.style.display = 'inline';
+            el.style.color = ok ? '#22c55e' : '#fbbf24';
+            setTimeout(function () { el.style.display = 'none'; }, 4000);
+        }
+
+        document.getElementById('mission-start').addEventListener('click', function () {
+            const name = document.getElementById('mission-name').value || '';
+            fetch('/mission/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'name=' + encodeURIComponent(name)
+            }).then(function (r) { return r.json(); }).then(function (j) {
+                missionMsg(j.message || j.status, j.status === 'OK');
+                if (j.status === 'OK') loadMissionPanel();
+            }).catch(function () { missionMsg('Request failed', false); });
+        });
+
+        document.getElementById('mission-end').addEventListener('click', function () {
+            fetch('/mission/end', { method: 'POST' })
+                .then(function (r) { return r.json(); }).then(function (j) {
+                    missionMsg(j.message || j.status, j.status === 'OK');
+                    if (j.status === 'OK') loadMissionPanel();
+                }).catch(function () { missionMsg('Request failed', false); });
+        });
+
+        // Map surface on demand — replay can start before any live GPS fix
+        // has ever shown the map (initLeaflet + the show lines of
+        // showMapSurface, without the live-data precondition)
+        function ensureMapSurface() {
+            if (mapState.surfaceShown) {
+                if (mapState.leaf) mapState.leaf.invalidateSize();
+                return;
+            }
+            if (typeof L === 'undefined') return;
+            initLeaflet();
+            if (!mapState.leaf) return;
+            mapState.surfaceShown = true;
+            mapEls.waiting.style.display = 'none';
+            mapEls.leaflet.style.display = 'block';
+            mapEls.zoomInd.style.display = 'block';
+            refreshCaptureMarkers();
+            mapState.leaf.invalidateSize();
+        }
+
+        function applyReplayCursor() {
+            const t = missionState.t0 + missionState.cursor;
+            // Sub-track up to the cursor, strided into the 500-point render
+            // budget when the mission holds more points than that
+            const sub = [];
+            const n = missionState.pts.length;
+            let count = 0;
+            for (let i = 0; i < n; i++) {
+                if (missionState.pts[i].t <= t) count++;
+            }
+            const stride = count > 500 ? count / 500 : 1;
+            let nextIdx = -1;
+            for (let i = 0; i < n && sub.length < 500; i++) {
+                if (missionState.pts[i].t <= t && i >= nextIdx) {
+                    sub.push([missionState.pts[i].la, missionState.pts[i].lo,
+                              missionState.pts[i].al]);
+                    nextIdx = i + Math.max(1, Math.floor(stride));
+                }
+            }
+            if (mapState.leaf) {
+                rebuildTrack(sub);
+                if (sub.length) {
+                    const last = sub[sub.length - 1];
+                    updateMarker(last);
+                    mapState.programmaticView = true;
+                    mapState.leaf.setView([last[0], last[1]], mapState.leaf.getZoom());
+                    mapState.programmaticView = false;
+                }
+            }
+            const shown = [];
+            missionState.evs.forEach(function (e) {
+                if (e.t <= t) shown.push(msToClock(e.t - missionState.t0) + '  ' + e.label);
+            });
+            const evBox = document.getElementById('replay-events');
+            evBox.textContent = shown.length
+                ? shown.join('\n') : 'No events in this window';
+            document.getElementById('replay-time').textContent =
+                msToClock(missionState.cursor) + ' / ' +
+                msToClock(missionState.t1 - missionState.t0) +
+                '  (' + sub.length + ' pts, ' + shown.length + ' events)';
+        }
+
+        function replayTick() {
+            missionState.cursor += REPLAY_TICK_MS * REPLAY_SPEED;
+            const span = missionState.t1 - missionState.t0;
+            if (missionState.cursor >= span) {
+                missionState.cursor = span;
+                clearInterval(missionState.timer);
+                missionState.timer = null;
+                document.getElementById('replay-play').textContent = 'Play';
+            }
+            document.getElementById('replay-scrub').value = missionState.cursor;
+            applyReplayCursor();
+        }
+
+        function exitReplay() {
+            if (missionState.timer) {
+                clearInterval(missionState.timer);
+                missionState.timer = null;
+            }
+            missionState.replayOn = false;
+            document.getElementById('replay-card').style.display = 'none';
+            captureMarkers.missionFilter = 0;
+            drawCaptureMarkers();
+            // Restore the live view from the retained trajectory
+            if (mapState.leaf) {
+                rebuildTrack(mapState.lastTraj || []);
+                if (mapState.newest) updateMarker(mapState.newest);
+                mapState.leaf.invalidateSize();
+            }
+        }
+
+        function loadReplay(id) {
+            Promise.all([
+                fetch('/mission/' + id + '/track', { cache: 'no-store' })
+                    .then(function (r) { return r.ok ? r.text() : ''; }),
+                fetch('/mission/' + id + '/events', { cache: 'no-store' })
+                    .then(function (r) { return r.ok ? r.text() : ''; })
+            ]).then(function (res) {
+                const pts = [];
+                res[0].split('\n').forEach(function (line) {
+                    if (!line.trim()) return;
+                    try {
+                        const o = JSON.parse(line);
+                        if (typeof o.t === 'number' && typeof o.lat === 'number') {
+                            pts.push({ t: o.t, la: o.lat, lo: o.lon, al: o.alt });
+                        }
+                    } catch (e) { }
+                });
+                if (pts.length < 2) {
+                    missionMsg('Mission has no track data yet', false);
+                    return;
+                }
+                const evs = [];
+                res[1].split('\n').forEach(function (line) {
+                    if (!line.trim()) return;
+                    try {
+                        const o = JSON.parse(line);
+                        let label = '';
+                        if (o.k === 'cap') label = '📸 Capture #' + o.id;
+                        else if (o.k === 'alert') label = '⚠️ Alert type ' + o.ty;
+                        else if (o.k === 'ack') label = '✅ Alert ' + o.ty + ' acknowledged';
+                        else if (o.k === 'start') label = '🚀 Mission started';
+                        else if (o.k === 'end') label = '⏹ Mission ended';
+                        if (label) evs.push({ t: o.t, label: label });
+                    } catch (e) { }
+                });
+                missionState.pts = pts;
+                missionState.evs = evs;
+                missionState.t0 = pts[0].t;
+                missionState.t1 = pts[pts.length - 1].t;
+                missionState.cursor = 0;
+                missionState.replayOn = true;
+                captureMarkers.missionFilter = Number(id);
+                ensureMapSurface();
+                drawCaptureMarkers();
+                document.getElementById('replay-card').style.display = 'block';
+                const scrub = document.getElementById('replay-scrub');
+                scrub.max = String(missionState.t1 - missionState.t0);
+                scrub.value = '0';
+                scrub.disabled = false;
+                document.getElementById('replay-events').style.display = 'block';
+                document.getElementById('replay-play').textContent = 'Play';
+                applyReplayCursor();
+                missionMsg('Replay loaded — ' + pts.length + ' points', true);
+            }).catch(function () { missionMsg('Replay load failed', false); });
+        }
+
+        document.getElementById('replay-load').addEventListener('click', function () {
+            const sel = document.getElementById('replay-select');
+            if (sel.value) loadReplay(sel.value);
+        });
+        document.getElementById('replay-play').addEventListener('click', function () {
+            if (missionState.timer) {
+                clearInterval(missionState.timer);
+                missionState.timer = null;
+                this.textContent = 'Play';
+            } else {
+                if (missionState.cursor >= missionState.t1 - missionState.t0) {
+                    missionState.cursor = 0;
+                }
+                missionState.timer = setInterval(replayTick, REPLAY_TICK_MS);
+                this.textContent = 'Pause';
+            }
+        });
+        document.getElementById('replay-scrub').addEventListener('input', function () {
+            if (missionState.timer) {
+                clearInterval(missionState.timer);
+                missionState.timer = null;
+                document.getElementById('replay-play').textContent = 'Play';
+            }
+            missionState.cursor = Number(this.value);
+            applyReplayCursor();
+        });
+        document.getElementById('replay-exit').addEventListener('click', exitReplay);
+        loadMissionPanel();
 
         // Track polylines — altitude-banded, rebuilt ONLY when trajCount
         // changes (D-36 diff discipline); 1 point renders a marker only
@@ -1398,6 +1656,11 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             // message renders (no marker, no track, no tiles requested)
             if (!data.trajCount || traj.length === 0) return;
             mapState.lastTraj = traj;
+
+            // Replay holds the painted map: live telemetry keeps flowing
+            // into lastTraj, but the surface belongs to the replay cursor
+            // until Exit replay
+            if (missionState.replayOn) return;
 
             showMapSurface();
 
@@ -2702,6 +2965,22 @@ void loop() {
     if (millis() - appState.lastAlertTickMs >= ALERT_PROCESS_INTERVAL_MS) {
         appState.lastAlertTickMs = millis();
         Alerts().process();
+
+        // Mission event tee (feature: missions): newly-active alert rows
+        // are logged once — edge detection against the previous poll's
+        // type bitmask. Acks are logged at their own endpoint.
+        static uint16_t lastAlertMask = 0;
+        AlertRow alertRows[ALERT_TYPE_COUNT];
+        const uint8_t rowCount = Alerts().getAlertSnapshot(alertRows, ALERT_TYPE_COUNT);
+        uint16_t mask = 0;
+        for (uint8_t i = 0; i < rowCount; i++) {
+            const uint8_t type = static_cast<uint8_t>(alertRows[i].type);
+            mask |= static_cast<uint16_t>(1u << type);
+            if (!(lastAlertMask & (1u << type))) {
+                MISSIONS().logAlert(type, false);
+            }
+        }
+        lastAlertMask = mask;
     }
 
     // Physical status LED mirrors the computed link truth (WR-10 / IN-03)
@@ -2828,6 +3107,10 @@ void initStorage() {
     } else {
         Serial.println("  SD storage degraded — storing stopped, existing files kept");
     }
+
+    // Feature: missions — after SdStorage (owns the mount). Resumes an
+    // interrupted active mission if /missions/ACTIVE says one was open.
+    MISSIONS().begin();
 }
 
 void initWebServer() {
@@ -2861,6 +3144,9 @@ void initWebServer() {
     server.on("/sd-clear", HTTP_POST, handleSdClear);
     server.on("/api/state", HTTP_GET, handleApiState);
     server.on("/api/markers", HTTP_GET, handleApiMarkers);
+    server.on("/api/mission", HTTP_GET, handleApiMission);
+    server.on("/mission/start", HTTP_POST, handleMissionStart);
+    server.on("/mission/end", HTTP_POST, handleMissionEnd);
     server.on("/status", HTTP_GET, handleApiState);  // legacy alias — same serializer
     server.on("/gallery", HTTP_GET, handleGalleryList);  // /gallery/{id} rides handleNotFound (parameter)
     // Embedded Leaflet (WEB-02): gzipped PROGMEM assets with Content-Encoding
@@ -3344,6 +3630,37 @@ void handleRoot() {
     html += "<div id=\"transfer-list\"></div>";
     html += "</div>";
 
+    html += "</section>";
+
+    // ---- Mission section (feature: missions) ----
+    // Named flight bundling: start/end a mission and its track, capture and
+    // alert events stream to /missions/<id>/*.jsonl on the card; new image
+    // sidecars carry the mission id so the gallery (and the map markers)
+    // can filter by mission. The replay card animates a stored mission
+    // through the SAME map renderers the live view uses.
+    html += "<section id=\"mission\">";
+    html += "<div class=\"card\">";
+    html += "<h2>🚀 Mission</h2>";
+    html += "<div class=\"status-value\" id=\"mission-status\">Loading…</div>";
+    html += "<div class=\"mission-controls\">";
+    html += "<input id=\"mission-name\" type=\"text\" maxlength=\"24\" placeholder=\"Mission name\" style=\"max-width:200px;\">";
+    html += "<button type=\"button\" id=\"mission-start\">Start mission</button>";
+    html += "<button type=\"button\" id=\"mission-end\">End mission</button>";
+    html += "<span id=\"mission-msg\" class=\"message info\" style=\"display:none;\"></span>";
+    html += "</div>";
+    html += "</div>";
+    html += "<div class=\"card\" id=\"replay-card\" style=\"display:none;\">";
+    html += "<h2>⏮ Mission Replay</h2>";
+    html += "<div class=\"mission-controls\">";
+    html += "<select id=\"replay-select\" style=\"max-width:220px;\"></select>";
+    html += "<button type=\"button\" id=\"replay-load\">Load</button>";
+    html += "<button type=\"button\" id=\"replay-play\" disabled>Play</button>";
+    html += "<button type=\"button\" id=\"replay-exit\">Exit replay</button>";
+    html += "</div>";
+    html += "<input type=\"range\" id=\"replay-scrub\" min=\"0\" max=\"0\" value=\"0\" style=\"width:100%;\" disabled>";
+    html += "<div id=\"replay-time\" class=\"status-label\">—</div>";
+    html += "<div id=\"replay-events\" class=\"message info\" style=\"max-height:110px;overflow-y:auto;display:none;\"></div>";
+    html += "</div>";
     html += "</section>";
 
     // ---- Image Gallery section (D-45: gallery LAST; IMG-06, D-46..D-48) ----
@@ -3873,6 +4190,7 @@ void handleAlertAck() {
         return;
     }
     Alerts().ack(static_cast<AlertType>(type));
+    MISSIONS().logAlert(static_cast<uint8_t>(type), true);   // mission event tee
     sendResponse(200, "OK", "Alert acknowledged");
 }
 
@@ -4257,11 +4575,107 @@ void handleApiMarkers() {
             }
             first = false;
             json += "[" + String(buf[i].id) + "," + String(buf[i].latE6) + "," +
-                    String(buf[i].lonE6) + "," + String(buf[i].altM) + "]";
+                    String(buf[i].lonE6) + "," + String(buf[i].altM) + "," +
+                    String(buf[i].missionId) + "]";
         }
     }
     json += "]}";
     server.send(200, "application/json", json);
+}
+
+// POST /mission/start?name=... (feature: missions) — opens a named
+// mission; on success the live trajectory ring resets so the map shows
+// THIS flight only. The name is sanitized to the manager's allowlist and
+// may legitimately come back as "Mission-N" when empty.
+void handleMissionStart() {
+    if (MISSIONS().active()) {
+        sendResponse(409, "Error", "A mission is already active — end it first");
+        return;
+    }
+    String name = server.hasArg("name") ? server.arg("name") : "";
+    uint32_t id = 0;
+    if (!MISSIONS().start(name.c_str(), &id)) {
+        sendResponse(500, "Error", "Mission start failed (SD card unavailable?)");
+        return;
+    }
+    Trajectory().reset();   // fresh ring: the live track is THIS flight
+    sendResponse(200, "OK", "Mission started");
+}
+
+// POST /mission/end (feature: missions) — closes the active mission.
+// The track/events files close; the mission becomes replayable.
+void handleMissionEnd() {
+    if (!MISSIONS().active()) {
+        sendResponse(409, "Error", "No mission is active");
+        return;
+    }
+    MISSIONS().end();
+    sendResponse(200, "OK", "Mission ended");
+}
+
+// GET /api/mission (feature: missions) — active mission + folded mission
+// list from the SD registry. Served on demand (mission panel load and
+// after start/end), never polled.
+void handleApiMission() {
+    server.send(200, "application/json", MISSIONS().serializeStatus());
+}
+
+// GET /mission/{id}/{track|events} (feature: missions) — streams the
+// mission's NDJSON log straight off the SD card. Same allowlist
+// discipline as handleMaps: strictly numeric id, exactly two known
+// tails, fixed extension — no user string ever reaches a path.
+void handleMissionFile(const String& uri) {
+    static const char PREFIX[] = "/mission/";
+    if (!uri.startsWith(PREFIX)) {
+        sendResponse(404, "Not Found", "Unknown mission path");
+        return;
+    }
+    String rest = uri.substring(strlen(PREFIX));
+
+    const int s1 = rest.indexOf('/');
+    if (s1 < 0) {
+        sendResponse(404, "Not Found", "Malformed mission path");
+        return;
+    }
+    String idStr  = rest.substring(0, s1);
+    String tail   = rest.substring(s1 + 1);
+
+    if (idStr.length() == 0 || idStr.length() > 6) {
+        sendResponse(404, "Not Found", "Invalid mission id");
+        return;
+    }
+    for (unsigned int i = 0; i < idStr.length(); i++) {
+        if (!isDigit(idStr.charAt(i))) {
+            sendResponse(404, "Not Found", "Invalid mission id");
+            return;
+        }
+    }
+    const unsigned long id = strtoul(idStr.c_str(), nullptr, 10);
+    if (id == 0 || id > 999999) {
+        sendResponse(404, "Not Found", "Invalid mission id");
+        return;
+    }
+
+    const char* file;
+    if (tail == "track") {
+        file = "track";
+    } else if (tail == "events") {
+        file = "events";
+    } else {
+        sendResponse(404, "Not Found", "Unknown mission file");
+        return;
+    }
+
+    String path = "/missions/" + String(static_cast<unsigned long>(id)) + "/" +
+                  file + ".jsonl";
+    File f = SD_MMC.open(path, FILE_READ);
+    if (!f) {
+        sendResponse(404, "Not Found", "Mission log not on SD");
+        return;
+    }
+    server.sendHeader("Cache-Control", "no-cache");
+    server.streamFile(f, "application/json");
+    f.close();
 }
 
 // GET /leaflet.js and GET /leaflet.css (WEB-02): the vendored Leaflet 1.9.4
@@ -4704,6 +5118,10 @@ void handleNotFound() {
     }
     if (server.method() == HTTP_GET && uri.startsWith("/maps/")) {
         handleMaps(uri);
+        return;
+    }
+    if (server.method() == HTTP_GET && uri.startsWith("/mission/")) {
+        handleMissionFile(uri);
         return;
     }
 
