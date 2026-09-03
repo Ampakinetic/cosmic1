@@ -12,3 +12,11 @@
 .pio/build/esp32dev/FrameworkArduino/firmware_msc_fat.c.o
 include/wifi_config.h
 .pio/build/project.checksum
+
+# Offline basemap tiles for the SD card (scripts/fetch_nz_maps.mjs output +
+# land-mask cache) — gigabytes of third-party imagery, never versioned
+maps-sd/
+maps-work/
+
+# fetcher run logs (redirected into repo root by the caller)
+maps-work-*.log
