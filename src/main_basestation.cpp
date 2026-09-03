@@ -163,6 +163,7 @@ void handleApiState();
 void handleLeafletJs();
 void handleLeafletCss();
 void handleImage(const String& uri);
+void handleMaps(const String& uri);
 void handleGalleryList();
 void handleGalleryDetail(const String& uri);
 void handleNotFound();
@@ -373,6 +374,55 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             color: #fbbf24;
             font-size: 14px;
             font-weight: bold;
+        }
+        /* Offline-maps layer switcher: one pill per basemap the SD card (or
+           the internet) actually provides. Same pill grammar and locked
+           slate tokens as .map-offline-chip; the footer script renders the
+           buttons from /maps/manifest.json availability truth. */
+        .map-layer-chips {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            display: none;
+            z-index: 2000;
+            gap: 6px;
+        }
+        .map-layer-chips button {
+            padding: 2px 10px;
+            border-radius: 10px;
+            border: 1px solid #475569;
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .map-layer-chips button.active {
+            background: #334155;
+            color: #e2e8f0;
+            font-weight: bold;
+        }
+        /* Live zoom readout, bottom-right above the Leaflet attribution line
+           (the bottom-left corner belongs to the scale bar). Same pill
+           grammar as the layer chips. */
+        .map-zoom-ind {
+            position: absolute;
+            bottom: 34px;
+            right: 8px;
+            display: none;
+            z-index: 2000;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: #1e293b;
+            color: #94a3b8;
+            font-size: 14px;
+        }
+        /* Scale bar harmonized to the locked slate tokens (same obligation
+           as the attribution/zoom controls above) */
+        .leaflet-control-scale-line {
+            background: #1e293b;
+            color: #94a3b8;
+            border-color: #475569;
+            font-size: 14px;
         }
         /* Leaflet chrome harmonized to the locked tokens (UI-SPEC): the
            shipped ~12px attribution/zoom text moves to Body 14px on
@@ -911,13 +961,31 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
         }
 
         // ---------- map & trajectory (WEB-02, D-37/D-38/D-39) ----------
-        // Two render paths, ONE data path: the Leaflet/OSM view and the
-        // offline canvas fallback both consume the identical traj array
-        // from this poll payload — tile failure is a render swap, never a
-        // data change. Before the first valid GPS fix the waiting message
-        // is the only rendered state; a recorded fix only exists while
+        // Two render paths, ONE data path: the tiled view and the offline
+        // canvas fallback both consume the identical traj array from this
+        // poll payload — tile failure is a render swap, never a data
+        // change. Before the first valid GPS fix the waiting message is
+        // the only rendered state; a recorded fix only exists while
         // gpsValid was true, so no guessed or stale position ever renders.
-        const OSM_TILE_URL = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+        //
+        // Offline maps: every layer streams pre-fetched LINZ tiles (aerial
+        // webp + topo/hillshade png) from the base station SD card
+        // (/maps/..., firmware-served from scripts/fetch_nz_maps.mjs
+        // output) — the tablet reaches the base over its AP and may never
+        // have internet, so there is deliberately no online layer. Failure
+        // escalation: an active layer with ZERO loaded tiles flips to the
+        // D-37 canvas fallback after a short clock; a partially covered
+        // layer (holes at un-stored zooms) never escalates — gray holes are
+        // honest, a silent layer swap is not.
+        const MAP_LAYERS = {
+            aerial: { url: '/maps/aerial/{z}/{x}/{y}.{ext}', label: 'Satellite',
+                      attribution: 'NZ Aerial Imagery &copy; <a href="https://www.linz.govt.nz">LINZ</a> CC BY 4.0' },
+            topo:   { url: '/maps/topo/{z}/{x}/{y}.{ext}', label: 'Topo',
+                      attribution: 'NZ Topo Maps &copy; <a href="https://www.linz.govt.nz">LINZ</a> CC BY 4.0' },
+            hillshade: { url: '/maps/hillshade/{z}/{x}/{y}.{ext}', label: 'Hillshade',
+                         attribution: 'Hillshade &copy; <a href="https://www.linz.govt.nz">LINZ</a> CC BY 4.0' }
+        };
+        const LOCAL_LAYERS = ['aerial', 'topo', 'hillshade'];
         const BAND_GREEN = '#22c55e';   // altitude band: below 1000 m
         const BAND_AMBER = '#eab308';   // altitude band: 1000-3000 m
         const BAND_RED = '#ef4444';     // altitude band: above 3000 m
@@ -930,13 +998,16 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             leaflet: document.getElementById('map-leaflet'),
             canvas: document.getElementById('map-canvas'),
             recenter: document.getElementById('map-recenter'),
-            offline: document.getElementById('map-offline')
+            offline: document.getElementById('map-offline'),
+            chips: document.getElementById('map-layer-chips'),
+            zoomInd: document.getElementById('map-zoom-ind')
         };
         const mapState = {
-            leaf: null, osm: null, posMarker: null, trackLayers: [],
+            leaf: null, layer: null, tileLayer: null, posMarker: null, trackLayers: [],
             follow: true, offline: false, surfaceShown: false, firstFit: true,
             tilesOk: 0, programmaticView: false, lastTrajCount: -1,
-            lastTraj: null, newest: null, offlineRetryCount: 0
+            lastTraj: null, newest: null, offlineRetryCount: 0,
+            localAvailable: [], escalateTimer: null
         };
 
         // D-39: any user drag/zoom cancels auto-follow and reveals the
@@ -952,39 +1023,160 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             mapEls.recenter.style.display = 'none';
             if (mapState.leaf && mapState.newest) {
                 mapState.programmaticView = true;
-                mapState.leaf.setView(mapState.newest, Math.max(mapState.leaf.getZoom(), 13));
+                mapState.leaf.setView(mapState.newest, Math.max(mapState.leaf.getZoom(), 14));
                 mapState.programmaticView = false;
             }
         });
+
+        // Live zoom readout — the zoom the tiled view is actually showing
+        // (may exceed maxNativeZoom; over-zoom stretches the last native tile)
+        function updateZoomInd() {
+            if (!mapState.leaf) return;
+            mapEls.zoomInd.textContent = 'Zoom ' + mapState.leaf.getZoom();
+        }
+
+        // Escalation clock (D-37 generalized to the layer chain): started
+        // when the active layer fails tiles with ZERO ever loaded, cancelled
+        // by the first successful tile. On fire: a local layer drops to OSM
+        // (blank card / no coverage), OSM drops to the canvas fallback.
+        function clearEscalate() {
+            if (mapState.escalateTimer) {
+                clearTimeout(mapState.escalateTimer);
+                mapState.escalateTimer = null;
+            }
+        }
+        function armEscalate(delayMs) {
+            clearEscalate();
+            mapState.escalateTimer = setTimeout(function () {
+                mapState.escalateTimer = null;
+                if (mapState.tilesOk > 0 || mapState.offline) return;
+                // Every layer comes off the SD card now, so zero loaded
+                // tiles means blank card (or lost coverage) — straight to
+                // the canvas, with the diagnosis named
+                mapEls.offline.textContent =
+                    'SD map tiles unavailable — showing plotted track.';
+                setMapOffline(true);
+            }, delayMs);
+        }
+
+        // Layer swap in place — track, marker, view and the one-data-path
+        // contract are untouched; only the basemap tiles move. The manifest
+        // clamps each local layer to the zooms the card actually carries so
+        // uncovered zooms are unreachable rather than gray (Leaflet over-
+        // zooms the last native tile via maxNativeZoom).
+        function switchLayer(id) {
+            if (!mapState.leaf || !MAP_LAYERS[id] || id === mapState.layer) return;
+            clearEscalate();
+            if (mapState.tileLayer) mapState.leaf.removeLayer(mapState.tileLayer);
+            mapState.layer = id;
+            mapState.tilesOk = 0;
+            const def = MAP_LAYERS[id];
+            // On-card extension is per-layer manifest truth (webp from the
+            // keyless aerial fetcher, png from the LDS topo CDN); default
+            // webp keeps the pre-manifest optimistic load coherent
+            const m0 = (mapState.manifest && mapState.manifest.layers)
+                ? mapState.manifest.layers[id] : null;
+            const ext = (m0 && m0.ext) ? m0.ext : 'webp';
+            const opts = { attribution: def.attribution };
+            // Tablet screens are 2x device-pixel-ratio: without detectRetina
+            // every 256px tile renders across 512 device px — the blur the
+            // tiled view shipped with. Every layer is local now, so all of
+            // them fetch z+1 (on the card up to the data ceiling) and draw
+            // at half size.
+            opts.detectRetina = true;
+            opts.maxZoom = 17;
+            if (m0) {
+                opts.minZoom = m0.zmin || 5;
+                opts.maxNativeZoom = Math.min(m0.zmax || 13, 16);
+            } else {
+                opts.maxNativeZoom = 13;   // no manifest — conservative guess
+            }
+            // detectRetina (above) fetches tile z = displayTileZoom + 1,
+            // and Leaflet 1.9.4 applies maxNativeZoom to the DISPLAY
+            // zoom only — at map z == maxNative the URL asks for z+1,
+            // past the card's data, and every tile 404s to black (the
+            // z14 blackout). Capping the display-native zoom one below
+            // the card ceiling keeps every fetch inside stored data:
+            // zooms below the cap stay retina-sharp, the top card zoom
+            // renders as a graceful 2x over-zoom instead of black.
+            opts.maxNativeZoom = Math.max(5, opts.maxNativeZoom - 1);
+            mapState.tileLayer = L.tileLayer(def.url.replace('{ext}', ext), opts);
+            mapState.tileLayer.addTo(mapState.leaf);
+
+            // A later successful tile load restores the Leaflet path
+            mapState.tileLayer.on('tileload', function () {
+                mapState.tilesOk++;
+                clearEscalate();
+                if (mapState.offline) setMapOffline(false);
+            });
+            // D-37 tile-failure detection: an error while NO tile has ever
+            // loaded starts the escalation clock (AP mode fails fast on the
+            // local layer; no internet fails fast on OSM)
+            mapState.tileLayer.on('tileerror', function () {
+                if (mapState.tilesOk === 0 && !mapState.offline) armEscalate(2500);
+            });
+
+            renderLayerChips();
+        }
+
+        // Chip row from availability truth: the SD layers the manifest
+        // reports. No manifest -> no chips; the fallback canvas and its
+        // status chip carry the state honestly instead of an empty switcher.
+        function renderLayerChips() {
+            const ids = mapState.localAvailable;
+            mapEls.chips.innerHTML = '';
+            ids.forEach(function (id) {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.textContent = MAP_LAYERS[id].label;
+                if (id === mapState.layer) b.className = 'active';
+                b.addEventListener('click', function () { switchLayer(id); });
+                mapEls.chips.appendChild(b);
+            });
+            mapEls.chips.style.display = ids.length ? 'flex' : 'none';
+        }
 
         function initLeaflet() {
             if (mapState.leaf) return;
             if (typeof L === 'undefined') return;  // library missing — caller degrades
             const map = L.map('map-leaflet');
             mapState.leaf = map;
-            const osm = L.tileLayer(OSM_TILE_URL, {
-                maxZoom: 19,
-                // Required attribution — retained verbatim in the tiled view
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>'
-            });
-            mapState.osm = osm;
-            osm.addTo(map);
 
-            // D-37 tile-failure detection: an error while NO tile has ever
-            // loaded (AP mode fails fast) flips to the offline fallback
-            osm.on('tileerror', function () {
-                if (mapState.tilesOk === 0) setMapOffline(true);
-            });
-            // A later successful tile load restores the Leaflet path
-            osm.on('tileload', function () {
-                mapState.tilesOk++;
-                if (mapState.offline) setMapOffline(false);
-            });
+            // Metric scale bar (NZ) + live zoom readout, both harmonized to
+            // the locked slate tokens
+            L.control.scale({ position: 'bottomleft', imperial: false }).addTo(map);
+            map.on('zoomend', updateZoomInd);
 
             map.on('dragstart', cancelFollow);
             map.on('zoomstart', function () {
                 if (!mapState.programmaticView) cancelFollow();
             });
+
+            // Optimistic first paint on aerial — if the card has nothing the
+            // escalation chain repairs to OSM within ~2.5 s, and the manifest
+            // (local, answers in well under that) corrects the choice first.
+            switchLayer('aerial');
+
+            fetch('/maps/manifest.json', { cache: 'no-store' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (m) {
+                    mapState.manifest = m;
+                    mapState.localAvailable = (m && m.layers)
+                        ? LOCAL_LAYERS.filter(function (id) { return m.layers[id]; })
+                        : [];
+                    // The optimistic layer may not be on the card — fall to
+                    // the first layer the manifest actually reports
+                    if (mapState.layer && LOCAL_LAYERS.indexOf(mapState.layer) >= 0
+                            && mapState.localAvailable.indexOf(mapState.layer) < 0) {
+                        if (mapState.localAvailable.length) switchLayer(mapState.localAvailable[0]);
+                    } else {
+                        renderLayerChips();
+                    }
+                })
+                .catch(function () {
+                    mapState.localAvailable = [];
+                    renderLayerChips();
+                });
         }
 
         // Render-path swap ONLY: hide/show the two surfaces inside the same
@@ -995,6 +1187,9 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             mapEls.offline.style.display = off ? 'block' : 'none';
             if (!mapState.surfaceShown) return;
             mapEls.canvas.style.display = off ? 'block' : 'none';
+            // the zoom readout belongs to the tiled view only — no zoom
+            // concept on the offline canvas
+            mapEls.zoomInd.style.display = off ? 'none' : 'block';
             if (off) {
                 renderCanvasFallback();
                 mapEls.recenter.style.display = 'none';  // canvas auto-fits
@@ -1028,11 +1223,13 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                 renderCanvasFallback();
             } else {
                 mapEls.leaflet.style.display = 'block';
+                mapEls.zoomInd.style.display = 'block';
+                updateZoomInd();
                 mapState.leaf.invalidateSize();
-                // D-37: ~8 s with zero successful tiles -> offline fallback
-                setTimeout(function () {
-                    if (mapState.tilesOk === 0) setMapOffline(true);
-                }, 8000);
+                // D-37 backstop: ~8 s with zero successful tiles escalates
+                // toward the offline fallback (chain: local -> OSM -> canvas);
+                // hard tile errors arm the same chain sooner (2.5 s)
+                armEscalate(8000);
             }
         }
 
@@ -1192,12 +1389,14 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                             mapState.leaf.fitBounds(bounds, { padding: [16, 16] });
                         } else {
                             // Single point: fitBounds on a zero-size bounds
-                            // pins maxZoom — settle at a street-level view
-                            mapState.leaf.setView(mapState.newest, 16);
+                            // pins maxZoom — settle at a close view (15 = 2x
+                            // over-zoom of the z14 card data; 16 would
+                            // stretch it 4x into mush)
+                            mapState.leaf.setView(mapState.newest, 15);
                         }
                     } else {
                         mapState.leaf.setView(mapState.newest,
-                            Math.max(mapState.leaf.getZoom(), 13));
+                            Math.max(mapState.leaf.getZoom(), 14));
                     }
                     mapState.programmaticView = false;
                 } else if (mapState.offline) {
@@ -2729,7 +2928,13 @@ void handleRoot() {
     html += "<div id=\"map-leaflet\"></div>";
     html += "<canvas id=\"map-canvas\"></canvas>";
     html += "<button type=\"button\" id=\"map-recenter\" class=\"map-recenter\">Recenter</button>";
-    html += "<div id=\"map-offline\" class=\"map-offline-chip\">Offline — tiles unavailable, showing plotted track.</div>";
+    // Offline-maps layer chips (footer script renders buttons from
+    // /maps/manifest.json — one pill per basemap the card actually carries,
+    // plus the online OSM option)
+    html += "<div id=\"map-layer-chips\" class=\"map-layer-chips\"></div>";
+    // Live zoom readout (footer script keeps the text current on zoomend)
+    html += "<div id=\"map-zoom-ind\" class=\"map-zoom-ind\">Zoom —</div>";
+    html += "<div id=\"map-offline\" class=\"map-offline-chip\">SD map tiles unavailable — showing plotted track.</div>";
     html += "</div>";
 
     html += "</section>";
@@ -4082,6 +4287,112 @@ void handleImage(const String& uri) {
     sendResponse(404, "Not Found", "Image not available");
 }
 
+// GET /maps/{layer}/{z}/{x}/{y}.webp and /maps/manifest.json — offline
+// basemap tiles streamed off the SD card. scripts/fetch_nz_maps.mjs
+// populates /maps/{layer}/{z}/{x}/{y}.webp (LINZ Basemaps WebP, standard
+// XYZ scheme) plus manifest.json on the card; the dashboard map consumes
+// them so the tiled view renders in the field with zero internet. Same
+// dispatch shape as handleImage: exact-prefix routing from handleNotFound
+// (WebServer matches routes by exact path), then ALLOWLIST validation —
+// three fixed layer names, strictly numeric zoom/x/y bounded by the slippy
+// map scheme (z<=16, x/y < 2^z), fixed .webp extension. No user string ever
+// reaches the filesystem path, so traversal is impossible by construction.
+// Tiles are immutable once written (the fetcher re-fetches in place), hence
+// the 1-year immutable cache header; the manifest is re-read every load.
+// A missing card or uncovered tile is an honest 404 — the browser's
+// escalation chain (local layer -> OSM -> D-37 canvas) owns the fallback.
+void handleMaps(const String& uri) {
+    static const char PREFIX[] = "/maps/";
+    if (!uri.startsWith(PREFIX)) {
+        sendResponse(404, "Not Found", "Unknown map path");
+        return;
+    }
+    String rest = uri.substring(strlen(PREFIX));
+
+    // Manifest: tiny, fetched once per page load for the layer chips and
+    // per-layer zoom clamps (minZoom / maxNativeZoom from what the card
+    // actually carries)
+    if (rest == "manifest.json") {
+        File mf = SD_MMC.open("/maps/manifest.json");
+        if (!mf) {
+            sendResponse(404, "Not Found", "No map manifest on SD");
+            return;
+        }
+        server.sendHeader("Cache-Control", "no-cache");
+        server.streamFile(mf, "application/json");
+        mf.close();
+        return;
+    }
+
+    // {layer}/{z}/{x}/{y}.webp — split, then validate every segment
+    const int s1 = rest.indexOf('/');
+    const int s2 = (s1 >= 0) ? rest.indexOf('/', s1 + 1) : -1;
+    const int s3 = (s2 >= 0) ? rest.indexOf('/', s2 + 1) : -1;
+    if (s1 < 0 || s2 < 0 || s3 < 0) {
+        sendResponse(404, "Not Found", "Malformed map tile path");
+        return;
+    }
+    String layer = rest.substring(0, s1);
+    String zStr  = rest.substring(s1 + 1, s2);
+    String xStr  = rest.substring(s2 + 1, s3);
+    String yExt  = rest.substring(s3 + 1);
+
+    if (layer != "aerial" && layer != "topo" && layer != "hillshade") {
+        sendResponse(404, "Not Found", "Unknown map layer");
+        return;
+    }
+    // Two on-card formats, per the manifest's per-layer ext: webp from the
+    // keyless basemaps aerial fetcher, png from the LDS tile CDN (topo)
+    const char* tileType;
+    size_t extLen;
+    if (yExt.endsWith(".webp")) {
+        tileType = "image/webp";
+        extLen = 5;
+    } else if (yExt.endsWith(".png")) {
+        tileType = "image/png";
+        extLen = 4;
+    } else {
+        sendResponse(404, "Not Found", "Unknown map tile format");
+        return;
+    }
+    String yStr = yExt.substring(0, yExt.length() - extLen);
+
+    // Strictly numeric, matching the handleImage idiom before any strtol
+    const String coords[3] = { zStr, xStr, yStr };
+    for (const String& c : coords) {
+        if (c.length() == 0 || c.length() > 6) {
+            sendResponse(404, "Not Found", "Invalid map tile coordinate");
+            return;
+        }
+        for (unsigned int i = 0; i < c.length(); i++) {
+            if (!isDigit(c.charAt(i))) {
+                sendResponse(404, "Not Found", "Invalid map tile coordinate");
+                return;
+            }
+        }
+    }
+    const long z = strtol(zStr.c_str(), nullptr, 10);
+    const long x = strtol(xStr.c_str(), nullptr, 10);
+    const long y = strtol(yStr.c_str(), nullptr, 10);
+    // The fetcher's floor is z5; the scheme's ceiling for the allowlisted
+    // coverage is z16 — anything outside cannot be on the card
+    if (z < 5 || z > 16 || x >= (1L << z) || y >= (1L << z)) {
+        sendResponse(404, "Not Found", "Map tile out of range");
+        return;
+    }
+
+    String path = "/maps/" + layer + "/" + String(static_cast<int>(z)) + "/" +
+                  String(static_cast<int>(x)) + "/" + String(static_cast<int>(y)) + ".webp";
+    File tile = SD_MMC.open(path);
+    if (!tile) {
+        sendResponse(404, "Not Found", "Tile not on SD");
+        return;
+    }
+    server.sendHeader("Cache-Control", "public, max-age=31536000, immutable");
+    server.streamFile(tile, tileType);
+    tile.close();
+}
+
 // GET /gallery?page=N (IMG-06, D-46): one page of the newest-first RAM
 // index — 12 entries of {id, hasThumb, hasFull, complete}. `complete`
 // derives from the FULL sidecar's complete flag only (an entry with just
@@ -4315,6 +4626,10 @@ void handleNotFound() {
     }
     if (server.method() == HTTP_GET && uri.startsWith("/gallery/")) {
         handleGalleryDetail(uri);
+        return;
+    }
+    if (server.method() == HTTP_GET && uri.startsWith("/maps/")) {
+        handleMaps(uri);
         return;
     }
 
