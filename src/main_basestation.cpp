@@ -202,32 +202,58 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             min-height: 100vh;
             line-height: 1.5;
         }
-        .section-nav {
+        .tab-nav {
             position: sticky;
             top: 0;
             z-index: 10;
             background: #1e293b;
             border-bottom: 1px solid #475569;
-            padding: 8px 0;
         }
-        .section-nav .nav-inner {
+        .tab-nav .nav-inner {
             max-width: 800px;
             margin: 0 auto;
-            padding: 0 24px;
+            padding: 0 12px;
             display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
+            gap: 4px;
+            overflow-x: auto;
         }
-        .section-nav a {
+        .tab-btn {
+            flex: 1 0 auto;
+            background: none;
+            border: none;
+            border-bottom: 3px solid transparent;
             color: #94a3b8;
             font-size: 14px;
             font-weight: bold;
-            text-decoration: none;
-            padding: 8px 0;
+            padding: 12px 10px;
+            cursor: pointer;
+            white-space: nowrap;
         }
-        .section-nav a:hover,
-        .section-nav a.current {
+        .tab-btn:hover {
+            color: #e2e8f0;
+        }
+        .tab-btn.tab-active {
             color: #60a5fa;
+            border-bottom-color: #60a5fa;
+        }
+        /* Tab panes: one tab visible at a time (the footer script toggles
+           .tab-on; Map carries it in the markup so no-JS still shows the
+           informational anchor) */
+        #tab-panes > section {
+            display: none;
+        }
+        #tab-panes > section.tab-on {
+            display: block;
+        }
+        .mission-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #334155;
+        }
+        .mission-row .status-label {
+            flex: 1;
         }
         .container {
             max-width: 800px;
@@ -807,14 +833,13 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
     </style>
 </head>
 <body>
-    <nav class="section-nav">
+    <nav class="tab-nav">
         <div class="nav-inner">
-            <a href="#alerts">Alerts</a>
-            <a href="#map">Map</a>
-            <a href="#antenna">Antenna</a>
-            <a href="#capture">Capture</a>
-            <a href="#queue">Queue</a>
-            <a href="#gallery">Gallery</a>
+            <button type="button" class="tab-btn tab-active" data-tab="map">Map</button>
+            <button type="button" class="tab-btn" data-tab="missions">Missions</button>
+            <button type="button" class="tab-btn" data-tab="camera">Camera</button>
+            <button type="button" class="tab-btn" data-tab="settings">Settings</button>
+            <button type="button" class="tab-btn" data-tab="status">Status</button>
         </div>
     </nav>
     <div class="container">
@@ -822,6 +847,11 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             <h1>🎈 Cosmic1 Base Station</h1>
             <p>Camera Control Command Center</p>
         </div>
+        <!-- Global strips: the alerts bar inserts itself here (footer
+             script), the telemetry panel streams in below it — both stay
+             visible on every tab -->
+        <div id="alerts-holder"></div>
+        <div id="tab-panes">
 )rawliteral";
 
 const char HTML_FOOTER[] PROGMEM = R"rawliteral(
@@ -1321,6 +1351,35 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                             (m.durMs >= 0 ? ' — ' + msToClock(m.durMs) : ' (open)');
                         sel.appendChild(opt);
                     });
+                    // Missions-tab list: one row per mission with a Replay
+                    // jump (activates the Map tab and loads the replay)
+                    const list = document.getElementById('mission-list');
+                    list.innerHTML = '';
+                    const ms = j.missions || [];
+                    if (ms.length === 0) {
+                        const d = document.createElement('div');
+                        d.className = 'status-label';
+                        d.textContent = 'No missions yet — start one above.';
+                        list.appendChild(d);
+                    }
+                    ms.forEach(function (m) {
+                        const row = document.createElement('div');
+                        row.className = 'mission-row';
+                        const label = document.createElement('div');
+                        label.className = 'status-label';
+                        label.textContent = m.name +
+                            (m.durMs >= 0 ? ' — ' + msToClock(m.durMs) : ' (open)');
+                        row.appendChild(label);
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.textContent = 'Replay';
+                        btn.addEventListener('click', function () {
+                            activateTab('map');
+                            loadReplay(m.id);
+                        });
+                        row.appendChild(btn);
+                        list.appendChild(row);
+                    });
                 })
                 .catch(function () { });
         }
@@ -1485,6 +1544,7 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                 missionState.t1 = pts[pts.length - 1].t;
                 missionState.cursor = 0;
                 missionState.replayOn = true;
+                document.getElementById('replay-select').value = String(id);
                 captureMarkers.missionFilter = Number(id);
                 ensureMapSurface();
                 drawCaptureMarkers();
@@ -1714,25 +1774,32 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             }
         }
 
-        // ---------- section nav (D-45): highlight while scrolling ----------
-        // Sections are looked up per update, NOT pinned at load: the
-        // alerts section is created and removed by the poll renderer, so
-        // a load-time section list would miss it.
-        const navLinks = {};
-        Array.prototype.forEach.call(document.querySelectorAll('.section-nav a'), function (a) {
-            navLinks[(a.getAttribute('href') || '').slice(1)] = a;
-        });
-        function updateNavCurrent() {
-            let current = null;
-            Object.keys(navLinks).forEach(function (id) {
-                const sec = document.getElementById(id);
-                if (sec && sec.getBoundingClientRect().top <= 140) current = id;
+        // ---------- tabs (2026-09-04 tabbed layout; supersedes the D-45
+        // linear flow and its scroll-spy nav) ----------
+        // Sections carry data-tab; activateTab shows exactly that bucket.
+        // The map re-measures on re-entry (Leaflet inside display:none
+        // containers loses its size). Last tab persists per browser.
+        function activateTab(name) {
+            const panes = document.querySelectorAll('#tab-panes > section');
+            Array.prototype.forEach.call(panes, function (sec) {
+                setClass(sec, sec.getAttribute('data-tab') === name ? 'tab-on' : '');
             });
-            Object.keys(navLinks).forEach(function (id) {
-                setClass(navLinks[id], id === current ? 'current' : '');
+            Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), function (b) {
+                setClass(b, b.getAttribute('data-tab') === name ? 'tab-active' : '');
             });
+            try { localStorage.setItem('c1-tab', name); } catch (e) { }
+            if (name === 'map' && mapState.leaf) mapState.leaf.invalidateSize();
         }
-        window.addEventListener('scroll', updateNavCurrent, { passive: true });
+        Array.prototype.forEach.call(document.querySelectorAll('.tab-btn'), function (b) {
+            b.addEventListener('click', function () {
+                activateTab(b.getAttribute('data-tab'));
+                window.scrollTo(0, 0);
+            });
+        });
+        let savedTab = 'map';
+        try { savedTab = localStorage.getItem('c1-tab') || 'map'; } catch (e) { }
+        activateTab(['map', 'missions', 'camera', 'settings', 'status']
+            .indexOf(savedTab) >= 0 ? savedTab : 'map');
 
         // ---------- list renderers with signature gates (D-36) ----------
         // A list is rebuilt only when its content signature changes; rows
@@ -1983,7 +2050,9 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                 list.id = 'alert-list';
                 sec.appendChild(head);
                 sec.appendChild(list);
-                document.getElementById('map').parentNode.insertBefore(sec, document.getElementById('map'));
+                // Global strip: the alerts bar lives ABOVE the tab panes so
+                // it is visible on every tab (2026-09-04 tabbed layout)
+                document.getElementById('alerts-holder').appendChild(sec);
             }
             return sec;
         }
@@ -3213,11 +3282,18 @@ void handleRoot() {
     String html;
 
     // ---- Map & Telemetry section (D-45: the informational anchor) ----
-    html += "<section id=\"map\">";
+    // D-45 superseded 2026-09-04: the operator-requested tab layout
+    // replaces the linear section order. The informational-anchor content
+    // — the alerts bar and the telemetry strip — stays GLOBAL above the
+    // tab panes; sections carry data-tab attributes the footer script
+    // switches on. Tab buckets: Map (map+replay+antenna), Missions,
+    // Camera (trigger+camera settings+gallery), Settings (auto/event
+    // capture+alerts+wifi+sd), Status (queue+transfers).
 
-    // Telemetry panel (WEB-01): six tiles on the auto-fit grid, fed only by
-    // the latest 0x14 beacon snapshot — absent data renders honest-null,
-    // never zero-filled. The stale badge (D-35) is pinned to the Link tile.
+    // ---- Global telemetry strip (WEB-01): six tiles on the auto-fit
+    // grid, fed only by the latest 0x14 beacon snapshot — absent data
+    // renders honest-null, never zero-filled. The stale badge (D-35) is
+    // pinned to the Link tile. ----
     html += "<div class=\"telemetry-panel\">";
     html += "<div class=\"status-item\">";
     html += "<div class=\"status-label\">Link</div>";
@@ -3247,10 +3323,15 @@ void handleRoot() {
     html += "<div class=\"message info\" id=\"tele-empty\" style=\"grid-column: 1 / -1;\">No telemetry received yet</div>";
     html += "</div>";
 
-    // Map frame (WEB-02): embedded Leaflet over OSM tiles with the D-37
-    // offline canvas fallback — both render paths consume the identical
-    // traj array from /api/state. Before the first valid GPS fix the
-    // waiting message is the ONLY rendered state (no guessed position).
+    html += "<div id=\"tab-panes\">";
+
+    // ---- Map tab (default): tiled map + capture markers + replay ----
+    html += "<section id=\"map\" data-tab=\"map\" class=\"tab-on\">";
+
+    // Map frame (WEB-02): embedded Leaflet over the SD basemap layers with
+    // the D-37 offline canvas fallback — both render paths consume the
+    // identical traj array from /api/state. Before the first valid GPS fix
+    // the waiting message is the ONLY rendered state (no guessed position).
     html += "<div class=\"map-frame\" id=\"map-frame\">";
     html += "<div class=\"message info\" id=\"map-waiting\">Waiting for GPS fix — the track appears once the balloon reports a valid position.</div>";
     html += "<div id=\"map-leaflet\"></div>";
@@ -3265,9 +3346,24 @@ void handleRoot() {
     html += "<div id=\"map-offline\" class=\"map-offline-chip\">SD map tiles unavailable — showing plotted track.</div>";
     html += "</div>";
 
+    // Mission Replay card — lives on the Map tab because its output IS the
+    // map: the scrubber animates this same frame through the live renderers
+    html += "<div class=\"card\" id=\"replay-card\" style=\"display:none;\">";
+    html += "<h2>⏮ Mission Replay</h2>";
+    html += "<div class=\"mission-controls\">";
+    html += "<select id=\"replay-select\" style=\"max-width:220px;\"></select>";
+    html += "<button type=\"button\" id=\"replay-load\">Load</button>";
+    html += "<button type=\"button\" id=\"replay-play\" disabled>Play</button>";
+    html += "<button type=\"button\" id=\"replay-exit\">Exit replay</button>";
+    html += "</div>";
+    html += "<input type=\"range\" id=\"replay-scrub\" min=\"0\" max=\"0\" value=\"0\" style=\"width:100%;\" disabled>";
+    html += "<div id=\"replay-time\" class=\"status-label\">—</div>";
+    html += "<div id=\"replay-events\" class=\"message info\" style=\"max-height:110px;overflow-y:auto;display:none;\"></div>";
+    html += "</div>";
+
     html += "</section>";
 
-    // ---- Antenna Pointing section (ANT-01, 2026-08-27 todo) ----
+    // ---- Antenna Pointing section (ANT-01, 2026-08-27 todo) — Map tab ----
     // The tablet is mounted back-to-back with the Yagi on the tripod pivot:
     // the tablet's own compass (DeviceOrientationEvent) is the rig heading
     // and the tablet's own GPS (Geolocation API) is the observer position —
@@ -3275,7 +3371,7 @@ void handleRoot() {
     // value below is a renderer target (footer script). The great-circle
     // math runs client-side against the balloon GPS already flowing in
     // /api/state — no firmware round-trip in the aiming loop.
-    html += "<section id=\"antenna\">";
+    html += "<section id=\"antenna\" data-tab=\"map\">";
     html += "<h2>📡 Antenna Pointing</h2>";
     html += "<div class=\"antenna-card\">";
     // Big arrow: fixed boresight tick at 12 o'clock, rotating needle points
@@ -3318,8 +3414,8 @@ void handleRoot() {
     html += "</div>";
     html += "</section>";
 
-    // ---- Capture & Settings section (D-45 locked order) ----
-    html += "<section id=\"capture\">";
+    // ---- Camera tab: trigger + camera settings (tweak-then-shoot) ----
+    html += "<section id=\"camera\" data-tab=\"camera\">";
 
     // Capture card
     html += "<div class=\"card\">";
@@ -3425,6 +3521,11 @@ void handleRoot() {
     html += "</form>";
 
     html += "</div>";
+
+    html += "</section>";
+
+    // ---- Settings tab: automation, thresholds, connectivity, storage ----
+    html += "<section id=\"settings\" data-tab=\"settings\">";
 
     // Auto-Capture card
     html += "<div class=\"card\">";
@@ -3586,7 +3687,7 @@ void handleRoot() {
     html += "</section>";
 
     // ---- Queue & Transfers section (D-45: control feedback last) ----
-    html += "<section id=\"queue\">";
+    html += "<section id=\"queue\" data-tab=\"status\">";
 
     // Command Queue card (D-16: inline counter chips + pinned last command +
     // one row per remaining occupied slot; rows are filled by the poll script)
@@ -3632,13 +3733,13 @@ void handleRoot() {
 
     html += "</section>";
 
-    // ---- Mission section (feature: missions) ----
+    // ---- Missions tab (feature: missions) ----
     // Named flight bundling: start/end a mission and its track, capture and
     // alert events stream to /missions/<id>/*.jsonl on the card; new image
     // sidecars carry the mission id so the gallery (and the map markers)
-    // can filter by mission. The replay card animates a stored mission
-    // through the SAME map renderers the live view uses.
-    html += "<section id=\"mission\">";
+    // can filter by mission. The replay card lives on the Map tab (its
+    // output is the map) — this list's Replay buttons jump there.
+    html += "<section id=\"mission\" data-tab=\"missions\">";
     html += "<div class=\"card\">";
     html += "<h2>🚀 Mission</h2>";
     html += "<div class=\"status-value\" id=\"mission-status\">Loading…</div>";
@@ -3649,28 +3750,21 @@ void handleRoot() {
     html += "<span id=\"mission-msg\" class=\"message info\" style=\"display:none;\"></span>";
     html += "</div>";
     html += "</div>";
-    html += "<div class=\"card\" id=\"replay-card\" style=\"display:none;\">";
-    html += "<h2>⏮ Mission Replay</h2>";
-    html += "<div class=\"mission-controls\">";
-    html += "<select id=\"replay-select\" style=\"max-width:220px;\"></select>";
-    html += "<button type=\"button\" id=\"replay-load\">Load</button>";
-    html += "<button type=\"button\" id=\"replay-play\" disabled>Play</button>";
-    html += "<button type=\"button\" id=\"replay-exit\">Exit replay</button>";
-    html += "</div>";
-    html += "<input type=\"range\" id=\"replay-scrub\" min=\"0\" max=\"0\" value=\"0\" style=\"width:100%;\" disabled>";
-    html += "<div id=\"replay-time\" class=\"status-label\">—</div>";
-    html += "<div id=\"replay-events\" class=\"message info\" style=\"max-height:110px;overflow-y:auto;display:none;\"></div>";
+    html += "<div class=\"card\">";
+    html += "<h2>📋 Mission List</h2>";
+    html += "<div id=\"mission-list\"></div>";
     html += "</div>";
     html += "</section>";
 
-    // ---- Image Gallery section (D-45: gallery LAST; IMG-06, D-46..D-48) ----
+    // ---- Image Gallery (D-45 superseded: now on the Camera tab; IMG-06,
+    // D-46..D-48 unchanged) ----
     // Every persisted image of the flight, newest-first, 12 per page. This
     // absorbs 03-01's interim latest-thumbnail surface: the newest grid item
     // (first tile of page 1) is the latest capture now. Grid, pager, and the
     // inline detail card are driven by the footer script's gallery block;
     // tiles load through the existing /img/{id}_t.jpg route (no parallel
     // serving path).
-    html += "<section id=\"gallery\">";
+    html += "<section id=\"gallery\" data-tab=\"camera\">";
     html += "<div class=\"card\" id=\"gallery-list-card\">";
     html += "<h2>🖼 Image Gallery</h2>";
     html += "<div class=\"message info\" id=\"gallery-empty\" style=\"display:none;\">No images received yet — trigger a capture to start.</div>";
@@ -3679,6 +3773,8 @@ void handleRoot() {
     html += "</div>";
     html += "<div class=\"card\" id=\"gallery-detail-card\" style=\"display:none;\"></div>";
     html += "</section>";
+
+    html += "</div>";   // #tab-panes — every tabbed section lives above this
 
     // Stream the page in three parts (header / dynamic sections / footer
     // script) — see the note at the top of this function for why the page
