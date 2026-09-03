@@ -203,38 +203,41 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             line-height: 1.5;
         }
         .tab-nav {
-            position: sticky;
-            top: 0;
-            z-index: 10;
+            /* the sticky container is .top-wrap above it — no nested sticky */
             background: #1e293b;
             border-bottom: 1px solid #475569;
         }
         .tab-nav .nav-inner {
             max-width: 800px;
             margin: 0 auto;
-            padding: 0 12px;
+            padding: 6px 12px 0;
             display: flex;
-            gap: 4px;
+            gap: 6px;
             overflow-x: auto;
         }
         .tab-btn {
-            flex: 1 0 auto;
-            background: none;
-            border: none;
-            border-bottom: 3px solid transparent;
+            flex: 0 0 auto;
+            background: transparent;
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-radius: 10px 10px 0 0;
             color: #94a3b8;
             font-size: 14px;
             font-weight: bold;
-            padding: 12px 10px;
+            padding: 10px 16px;
             cursor: pointer;
             white-space: nowrap;
         }
         .tab-btn:hover {
             color: #e2e8f0;
+            background: rgba(51, 65, 85, 0.55);
         }
         .tab-btn.tab-active {
+            /* raised-tab look: the active tab's face matches the page
+               background so it visually merges with the content below */
+            background: #0f172a;
+            border-color: #475569;
             color: #60a5fa;
-            border-bottom-color: #60a5fa;
         }
         /* Tab panes: one tab visible at a time (the footer script toggles
            .tab-on; Map carries it in the markup so no-JS still shows the
@@ -831,15 +834,6 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
     </style>
 </head>
 <body>
-    <nav class="tab-nav">
-        <div class="nav-inner">
-            <button type="button" class="tab-btn tab-active" data-tab="map">Map</button>
-            <button type="button" class="tab-btn" data-tab="missions">Missions</button>
-            <button type="button" class="tab-btn" data-tab="camera">Camera</button>
-            <button type="button" class="tab-btn" data-tab="settings">Settings</button>
-            <button type="button" class="tab-btn" data-tab="status">Status</button>
-        </div>
-    </nav>
     <div class="top-wrap">
         <div class="top-bar">
             <span class="top-title">🎈 Cosmic1 Base Station</span>
