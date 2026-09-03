@@ -260,30 +260,41 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             margin: 0 auto;
             padding: 24px;
         }
-        .header {
-            background: linear-gradient(135deg, #1e293b, #334155);
-            padding: 24px;
-            border-radius: 10px;
-            margin-bottom: 24px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-        }
-        .header h1 {
-            color: #60a5fa;
-            font-size: 24px;
-            margin-bottom: 4px;
-        }
-        .header p {
-            color: #94a3b8;
-            font-size: 14px;
-        }
-        .telemetry-panel {
+        .top-wrap {
+            position: sticky;
+            top: 0;
+            z-index: 20;
             background: #1e293b;
-            padding: 16px;
-            border-radius: 8px;
-            margin-bottom: 8px;
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-            gap: 8px;
+            border-bottom: 1px solid #475569;
+        }
+        .top-bar {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 8px 12px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            overflow-x: auto;
+            white-space: nowrap;
+        }
+        .top-title {
+            color: #60a5fa;
+            font-size: 15px;
+            font-weight: bold;
+        }
+        .top-bar .mini {
+            color: #94a3b8;
+            font-size: 13px;
+        }
+        .top-bar .mini span {
+            color: #e2e8f0;
+            font-weight: bold;
+        }
+        .top-bar .stale-badge {
+            display: none;
+            margin-top: 0;
+            padding: 1px 6px;
+            font-size: 12px;
         }
         .status-item {
             text-align: center;
@@ -297,16 +308,6 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             font-size: 18px;
             font-weight: bold;
             color: #60a5fa;
-        }
-        .stale-badge {
-            display: none;
-            margin-top: 8px;
-            padding: 2px 8px;
-            border-radius: 10px;
-            background: #713f12;
-            color: #fbbf24;
-            font-size: 14px;
-            font-weight: bold;
         }
         /* D-42 alert bar — the FIRST content section, created/removed by
            the poll renderer (zero alerts = no bar in the DOM at all) */
@@ -700,9 +701,6 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             margin-top: 16px;
         }
         @media (max-width: 480px) {
-            .telemetry-panel {
-                grid-template-columns: repeat(2, 1fr);
-            }
             .queue-counters {
                 grid-template-columns: repeat(2, 1fr);
             }
@@ -842,15 +840,31 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             <button type="button" class="tab-btn" data-tab="status">Status</button>
         </div>
     </nav>
-    <div class="container">
-        <div class="header">
-            <h1>🎈 Cosmic1 Base Station</h1>
-            <p>Camera Control Command Center</p>
+    <div class="top-wrap">
+        <div class="top-bar">
+            <span class="top-title">🎈 Cosmic1 Base Station</span>
+            <span class="mini"><span id="status-led" class="led yellow"></span> <span id="link-text">Unknown</span><span id="stale-badge" class="stale-badge">Stale</span></span>
+            <span class="mini">ALT <span id="tele-alt">—</span></span>
+            <span class="mini">TMP <span id="tele-temp">—</span></span>
+            <span class="mini">GPS <span id="tele-gps">—</span></span>
+            <span class="mini">BAT <span id="tele-batt">—</span></span>
+            <span class="mini">AGE <span id="tele-age">—</span></span>
+            <span id="tele-empty" class="mini" style="display:none;">no telemetry yet</span>
         </div>
-        <!-- Global strips: the alerts bar inserts itself here (footer
-             script), the telemetry panel streams in below it — both stay
-             visible on every tab -->
+        <!-- Alert banners insert themselves here (footer script) — they only
+             exist while alerts are active, so the bar collapses when clear -->
         <div id="alerts-holder"></div>
+        <nav class="tab-nav">
+            <div class="nav-inner">
+                <button type="button" class="tab-btn tab-active" data-tab="map">Map</button>
+                <button type="button" class="tab-btn" data-tab="missions">Missions</button>
+                <button type="button" class="tab-btn" data-tab="camera">Camera</button>
+                <button type="button" class="tab-btn" data-tab="settings">Settings</button>
+                <button type="button" class="tab-btn" data-tab="status">Status</button>
+            </div>
+        </nav>
+    </div>
+    <div class="container">
         <div id="tab-panes">
 )rawliteral";
 
@@ -939,7 +953,9 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
         let staleShown = false;
         function showStaleBadge() {
             staleShown = true;
-            document.getElementById('stale-badge').style.display = 'block';
+            // inline-block: the badge now lives inside the flex top bar
+            // (2026-09-04 header compaction) — a block would wrap the bar
+            document.getElementById('stale-badge').style.display = 'inline-block';
             renderStaleBadge();
         }
         function hideStaleBadge() {
@@ -2252,7 +2268,7 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
         // elements themselves, run first during bubbling and call
         // preventDefault — the defaultPrevented guard (plus the explicit id
         // skip) keeps those Phase 3 posts single-shot.
-        document.getElementById('capture').addEventListener('submit', function (ev) {
+        document.getElementById('tab-panes').addEventListener('submit', function (ev) {
             if (ev.defaultPrevented) return;
             const form = ev.target;
             if (form.id === 'alerts-form' || form.id === 'wifi-form') return;
@@ -3284,44 +3300,12 @@ void handleRoot() {
     // ---- Map & Telemetry section (D-45: the informational anchor) ----
     // D-45 superseded 2026-09-04: the operator-requested tab layout
     // replaces the linear section order. The informational-anchor content
-    // — the alerts bar and the telemetry strip — stays GLOBAL above the
-    // tab panes; sections carry data-tab attributes the footer script
+    // lives in the sticky top bar (title + mini telemetry, WEB-01 ids
+    // unchanged so the diff-checked renderers are untouched) and the
+    // alerts holder; sections carry data-tab attributes the footer script
     // switches on. Tab buckets: Map (map+replay+antenna), Missions,
     // Camera (trigger+camera settings+gallery), Settings (auto/event
     // capture+alerts+wifi+sd), Status (queue+transfers).
-
-    // ---- Global telemetry strip (WEB-01): six tiles on the auto-fit
-    // grid, fed only by the latest 0x14 beacon snapshot — absent data
-    // renders honest-null, never zero-filled. The stale badge (D-35) is
-    // pinned to the Link tile. ----
-    html += "<div class=\"telemetry-panel\">";
-    html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Link</div>";
-    html += "<div class=\"status-value\"><span id=\"status-led\" class=\"led yellow\"></span><span id=\"link-text\">Unknown</span></div>";
-    html += "<div class=\"stale-badge\" id=\"stale-badge\">Stale</div>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Altitude</div>";
-    html += "<div class=\"status-value\" id=\"tele-alt\">—</div>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Temperature</div>";
-    html += "<div class=\"status-value\" id=\"tele-temp\">—</div>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">GPS</div>";
-    html += "<div class=\"status-value\" id=\"tele-gps\">—</div>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Battery</div>";
-    html += "<div class=\"status-value\" id=\"tele-batt\">—</div>";
-    html += "</div>";
-    html += "<div class=\"status-item\">";
-    html += "<div class=\"status-label\">Data age</div>";
-    html += "<div class=\"status-value\" id=\"tele-age\">—</div>";
-    html += "</div>";
-    html += "<div class=\"message info\" id=\"tele-empty\" style=\"grid-column: 1 / -1;\">No telemetry received yet</div>";
-    html += "</div>";
 
     html += "<div id=\"tab-panes\">";
 
