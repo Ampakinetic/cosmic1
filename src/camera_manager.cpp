@@ -13,6 +13,23 @@
 // (MAX_IMAGE_SIZE, Pitfall 11).
 static constexpr size_t THUMB_MAX_BYTES = 8192;
 
+// CAM_INIT_WARMUP_FRAMES (09-04, hi-res black-frame fix): frames discarded
+// after every (re-)init. After esp_camera_init the sensor's AEC/AGC restart
+// from reset defaults, so the FIRST frames it outputs are pre-convergence —
+// with GRAB_WHEN_EMPTY the very first esp_camera_fb_get() is exactly such a
+// frame, and the operator flow "SET_RESOLUTION (growth => full re-init at
+// the new size) -> CAPTURE_NOW seconds later" hands that frame straight to
+// the gallery: a black image with blocky noise that still passes the SOI/EOI
+// sanity check below. Draining N frames lets auto exposure/gain converge
+// before the first REAL capture. Cost: N frame times once per (re-)init
+// (~0.5-1 s at SXGA/UXGA, ~0.1 s at QVGA) — the same operator-command cost
+// class as the re-init itself (see setFrameSize). This covers the
+// TRANSIENT class of the hi-res black-frame symptom; the PERSISTENT class
+// (corruption on every capture at SXGA/UXGA, whatever the frame index) is
+// the data-rate/signal class — bench lever BALLOON_CAMERA_XCLK_HZ in
+// balloon_config.h.
+static constexpr uint8_t CAM_INIT_WARMUP_FRAMES = 3;
+
 // ===========================
 // Constructor/Destructor
 // ===========================
@@ -163,7 +180,18 @@ bool CameraManager::initCamera() {
     s->set_lenc(s, 1);  // Lens correction
     s->set_dcw(s, 1);  // Down weight
     s->set_colorbar(s, 0);  // No color bar test
-    
+
+    // Warm-up drain (CAM_INIT_WARMUP_FRAMES above): throw away the
+    // pre-convergence frames so the first capture after this (re-)init
+    // reflects settled AEC/AGC. Plain sequential fb_get/fb_return on
+    // loopTask — the same shape as any capture, no sensor reprogramming.
+    for (uint8_t i = 0; i < CAM_INIT_WARMUP_FRAMES; i++) {
+        camera_fb_t* warmup = esp_camera_fb_get();
+        if (warmup) {
+            esp_camera_fb_return(warmup);
+        }
+    }
+
     return true;
 }
 
@@ -200,8 +228,10 @@ void CameraManager::configureCameraForBalloon() {
     // (operator report, log42 era: "pictures look yellow recently", which
     // begins exactly at the 10 MHz builds). 20 MHz also halves per-capture
     // exposure latency; the WHEN_EMPTY grab below still means the DMA only
-    // runs while a capture is pending.
-    cameraConfig.xclk_freq_hz = 20000000;
+    // runs while a capture is pending. 09-04: the value is now the
+    // BALLOON_CAMERA_XCLK_HZ config constant (balloon_config.h) — the bench
+    // lever for the SXGA/UXGA black-frame A/B; semantics unchanged.
+    cameraConfig.xclk_freq_hz = BALLOON_CAMERA_XCLK_HZ;
     cameraConfig.pixel_format = PIXFORMAT_JPEG;
     // grab_mode WHEN_EMPTY, NOT LATEST (the D1 session-24 lever — the one
     // variable every prior test left constant): CAMERA_GRAB_LATEST means
@@ -662,8 +692,9 @@ bool CameraManager::setFrameSize(framesize_t size) {
     }
 
     // Re-init path: growth beyond the allocation requires real fb buffers.
-    // The bounded block (end + delay(100) + begin, ~100 ms+) is a documented
-    // cost of an explicit operator SET_RESOLUTION command — the same class as
+    // The bounded block (end + delay(100) + begin + the CAM_INIT_WARMUP_FRAMES
+    // drain, ~100 ms+ and up to ~1 s at the large sizes) is a documented cost
+    // of an explicit operator SET_RESOLUTION command — the same class as
     // the AUX handshake waits. Note reinitialize() releases the current
     // image/thumbnail buffers (end() -> releaseImageBuffers()); that is
     // acceptable on this path because it is reachable only from an explicit

@@ -41,6 +41,17 @@
 #define BALLOON_CAMERA_QUALITY     10             // JPEG quality (0-63, lower=better)
 #define BALLOON_CAMERA_BRIGHTNESS  0              // -2 to 2
 #define BALLOON_CAMERA_CONTRAST    0              // -2 to 2
+// XCLK (09-04): hoisted from a hardcoded 20 MHz in camera_manager.cpp so the
+// SXGA/UXGA black-frame bench A/B is a one-line edit. Symptom: fulls at
+// SXGA/UXGA arrive black with blocky artifacts while XGA and below are clean;
+// the capture-side warm-up drain in CameraManager::initCamera covers the
+// first-frame convergence class, so if corruption persists across consecutive
+// captures it is the data-rate/signal class and THIS is the bench lever:
+// step 20000000 -> 16000000 -> 12000000, keeping the highest clock that
+// captures SXGA/UXGA cleanly. Stay ABOVE 10 MHz — the log42-era yellow-cast
+// regression (see the 09-01 note in configureCameraForBalloon). Value
+// unchanged until the bench says otherwise.
+#define BALLOON_CAMERA_XCLK_HZ     20000000
 
 // ===========================
 // Data Packet Configuration
