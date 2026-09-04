@@ -2948,7 +2948,11 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
         });
         antRestore();
 
-        updateNavCurrent();
+        // The old scroll-spy nav call lived here — deleting its function in
+        // the 2026-09-04 tab restructure while this call survived turned
+        // boot into a ReferenceError that killed pollOnce(), and with it
+        // every dynamic surface (the "no data at all" report). pollOnce
+        // must stay the last man standing.
         pollOnce();
     </script>
 </body>
