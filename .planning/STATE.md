@@ -1,21 +1,20 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1.0
-current_plan: 4
+current_plan: 2
 status: executing
-stopped_at: Completed 02.5-03-PLAN.md
-last_updated: "2026-09-10T04:41:38.054Z"
-last_activity: 2026-08-31
-last_activity_desc: "Completed quick task 260831-vat: Clear SD card button (base station web UI, /sd-clear route + confirm; balloon has no web server — operator chose base-only)"
-state_head: 349b4eb5a9376c1ede37758f9f11d3427f9d15eb
+stopped_at: Completed 01-35-PLAN.md
+last_updated: "2026-09-10T05:01:51.174Z"
+last_activity: 2026-09-10
+state_head: 3d2dd842bfcb696b723966ed7c0de1e9b1769b8a
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 36
   completed_plans: 46
 milestone_name: milestone
-current_phase_name: Command Protocol & Control
 current_phase: 2
+current_phase_name: Command Protocol & Control
 ---
 
 # Project State
@@ -30,7 +29,7 @@ current_phase: 2
 
 ## Current Position
 
-**Current Plan:** 4
+**Current Plan:** 2
 **Total Plans in Phase:** 36
 **Status:** Ready to execute
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
@@ -109,7 +108,7 @@ See: `.planning/PROJECT.md`
 
 **Core value:** Users can remotely control the balloon camera and view captured images through the base station web interface, with real-time telemetry and map tracking always available.
 
-**Current focus:** Phase 2.5 — Balloon SD-Card File-Based Image Store
+**Current focus:** Phase 01 — Command Protocol & Control
 
 ## Next Steps
 
@@ -138,8 +137,8 @@ See: `.planning/PROJECT.md`
 
 ## Session
 
-**Last session:** 2026-08-28T16:36:42.960Z
-**Stopped at:** Completed 02.5-03-PLAN.md
+**Last session:** 2026-09-10T05:01:50.420Z
+**Stopped at:** Completed 01-35-PLAN.md
 **Resume file:** None
 
 ### Quick Tasks Completed
@@ -148,7 +147,7 @@ See: `.planning/PROJECT.md`
 |---|-------------|------|--------|-----------|
 | 260831-vat | Clear SD card button in base-station web UI with action confirm (balloon descoped by operator decision — its reset flow stays the serial SDCLEAR CONFIRM command) | 2026-08-31 | 9db1d1e | [260831-vat-add-a-clear-sd-card-function-as-a-button](./quick/260831-vat-add-a-clear-sd-card-function-as-a-button/) |
 
-Last activity: 2026-08-31 - Completed quick task 260831-vat: Clear SD card button (base station web UI, /sd-clear route + confirm; balloon has no web server — operator chose base-only)
+Last activity: 2026-09-10
 
 ## Performance Metrics
 
@@ -198,6 +197,7 @@ Last activity: 2026-08-31 - Completed quick task 260831-vat: Clear SD card butto
 | Phase 02.5 P01 | 1956s | 3 tasks | 7 files |
 | Phase 02.5-02 P02 | 24m | 2 tasks | 5 files |
 | Phase 02.5-03 P03 | 1156s (~19 min) | 2 tasks | 5 files |
+| Phase 01 P35 | 13min | 2 tasks | 4 files |
 
 ## Decisions
 
