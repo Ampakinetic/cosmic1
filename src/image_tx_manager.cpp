@@ -397,7 +397,33 @@ bool ImageTxManager::sendTelemetryBeacon() {
 // Enqueue (ownership transfer)
 // ===========================
 
+// G-01-7 round #15 (plan 01-35): the safe-reclaim predicate — an entry whose
+// FULL transfer is fully receipt-confirmed. Every WINDOW_COMPLETE receipt the
+// base sends is merged into fullAcked by handleImageAck and the whole map is
+// cleared by KIND_FAILED_CRC, so all-bits-set means the base provably holds
+// every byte of the full and the entry's buffers are reclaimable. Reads only
+// state that already exists on the entry (no new fields, no header change);
+// the 16-word bitmap covers the 919-chunk wire cap (IMG_MAX_IMAGE_SIZE
+// 204800 / IMG_CHUNK_PAYLOAD_SIZE). Guarded on fullTotalChunks > 0 so a
+// thumb-only entry (the 01-26 full-unavailable degradation path) never ranks
+// class 0 vacuously.
+static bool fullReceiptComplete(const ImageTxEntry& entry) {
+    if (entry.fullTotalChunks == 0) {
+        return false;
+    }
+    for (uint16_t chunk = 0; chunk < entry.fullTotalChunks; chunk++) {
+        if ((entry.fullAcked[chunk >> 6] & (1ULL << (chunk & 63))) == 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Overflow-eviction class (02-05 / CR-03 fix c) — LOWER class evicted sooner:
+//   0 FULL fully receipt-confirmed (every WINDOW_COMPLETE in)
+//                            safe reclaim: the base provably holds every
+//                            byte; buffers reclaimable (G-01-7 round #15,
+//                            01-35 — the session-11 over-rejection routing)
 //   1 THUMB_PUSHED            parked, nothing left to deliver
 //   2 SERVED                  full offered through its tail; heal-only
 //   3 ANNOUNCED (!everArmed && never requested)
@@ -412,7 +438,16 @@ bool ImageTxManager::sendTelemetryBeacon() {
 //                            the ACTIVE-PULL context, armed or between
 //                            windows, or evidenced by an inbound request —
 //                            LAST resort (D-19)
+// ONE shared ranking: both the enqueue-overflow scan and the supersede scan
+// call this function — no forked or supersede-private ranking (T-01-33-02).
 static uint8_t evictionClassOf(const ImageTxEntry& entry) {
+    // Round #15: the fully-receipted safe reclaim outranks everything — a
+    // fully-delivered entry is exactly the waste the session-11 over-rejection
+    // mode named (an honest reject that sacrificed admission to a completed
+    // transfer's TTL residue).
+    if (fullReceiptComplete(entry)) {
+        return 0;
+    }
     switch (entry.state) {
         case ImageTxEntryState::THUMB_PUSHED:
             return 1;
@@ -708,6 +743,7 @@ void ImageTxManager::enqueueCapture(uint16_t imageId) {
         }
         // slot == nullptr implies every entry is used, so victim is guaranteed
         const char* className =
+            victimClass == 0 ? "fully receipt-confirmed (safe reclaim)" :
             victimClass == 1 ? "parked THUMB_PUSHED" :
             victimClass == 2 ? "SERVED (heal-only)" :
             victimClass == 3 ? "queued, no airtime invested" :
@@ -1445,7 +1481,26 @@ WindowRequestResult ImageTxManager::handleWindowRequest(const uint8_t* payload, 
         // (no new protocol surface): the base's D-24 pass machinery retries
         // within its existing bound. The receipt stamp + budget re-arm above
         // stay — the request genuinely matched this entry.
-        if (!evictEntriesOlderThan(*target)) {
+        // G-01-7 round #15 (01-35) CAPACITY-NEED GATE: the supersede scan runs
+        // ONLY when the queue holds no free slot. Session 11 proved the
+        // round-#14 lever over-rejects — image 45's SVGA FULL starved 0/165
+        // at 2/5 occupancy behind image 44's fully-SERVED COMPLETE entry
+        // (balloon5.log:883-:1056) because lowest-class-match forced eviction
+        // regardless of capacity need. With a free slot the request is
+        // ADMITTED: no older entry is touched, no line printed, fall through
+        // to the BUSY check and arm below. When the queue IS full, the ranked
+        // scan, its false-return honest-reject, and the named line run exactly
+        // as round #14 left them — and a fully-receipted older entry (class 0,
+        // the shared ranking above) is now the safe reclaim victim the
+        // session-11 routing named.
+        bool queueFull = true;
+        for (uint8_t i = 0; i < QUEUE_DEPTH; i++) {
+            if (!entries[i].used) {
+                queueFull = false;
+                break;
+            }
+        }
+        if (queueFull && !evictEntriesOlderThan(*target)) {
             Serial.printf("ImageTx: window request for image %u rejected - queue holds only receipt-evidenced entries (G-01-7)\n", imageId);
             return WindowRequestResult::UNKNOWN_IMAGE;
         }
@@ -2030,6 +2085,16 @@ bool ImageTxManager::evictEntriesOlderThan(const ImageTxEntry& reference) {
                 }
             }
             return true;
+        }
+        if (victimClass == 0) {
+            // G-01-7 round #15 (01-35): the safe-reclaim discriminator — the
+            // selected victim is fully receipt-confirmed (class 0, the shared
+            // ranking), so the base provably holds every byte and the buffers
+            // are reclaimable: the session-11 over-rejection geometry's safe
+            // victim. Kept distinct from the generic line below, which still
+            // prints for EVERY eviction (bench-log tooling greps both).
+            Serial.printf("ImageTx: supersede victim image %u fully receipt-confirmed - safe reclaim class 0, every WINDOW_COMPLETE receipt in (G-01-7)\n",
+                         victim->imageId);
         }
         Serial.printf("ImageTx: window request for image %u supersedes older entry image %u; evicted\n",
                      reference.imageId, victim->imageId);
