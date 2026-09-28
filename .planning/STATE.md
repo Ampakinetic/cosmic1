@@ -1,12 +1,12 @@
 ---
 gsd_state_version: "1.0"
 milestone: v1.0
-current_plan: 2
+current_plan: 1
 status: executing
 stopped_at: Completed 01-35-PLAN.md
-last_updated: "2026-09-10T05:01:51.174Z"
-last_activity: 2026-09-10
-state_head: 3d2dd842bfcb696b723966ed7c0de1e9b1769b8a
+last_updated: "2026-09-28T23:36:30.192Z"
+last_activity: 2026-09-17
+state_head: 9f9b2ee08fade3166cb02ef0243fa2c52ab949c1
 progress:
   total_phases: 4
   completed_phases: 0
@@ -29,9 +29,9 @@ current_phase_name: Command Protocol & Control
 
 ## Current Position
 
-**Current Plan:** 2
+**Current Plan:** 1
 **Total Plans in Phase:** 36
-**Status:** Ready to execute
+**Status:** Executing Phase 01
 **Progress:** [█████████░] 92% (all 22 plans executed across Phases 1-3; Phase 1 close-out remains: G-01-9/G-01-7-residual round + security gates before phase complete)
 
 ## Progress
@@ -146,8 +146,9 @@ See: `.planning/PROJECT.md`
 | # | Description | Date | Commit | Directory |
 |---|-------------|------|--------|-----------|
 | 260831-vat | Clear SD card button in base-station web UI with action confirm (balloon descoped by operator decision — its reset flow stays the serial SDCLEAR CONFIRM command) | 2026-08-31 | 9db1d1e | [260831-vat-add-a-clear-sd-card-function-as-a-button](./quick/260831-vat-add-a-clear-sd-card-function-as-a-button/) |
+| 260929-g7l | Base-station GPS (UART1 RX pin 45) + QMC5883L compass (I2C 0x0D) drive the antenna pointing card and map observer marker, replacing browser sensor APIs (monitoring tablet has no compass) | 2026-09-28 | 9f9b2ee | [260929-g7l-i-ve-wired-up-a-gps-and-compass-module-t](./quick/260929-g7l-i-ve-wired-up-a-gps-and-compass-module-t/) |
 
-Last activity: 2026-09-10
+Last activity: 2026-09-29 - Completed quick task 260929-g7l: Base-station GPS (UART1 RX pin 45) + QMC5883L compass (I2C 0x0D) drive the antenna pointing card and map observer marker, replacing browser sensor APIs (monitoring tablet has no compass)
 
 ## Performance Metrics
 
