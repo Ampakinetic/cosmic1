@@ -12,7 +12,10 @@
 #include <WiFi.h>
 #include <WebServer.h>
 #include <HardwareSerial.h>
+#include <Wire.h>
+#include <TinyGPSPlus.h>
 
+#include "base_station_config.h"   // base GPS/compass constants (quick-260929)
 #include "e32_lora.h"
 #include "command_sender.h"
 #include "command_protocol.h"
@@ -61,6 +64,44 @@ WebServer server(80);
 // ===========================
 
 HardwareSerial LoRaSerial(2);
+
+// Base sensors (quick-260929): the station reads ITS OWN position and
+// heading so antenna aiming works on any screen — the monitoring tablet has
+// no compass. GPS: MAX-M10S-class NMEA into UART1 (UART2 is the E32) on the
+// operator-wired pins; compass: QMC5883L on the existing Wire bus (pins 1/2,
+// address 0x0D — no collision with the OLED at 0x3C). Both reads are
+// non-blocking and millis-gated (T-QK-02: the D1 WDT-starvation campaign's
+// loopTask invariant — no blocking sensor access in this loop).
+static HardwareSerial GpsSerial(1);
+static TinyGPSPlus BaseGps;
+
+// Latched sensor truth — the ONLY source appendBaseSensorsJson serializes.
+// Fields stay at their last good value; freshness flags fold the staleness
+// constants in so the client trusts flags, never raw ages alone.
+struct BaseSensorState {
+    double   lastFixLat = 0.0;
+    double   lastFixLon = 0.0;
+    uint8_t  lastSats = 0;
+    uint32_t lastFixMs = 0;        // 0 = never fixed
+    uint32_t nmeaByteCount = 0;    // the pin-45 bench answer (wired or not)
+    bool     compassPresent = false;
+    float    lastHeadingDeg = 0.0f;
+    uint32_t lastHeadingMs = 0;    // 0 = never read
+    uint32_t lastCompassTryMs = 0; // 200 ms read gate (the QMC runs 50 Hz ODR)
+    uint32_t lastLogMs = 0;        // 10 s [GPSBASE] discriminator gate
+} baseSensors;
+
+// Freshness — SINGLE authority shared by the [GPSBASE] log line and both
+// JSON serializers, so the console and the page can never disagree
+static bool baseGpsValid(uint32_t now) {
+    return baseSensors.lastFixMs != 0
+        && (now - baseSensors.lastFixMs) <= BASE_GPS_STALE_MS;
+}
+static bool baseHeadingValid(uint32_t now) {
+    return baseSensors.compassPresent
+        && baseSensors.lastHeadingMs != 0
+        && (now - baseSensors.lastHeadingMs) <= BASE_HEADING_STALE_MS;
+}
 
 // ===========================
 // Application State
@@ -137,10 +178,13 @@ void loop();
 void initHardware();
 void initWiFi();
 void initLoRa();
+void initBaseSensors();
 void initStorage();
 void initWebServer();
 
 void processLoRa();
+void processBaseSensors();
+void appendBaseSensorsJson(String& json);
 void processCommands();
 
 void handleRoot();
@@ -161,6 +205,7 @@ void handleWifiSwitch();
 void handleRequestFull();
 void handleSdClear();
 void handleApiState();
+void handleApiBase();
 void handleApiMarkers();
 void handleApiMission();
 void handleMissionStart();
@@ -790,6 +835,16 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
             color: #e2e8f0;
             font-weight: 600;
         }
+        #ant-tiltin {
+            width: 64px;
+            padding: 4px 8px;
+            background: #0f172a;
+            border: 1px solid #334155;
+            border-radius: 6px;
+            color: #e2e8f0;
+            font-size: 14px;
+            text-align: center;
+        }
         .ant-manual {
             display: flex;
             gap: 8px;
@@ -822,15 +877,6 @@ const char HTML_HEADER[] PROGMEM = R"rawliteral(
         }
         .ant-chip.ok { color: #22c55e; border-color: #166534; }
         .ant-chip.warn { color: #eab308; border-color: #854d0e; }
-        .ant-hint {
-            display: none;
-            font-size: 13px;
-            color: #fbbf24;
-            background: #292524;
-            border: 1px solid #78350f;
-            border-radius: 8px;
-            padding: 8px 10px;
-        }
     </style>
 </head>
 <body>
@@ -1643,6 +1689,53 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             }
         }
 
+        // Base-station observer marker (quick-260929): the station's OWN GPS
+        // fix — dot + short heading tick, distinct from the balloon's green
+        // dot. updateBaseMarker is the ONE entry point both feeds reach
+        // (through antRender), and lastBase carries the same snapshot to the
+        // offline canvas fallback so both render paths agree. Nothing
+        // renders without a valid fix; a stale fix removes the marker
+        // (honest map).
+        const BASE_DOT_COLOR = '#f97316';   // orange — contrasts the balloon dot
+        const baseMarker = { dot: null, tick: null };
+        let lastBase = null;
+        function updateBaseMarker(b) {
+            lastBase = (b && b.gpsValid) ? b : null;
+            if (!mapState.leaf) return;
+            if (!lastBase) {
+                if (baseMarker.dot) { mapState.leaf.removeLayer(baseMarker.dot); baseMarker.dot = null; }
+                if (baseMarker.tick) { mapState.leaf.removeLayer(baseMarker.tick); baseMarker.tick = null; }
+                return;
+            }
+            const ll = [lastBase.lat, lastBase.lon];
+            if (!baseMarker.dot) {
+                baseMarker.dot = L.circleMarker(ll, {
+                    radius: 7,
+                    color: '#0f172a',
+                    weight: 2,
+                    fillColor: BASE_DOT_COLOR,
+                    fillOpacity: 1
+                }).bindTooltip('Base station').addTo(mapState.leaf);
+            } else {
+                baseMarker.dot.setLatLng(ll);
+            }
+            if (baseMarker.tick) { mapState.leaf.removeLayer(baseMarker.tick); baseMarker.tick = null; }
+            if (lastBase.headingValid) {
+                // Tick endpoint ~200 m out along the true-north heading
+                // (flat-earth approximation — plenty for a 200 m tick)
+                const rad = lastBase.headingDeg * Math.PI / 180;
+                const mPerDeg = 111320;
+                const dLat = 200 * Math.cos(rad) / mPerDeg;
+                const dLon = 200 * Math.sin(rad) / mPerDeg
+                    / Math.max(0.1, Math.cos(lastBase.lat * Math.PI / 180));
+                baseMarker.tick = L.polyline([ll, [lastBase.lat + dLat, lastBase.lon + dLon]], {
+                    color: BASE_DOT_COLOR,
+                    weight: 3,
+                    opacity: 0.9
+                }).addTo(mapState.leaf);
+            }
+        }
+
         // D-37 offline fallback: the identical traj array auto-scaled onto
         // a canvas inside the same frame — banded track, current dot, grid
         // lines and coordinate labels. Uniform scale keeps the shape honest.
@@ -1666,6 +1759,15 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                 if (p[1] < minLon) minLon = p[1];
                 if (p[1] > maxLon) maxLon = p[1];
             });
+            // The base station is a point of interest too — its fix joins
+            // the fit so the observer dot can never fall off-canvas
+            const base = (typeof lastBase !== 'undefined') ? lastBase : null;
+            if (base && base.gpsValid) {
+                if (base.lat < minLat) minLat = base.lat;
+                if (base.lat > maxLat) maxLat = base.lat;
+                if (base.lon < minLon) minLon = base.lon;
+                if (base.lon > maxLon) maxLon = base.lon;
+            }
             let latSpan = maxLat - minLat;
             let lonSpan = maxLon - minLon;
             if (latSpan < 1e-6) latSpan = 1e-4;   // degenerate track: center it
@@ -1718,6 +1820,33 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             ctx.lineWidth = 2;
             ctx.strokeStyle = '#0f172a';
             ctx.stroke();
+
+            // Base-station dot + heading tick — the same snapshot the tiled
+            // path draws (quick-260929), using this canvas's projection
+            if (base && base.gpsValid) {
+                const bp = xy([base.lat, base.lon]);
+                if (base.headingValid) {
+                    const rad = base.headingDeg * Math.PI / 180;
+                    const mPerDeg = 111320;
+                    const dLat = 200 * Math.cos(rad) / mPerDeg;
+                    const dLon = 200 * Math.sin(rad) / mPerDeg
+                        / Math.max(0.1, Math.cos(base.lat * Math.PI / 180));
+                    const tp = xy([base.lat + dLat, base.lon + dLon]);
+                    ctx.beginPath();
+                    ctx.moveTo(bp[0], bp[1]);
+                    ctx.lineTo(tp[0], tp[1]);
+                    ctx.strokeStyle = BASE_DOT_COLOR;
+                    ctx.lineWidth = 3;
+                    ctx.stroke();
+                }
+                ctx.beginPath();
+                ctx.arc(bp[0], bp[1], 7, 0, Math.PI * 2);
+                ctx.fillStyle = BASE_DOT_COLOR;
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#0f172a';
+                ctx.stroke();
+            }
         }
 
         function renderMap(data) {
@@ -1753,10 +1882,16 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                     mapState.programmaticView = true;
                     if (mapState.firstFit) {
                         mapState.firstFit = false;
-                        if (traj.length >= 2) {
-                            const bounds = L.latLngBounds(traj.map(function (p) {
-                                return [p[0], p[1]];
-                            }));
+                        // quick-260929: the base fix joins the first fit so
+                        // the observer marker starts inside the frame
+                        const fitPts = traj.map(function (p) {
+                            return [p[0], p[1]];
+                        });
+                        if (lastBase && lastBase.gpsValid) {
+                            fitPts.push([lastBase.lat, lastBase.lon]);
+                        }
+                        if (fitPts.length >= 2) {
+                            const bounds = L.latLngBounds(fitPts);
                             mapState.leaf.fitBounds(bounds, { padding: [16, 16] });
                         } else {
                             // Single point: fitBounds on a zero-size bounds
@@ -2608,8 +2743,9 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             // Map + trajectory (WEB-02) — same poll payload, one renderer
             renderMap(data);
 
-            // Antenna pointing (ANT-01) — balloon side of the math arrives
-            // with the poll; the sensor side pushes on its own events
+            // Antenna pointing (ANT-01) — balloon telemetry and the base
+            // sensor block both arrive with the poll; a 1 s /api/base
+            // mini-poll refreshes the sensor half in between
             renderAntenna(data);
 
             // Auto-capture chip — display-only until the command ACKs
@@ -2676,35 +2812,32 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             renderStaleBadge();
         }, 1000);
 
-        // ---------- antenna pointing (ANT-01, 2026-08-27 todo) ----------
-        // The tablet is mounted back-to-back with the Yagi on the tripod
-        // pivot (portrait, upright, screen to the operator): its compass is
-        // the rig heading, its GPS the observer position. ALL sensor reads
-        // and the great-circle math live here in the browser — the poll only
-        // supplies the balloon side (telemetry.lat/lon/altitudeM). Portrait
-        // upright geometry: rig tilt = beta - 90 (upright = horizon), and
-        // the reported heading is the direction the tablet's BACK faces —
-        // i.e. the boresight — so the offset defaults to 0 and exists for
-        // field calibration only.
+        // ---------- antenna pointing (ANT-01; hardware sensors quick-260929) ----------
+        // Heading and observer position come from the BASE STATION'S OWN
+        // GPS (UART1) + QMC5883L compass (I2C 0x0D) via the firmware: the
+        // 5 s poll payload carries a `base` block and a dedicated tiny
+        // /api/base endpoint is mini-polled every 1 s so hand-aiming gets a
+        // fast feedback loop. The browser reads nothing itself — zero
+        // sensor listeners remain anywhere in the page. Rig tilt is
+        // a manual input (the firmware has no inclinometer); manual
+        // lat/lon stays as the honest fallback when the base GPS has no
+        // fix. The boresight offset exists for field calibration only.
         const ANT_STORE_KEY = 'c1-antenna';
         const ANT = {
-            on: false,               // sensors enabled
-            headingDeg: null,        // compass heading, deg clockwise from north
-            headingAbs: false,       // true when from an absolute source
-            headingMs: 0,
-            rigTiltDeg: null,        // rig elevation (beta - 90)
-            obsLat: null, obsLon: null, obsAccM: null, obsSrc: null, // 'gps'|'manual'
+            base: null,              // latched firmware snapshot (both feeds converge here)
+            rigTiltDeg: null,        // MANUAL rig elevation input, deg above horizon
+            obsSrc: null,            // 'base' | 'manual' — which observer position is active
+            manLat: null, manLon: null,  // the active manual override (null = none)
             offsetDeg: 0,
             tele: null,              // balloon telemetry, refreshed per poll
-            lastNeedleDeg: null,
-            lastSensorRenderMs: 0
+            lastNeedleDeg: null
         };
         const ANT_EL = {};
-        ['ant-enable', 'ant-needle', 'ant-command', 'ant-elev', 'ant-dist',
-         'ant-balt', 'ant-rigtilt', 'ant-tiltcmd', 'ant-offset',
+        ['ant-needle', 'ant-command', 'ant-elev', 'ant-dist',
+         'ant-balt', 'ant-rigtilt', 'ant-tiltcmd', 'ant-tiltin', 'ant-offset',
          'ant-offset-minus', 'ant-offset-plus', 'ant-manlat', 'ant-manlon',
-         'ant-manual-use', 'ant-chip-compass', 'ant-chip-gps',
-         'ant-chip-balloon', 'ant-hint'].forEach(function (id) {
+         'ant-manual-use', 'ant-manual-clear', 'ant-chip-compass', 'ant-chip-gps',
+         'ant-chip-balloon'].forEach(function (id) {
             ANT_EL[id] = document.getElementById(id);
         });
 
@@ -2712,6 +2845,7 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             try {
                 localStorage.setItem(ANT_STORE_KEY, JSON.stringify({
                     offsetDeg: ANT.offsetDeg,
+                    tiltDeg: ANT.rigTiltDeg,
                     manLat: ANT_EL['ant-manlat'].value,
                     manLon: ANT_EL['ant-manlon'].value
                 }));
@@ -2722,6 +2856,10 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                 const s = JSON.parse(localStorage.getItem(ANT_STORE_KEY) || '{}');
                 if (typeof s.offsetDeg === 'number') {
                     ANT.offsetDeg = s.offsetDeg;
+                }
+                if (typeof s.tiltDeg === 'number') {
+                    ANT.rigTiltDeg = s.tiltDeg;
+                    ANT_EL['ant-tiltin'].value = s.tiltDeg;
                 }
                 if (typeof s.manLat === 'string') ANT_EL['ant-manlat'].value = s.manLat;
                 if (typeof s.manLon === 'string') ANT_EL['ant-manlon'].value = s.manLon;
@@ -2754,86 +2892,44 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
             setText(el, text);
         }
 
-        function antShowHint(text) {
-            setText(ANT_EL['ant-hint'], text);
-            ANT_EL['ant-hint'].style.display = 'block';
-        }
-
-        function antOnOrientation(ev) {
-            if (ev.webkitCompassHeading != null) {
-                ANT.headingDeg = ev.webkitCompassHeading;   // already clockwise from TRUE north
-                ANT.headingAbs = true;
-            } else if (ev.alpha != null) {
-                // alpha runs counter-clockwise; absolute events are true-north
-                ANT.headingDeg = (360 - ev.alpha) % 360;
-                ANT.headingAbs = ev.absolute === true;
-            }
-            if (ev.beta != null) {
-                ANT.rigTiltDeg = ev.beta - 90;   // portrait upright: 0 = horizon, + = tilted back (up)
-            }
-            ANT.headingMs = Date.now();
-            const now = Date.now();
-            if (now - ANT.lastSensorRenderMs >= 100) {
-                ANT.lastSensorRenderMs = now;
-                antRender();
-            }
-        }
-
-        function antOnGeo(pos) {
-            ANT.obsLat = pos.coords.latitude;
-            ANT.obsLon = pos.coords.longitude;
-            ANT.obsAccM = pos.coords.accuracy;
-            ANT.obsSrc = 'gps';
-            antRender();
-        }
-        function antOnGeoErr(err) {
-            antChip(ANT_EL['ant-chip-gps'], 'warn', 'tablet GPS: ' +
-                (err && err.code === 1 ? 'permission denied' : 'unavailable'));
-        }
-
-        function antEnableSensors() {
-            if (ANT.on) return;
-            ANT.on = true;
-            ANT_EL['ant-enable'].disabled = true;
-            setText(ANT_EL['ant-enable'], 'Sensors on');
-            if (!window.isSecureContext) {
-                // Chrome serves compass + GPS only to secure contexts; the
-                // base's AP origin is plain HTTP. The one-time per-tablet
-                // workaround is the origin flag — document it, but still
-                // attach the listeners: some Android builds fire
-                // deviceorientation regardless.
-                antShowHint('Chrome gives this page no compass/GPS on plain HTTP. One-time fix on the tablet: open chrome://flags, search "insecure", enable "Unsafely treat insecure origin as secure" with value http://192.168.4.1 and relaunch. Numeric pointing still works meanwhile.');
-            }
-            try {
-                if (typeof DeviceOrientationEvent !== 'undefined' &&
-                        typeof DeviceOrientationEvent.requestPermission === 'function') {
-                    DeviceOrientationEvent.requestPermission().catch(function () {
-                        antChip(ANT_EL['ant-chip-compass'], 'warn', 'compass: denied');
-                    });
-                }
-                if ('ondeviceorientationabsolute' in window) {
-                    window.addEventListener('deviceorientationabsolute', antOnOrientation, true);
-                } else {
-                    window.addEventListener('deviceorientation', antOnOrientation, true);
-                }
-            } catch (e) {
-                antChip(ANT_EL['ant-chip-compass'], 'warn', 'compass: unavailable');
-            }
-            try {
-                if (navigator.geolocation) {
-                    navigator.geolocation.watchPosition(antOnGeo, antOnGeoErr,
-                        { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
-                } else {
-                    antChip(ANT_EL['ant-chip-gps'], 'warn', 'tablet GPS: unavailable');
-                }
-            } catch (e) {
-                antChip(ANT_EL['ant-chip-gps'], 'warn', 'tablet GPS: blocked');
-            }
+        // ---------- 1 s base-sensor mini-poll (quick-260929) ----------
+        // /api/base returns ONLY the base sensor block (~150 B), so this is
+        // cheap enough to run at 1 s — the 5 s dashboard poll is too slow to
+        // hand-aim against. Settle-then-schedule like the main poll: the
+        // next fetch goes out only after the previous one settles, so polls
+        // never overlap; failures just retry on the next tick (sensors are
+        // additive — the card keeps rendering its last latched snapshot).
+        const BASE_POLL_INTERVAL_MS = 1000;
+        let baseTimerId = null;
+        function pollBase() {
+            fetch('/api/base', { cache: 'no-store' })
+                .then(function (r) {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    return r.json();
+                })
+                .then(function (j) {
+                    if (j && j.base) ANT.base = j.base;
+                    antRender();
+                })
+                .catch(function () { /* next tick retries */ })
+                .then(function () {
+                    baseTimerId = setTimeout(pollBase, BASE_POLL_INTERVAL_MS);
+                });
         }
 
         function antRender() {
+            const b = ANT.base;
             const tele = ANT.tele;
             const t = (tele && tele.gpsValid) ? tele : null;
+
+            // Heading + observer position derive PER RENDER from the latched
+            // firmware snapshot (never independent mutable sensor state)
+            const heading = (b && b.headingValid) ? b.headingDeg : null;
+            const obs = (ANT.obsSrc === 'manual' && ANT.manLat != null)
+                ? { lat: ANT.manLat, lon: ANT.manLon }
+                : (b && b.gpsValid) ? { lat: b.lat, lon: b.lon } : null;
+
+            updateBaseMarker(b);   // map observer marker — both feeds, one consumer
 
             // Balloon chip: honest states only — no fabricated target
             if (!tele) {
@@ -2846,28 +2942,32 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                     'balloon GPS: fix · ' + ageS + ' s old');
             }
 
-            // Compass chip
-            if (!ANT.on || ANT.headingDeg == null) {
-                antChip(ANT_EL['ant-chip-compass'], '', 'compass: off');
-            } else if (!ANT.headingAbs) {
+            // Compass chip — firmware truth only (quick-260929)
+            if (!b || !b.compassPresent) {
                 antChip(ANT_EL['ant-chip-compass'], 'warn',
-                    'compass: ~' + Math.round(ANT.headingDeg) + '° (relative)');
+                    'compass: no data · check I2C wiring 0x0D');
+            } else if (!b.headingValid) {
+                antChip(ANT_EL['ant-chip-compass'], 'warn', 'compass: stale');
             } else {
                 antChip(ANT_EL['ant-chip-compass'], 'ok',
-                    'compass: ' + Math.round(ANT.headingDeg) + '°');
+                    'compass: ' + Math.round(b.headingDeg) + '°');
             }
 
-            // GPS chip (unless the error handler just wrote a state)
-            if (ANT.obsSrc === 'gps' && ANT.obsLat != null) {
-                antChip(ANT_EL['ant-chip-gps'], 'ok',
-                    'tablet GPS: ±' + Math.round(ANT.obsAccM || 0) + ' m');
-            } else if (ANT.obsSrc === 'manual' && ANT.obsLat != null) {
-                antChip(ANT_EL['ant-chip-gps'], 'warn', 'tablet GPS: manual');
+            // GPS chip — honest states; manual override says so loudly
+            if (ANT.obsSrc === 'manual') {
+                antChip(ANT_EL['ant-chip-gps'], 'warn', 'base GPS: manual');
+            } else if (!b || !b.gpsValid) {
+                antChip(ANT_EL['ant-chip-gps'], 'warn', 'base GPS: no fix');
+            } else {
+                const ageS = Math.round(b.gpsAgeMs / 1000);
+                antChip(ANT_EL['ant-chip-gps'], ageS > 15 ? 'warn' : 'ok',
+                    'base GPS: fix · ' + b.sats + ' sats · ' + ageS + 's old');
             }
 
-            const canAim = t && ANT.obsLat != null && ANT.headingDeg != null;
+            const canAim = t && obs != null && heading != null;
             if (!canAim) {
-                setText(ANT_EL['ant-command'], ANT.on ? 'Waiting for heading + balloon fix…' : 'Enable sensors to aim');
+                setText(ANT_EL['ant-command'],
+                    'Waiting for compass + base GPS + balloon fix…');
                 setText(ANT_EL['ant-elev'], '—');
                 setText(ANT_EL['ant-dist'], '—');
                 setText(ANT_EL['ant-balt'],
@@ -2882,8 +2982,8 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                 return;
             }
 
-            const gc = antGreatCircle(ANT.obsLat, ANT.obsLon, t.lat, t.lon);
-            const rel = antNorm180(gc.bearing - (ANT.headingDeg + ANT.offsetDeg));
+            const gc = antGreatCircle(obs.lat, obs.lon, t.lat, t.lon);
+            const rel = antNorm180(gc.bearing - (heading + ANT.offsetDeg));
             const needleDeg = (rel + 360) % 360;
             if (ANT.lastNeedleDeg === null || Math.abs(needleDeg - ANT.lastNeedleDeg) >= 0.5) {
                 ANT.lastNeedleDeg = needleDeg;
@@ -2926,27 +3026,43 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
                 }
             }
         }
+        // Both feeds converge: the 5 s poll payload seeds the same snapshot
+        // the 1 s mini-poll refreshes, so there is ONE consumer
         function renderAntenna(data) {
             ANT.tele = data.telemetry;
+            if (data.base) ANT.base = data.base;
             antRender();
         }
 
-        ANT_EL['ant-enable'].addEventListener('click', antEnableSensors);
         ANT_EL['ant-offset-minus'].addEventListener('click', function () {
             ANT.offsetDeg -= 5; setText(ANT_EL['ant-offset'], Math.round(ANT.offsetDeg) + '°'); antPersist(); antRender();
         });
         ANT_EL['ant-offset-plus'].addEventListener('click', function () {
             ANT.offsetDeg += 5; setText(ANT_EL['ant-offset'], Math.round(ANT.offsetDeg) + '°'); antPersist(); antRender();
         });
+        // Manual rig tilt (quick-260929): a plain number input — the
+        // firmware has no inclinometer, so this stays an honest manual value
+        ANT_EL['ant-tiltin'].addEventListener('input', function () {
+            const v = parseFloat(ANT_EL['ant-tiltin'].value);
+            ANT.rigTiltDeg = isFinite(v) ? v : null;
+            antPersist(); antRender();
+        });
         ANT_EL['ant-manual-use'].addEventListener('click', function () {
             const la = parseFloat(ANT_EL['ant-manlat'].value);
             const lo = parseFloat(ANT_EL['ant-manlon'].value);
             if (isFinite(la) && isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180) {
-                ANT.obsLat = la; ANT.obsLon = lo; ANT.obsAccM = null; ANT.obsSrc = 'manual';
+                ANT.manLat = la; ANT.manLon = lo; ANT.obsSrc = 'manual';
                 antPersist(); antRender();
             }
         });
+        // Back to base-GPS position (exits the manual override — without
+        // this the override would be sticky until a page reload)
+        ANT_EL['ant-manual-clear'].addEventListener('click', function () {
+            ANT.manLat = null; ANT.manLon = null; ANT.obsSrc = null;
+            antRender();
+        });
         antRestore();
+        pollBase();
 
         // The old scroll-spy nav call lived here — deleting its function in
         // the 2026-09-04 tab restructure while this call survived turned
@@ -2958,6 +3074,175 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
 </body>
 </html>
 )rawliteral";
+
+// ===========================
+// Base Sensors (quick-260929)
+// ===========================
+// The operator wired a MAX-M10S-class GPS (UART1, GPS TX -> base RX) and a
+// QMC5883L compass (I2C 0x0D on the existing pins-1/2 bus) to the base
+// board. Register-level compass drive, mirroring the E32 register-level
+// precedent — no compass library. Every Wire transfer is count-checked and
+// every read is millis-gated: a blocking sensor read in this loop is the
+// proven D1 crash class (T-QK-02).
+
+// QMC5883L registers (datasheet layout, like the E32's SPED/CONF work)
+static constexpr uint8_t QMC_ADDR        = 0x0D;
+static constexpr uint8_t QMC_REG_DATA    = 0x00;  // six output bytes, LE signed 16-bit x,y,z
+static constexpr uint8_t QMC_REG_STATUS  = 0x08;  // bit0 DRDY
+static constexpr uint8_t QMC_REG_CONTROL = 0x09;  // OSR/range/ODR/mode
+static constexpr uint8_t QMC_REG_PERIOD  = 0x0B;  // SET/RESET period
+
+static bool qmcWriteReg(uint8_t reg, uint8_t val) {
+    Wire.beginTransmission(QMC_ADDR);
+    Wire.write(reg);
+    Wire.write(val);
+    return Wire.endTransmission() == 0;
+}
+
+// Count-checked burst read: false on any short transfer (the caller keeps
+// the last good heading latched — staleness flags carry the honesty)
+static bool qmcReadRegs(uint8_t reg, uint8_t* buf, uint8_t len) {
+    Wire.beginTransmission(QMC_ADDR);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) {  // repeated start
+        return false;
+    }
+    if (Wire.requestFrom(QMC_ADDR, len) != len) {
+        return false;
+    }
+    for (uint8_t i = 0; i < len; i++) {
+        buf[i] = Wire.read();
+    }
+    return true;
+}
+
+void initBaseSensors() {
+    Serial.println("Initializing base sensors (compass + GPS)...");
+
+    // Compass first: probe 0x0D over the bus StatusOLED().begin already
+    // claimed, then configure — SET/RESET period, then OSR 512 / 8 G /
+    // 50 Hz / continuous mode (0x15)
+    Wire.beginTransmission(QMC_ADDR);
+    baseSensors.compassPresent = (Wire.endTransmission() == 0);
+    if (baseSensors.compassPresent
+            && qmcWriteReg(QMC_REG_PERIOD, 0x01)
+            && qmcWriteReg(QMC_REG_CONTROL, 0x15)) {
+        Serial.println("  QMC5883L compass ready at 0x0D");
+    } else {
+        baseSensors.compassPresent = false;
+        // Station runs WITHOUT heading — the SD degrade-never-halt
+        // convention; the UI shows an honest "no data" chip
+        Serial0.println("[GPSBASE] ERROR: QMC5883L absent at 0x0D — "
+                        "no heading (check I2C wiring)");
+    }
+
+    // GPS: the balloon's proven UART1 idiom (sensor_manager.cpp initGPS) —
+    // enlarge the RX buffer BEFORE begin, then begin with the explicit pins
+    GpsSerial.setRxBufferSize(512);
+    GpsSerial.begin(GPS_BAUD_RATE, SERIAL_8N1, BASE_GPS_RX_PIN, BASE_GPS_TX_PIN);
+    Serial0.printf("[GPSBASE] GPS UART1 %d baud RX=%d TX=%d compass=%d\n",
+                   GPS_BAUD_RATE, BASE_GPS_RX_PIN, BASE_GPS_TX_PIN,
+                   baseSensors.compassPresent ? 1 : 0);
+}
+
+void processBaseSensors() {
+    const uint32_t now = millis();
+
+    // a) Drain the GPS UART — buffer-bounded at the 512-byte RX buffer per
+    // pass, feeding the parser; bytes counted so the [GPSBASE] line can
+    // answer the pin-45 wiring question at a glance
+    while (GpsSerial.available() > 0) {
+        BaseGps.encode(static_cast<char>(GpsSerial.read()));
+        baseSensors.nmeaByteCount++;
+    }
+    // Latch only on parsed UPDATES so lastFixMs is genuine fix freshness,
+    // not a per-pass re-stamp of a stale parser value
+    if (BaseGps.location.isUpdated() && BaseGps.location.isValid()) {
+        baseSensors.lastFixLat = BaseGps.location.lat();
+        baseSensors.lastFixLon = BaseGps.location.lng();
+        if (BaseGps.satellites.isValid()) {
+            baseSensors.lastSats = static_cast<uint8_t>(BaseGps.satellites.value());
+        }
+        baseSensors.lastFixMs = now;
+    }
+
+    // b) Compass read behind a 200 ms gate (5 Hz against the 50 Hz ODR) —
+    // the loop's 1 s OLED tick is the millis-gate idiom
+    if (baseSensors.compassPresent
+            && (now - baseSensors.lastCompassTryMs) >= 200) {
+        baseSensors.lastCompassTryMs = now;
+        uint8_t status = 0;
+        uint8_t raw[6];
+        if (qmcReadRegs(QMC_REG_STATUS, &status, 1) && (status & 0x01)
+                && qmcReadRegs(QMC_REG_DATA, raw, 6)) {
+            const int16_t x = static_cast<int16_t>(raw[0] | (raw[1] << 8));
+            const int16_t y = static_cast<int16_t>(raw[2] | (raw[3] << 8));
+            float heading = atan2f(static_cast<float>(y), static_cast<float>(x))
+                            * 180.0f / PI;   // deg clockwise from magnetic north
+            heading = fmodf(heading + 360.0f, 360.0f);
+            if (COMPASS_MOUNT_FLIP) {
+                // Mirror-wise mount: reported rotation runs opposite to the
+                // true rotation — reflect through 360
+                heading = fmodf(360.0f - heading, 360.0f);
+            }
+            heading = fmodf(heading + COMPASS_DECLINATION_DEG + 360.0f, 360.0f);
+            baseSensors.lastHeadingDeg = heading;
+            baseSensors.lastHeadingMs = now;
+        }
+        // A short/failed read leaves the last good heading latched; the
+        // staleness flag goes honest when readings stop refreshing
+    }
+
+    // c) The 10 s bridge-console discriminator — this ONE line answers the
+    // operator's pin-45 wiring question from a single bench look
+    if (now - baseSensors.lastLogMs >= 10000) {
+        baseSensors.lastLogMs = now;
+        Serial0.printf("[GPSBASE] nmea=%u fix=%d sats=%u heading=%d compass=%d\n",
+                       static_cast<unsigned>(baseSensors.nmeaByteCount),
+                       baseGpsValid(now) ? 1 : 0,
+                       static_cast<unsigned>(baseSensors.lastSats),
+                       static_cast<int>(baseHeadingValid(now)
+                                        ? lroundf(baseSensors.lastHeadingDeg) % 360
+                                        : -1),
+                       baseSensors.compassPresent ? 1 : 0);
+    }
+}
+
+// The ONE base-sensor serializer — shared by /api/state and /api/base so
+// the two payloads can never drift. Appends the comma-terminated base
+// object built ONLY from latched truth (honest-states convention: absent
+// sensors produce false flags and warn chips, never fabricated values).
+void appendBaseSensorsJson(String& json) {
+    const uint32_t now = millis();
+    const bool gpsValid = baseGpsValid(now);
+    const bool headingValid = baseHeadingValid(now);
+    json += "\"base\":{";
+    json += "\"gpsValid\":" + String(gpsValid ? "true" : "false") + ",";
+    // 0.0 while never fixed — the client gates rendering on gpsValid
+    json += "\"lat\":" + String(gpsValid ? baseSensors.lastFixLat : 0.0, 6) + ",";
+    json += "\"lon\":" + String(gpsValid ? baseSensors.lastFixLon : 0.0, 6) + ",";
+    json += "\"sats\":" + String(baseSensors.lastSats) + ",";
+    json += "\"gpsAgeMs\":"
+            + String(baseSensors.lastFixMs ? now - baseSensors.lastFixMs : 0) + ",";
+    json += "\"compassPresent\":" + String(baseSensors.compassPresent ? "true" : "false") + ",";
+    json += "\"headingValid\":" + String(headingValid ? "true" : "false") + ",";
+    json += "\"headingDeg\":" + String(baseSensors.lastHeadingDeg, 1) + ",";
+    json += "\"headingAgeMs\":"
+            + String(baseSensors.lastHeadingMs ? now - baseSensors.lastHeadingMs : 0);
+    json += "},";
+}
+
+// GET /api/base (quick-260929): the tiny sensor-only poll (~150 B) the
+// antenna card mini-polls at 1 s — the 5 s dashboard poll is too slow to
+// hand-aim a Yagi against
+void handleApiBase() {
+    String json;
+    json.reserve(256);
+    json += "{\"pollMs\":" + String(millis()) + ",";
+    appendBaseSensorsJson(json);
+    json += "\"ok\":true}";
+    server.send(200, "application/json", json);
+}
 
 // ===========================
 // Setup
@@ -2992,6 +3277,10 @@ void setup() {
     initLoRa();
     StatusOLED().showBootStage("SD CARD");
     initStorage();
+    // quick-260929: base GPS + compass — after initStorage; Wire is up
+    // since StatusOLED().begin above (the panel owns the pins-1/2 bus)
+    StatusOLED().showBootStage("BASE SENSORS");
+    initBaseSensors();
     StatusOLED().showBootStage("WEB");
     Trajectory().begin();   // D-38: full-flight GPS track ring (base-only)
     Alerts().begin();       // D-41..D-44: base-side alert engine (base-only)
@@ -3019,6 +3308,11 @@ void loop() {
     // D-40 (WEB-05): WiFi mode state machine — resolves station joins and
     // the 20 s AP fallback without ever blocking the web server above
     WiFiMgr().update();
+
+    // quick-260929: base sensor reads — every pass, always non-blocking
+    // (buffer-bounded UART drain + millis-gated compass; T-QK-02). Runs
+    // BEFORE processLoRa so the link work never delays a sensor pass.
+    processBaseSensors();
 
     // Process LoRa communication
     processLoRa();
@@ -3226,6 +3520,8 @@ void initWebServer() {
     // transfers inside the handler. POST-only (never a GET side effect).
     server.on("/sd-clear", HTTP_POST, handleSdClear);
     server.on("/api/state", HTTP_GET, handleApiState);
+    // quick-260929: the 1 s antenna mini-poll's tiny sensor-only payload
+    server.on("/api/base", HTTP_GET, handleApiBase);
     server.on("/api/markers", HTTP_GET, handleApiMarkers);
     server.on("/api/mission", HTTP_GET, handleApiMission);
     server.on("/mission/start", HTTP_POST, handleMissionStart);
@@ -3345,14 +3641,15 @@ void handleRoot() {
 
     html += "</section>";
 
-    // ---- Antenna Pointing section (ANT-01, 2026-08-27 todo) — Map tab ----
-    // The tablet is mounted back-to-back with the Yagi on the tripod pivot:
-    // the tablet's own compass (DeviceOrientationEvent) is the rig heading
-    // and the tablet's own GPS (Geolocation API) is the observer position —
-    // both read by the BROWSER, so this section is pure markup and every
-    // value below is a renderer target (footer script). The great-circle
-    // math runs client-side against the balloon GPS already flowing in
-    // /api/state — no firmware round-trip in the aiming loop.
+    // ---- Antenna Pointing section (ANT-01; hardware sensors quick-260929) ----
+    // Heading and observer position come from the base station's OWN GPS
+    // (UART1) + QMC5883L compass (I2C 0x0D), served by /api/base (mini-
+    // polled at 1 s) and the /api/state `base` block — the BROWSER reads no
+    // sensors itself. Rig tilt is a manual input (no inclinometer on the
+    // base); manual lat/lon is the honest fallback when the base GPS has no
+    // fix. This section is pure markup — every value below is a renderer
+    // target (footer script). The great-circle math runs client-side
+    // against the balloon GPS already flowing in /api/state.
     html += "<section id=\"antenna\" data-tab=\"map\">";
     html += "<h2>📡 Antenna Pointing</h2>";
     html += "<div class=\"antenna-card\">";
@@ -3371,7 +3668,7 @@ void handleRoot() {
     html += "</svg>";
     html += "</div>";
     html += "<div class=\"ant-readout\">";
-    html += "<div class=\"ant-command\" id=\"ant-command\">Enable sensors to aim</div>";
+    html += "<div class=\"ant-command\" id=\"ant-command\">Waiting for compass + base GPS + balloon fix…</div>";
     html += "<div class=\"ant-grid\">";
     html += "<div class=\"status-item\"><div class=\"status-label\">Balloon elevation</div><div class=\"status-value\" id=\"ant-elev\">—</div></div>";
     html += "<div class=\"status-item\"><div class=\"status-label\">Ground distance</div><div class=\"status-value\" id=\"ant-dist\">—</div></div>";
@@ -3382,17 +3679,16 @@ void handleRoot() {
     html += "</div>";
     html += "</div>";
     html += "<div class=\"ant-controls\">";
-    html += "<button id=\"ant-enable\" type=\"button\">Enable sensors</button>";
     html += "<span class=\"ant-stepper\">Boresight offset <button id=\"ant-offset-minus\" type=\"button\">−5°</button><span id=\"ant-offset\">0°</span><button id=\"ant-offset-plus\" type=\"button\">+5°</button></span>";
+    html += "<span class=\"ant-stepper\">Rig tilt (manual) <input id=\"ant-tiltin\" type=\"number\" step=\"1\" min=\"-90\" max=\"90\" placeholder=\"deg\">°</span>";
     html += "</div>";
-    html += "<div class=\"ant-manual\">Manual position (no tablet GPS): ";
-    html += "<input id=\"ant-manlat\" type=\"number\" step=\"0.000001\" placeholder=\"lat\"><input id=\"ant-manlon\" type=\"number\" step=\"0.000001\" placeholder=\"lon\"><button id=\"ant-manual-use\" type=\"button\">Use</button></div>";
+    html += "<div class=\"ant-manual\">Manual position (overrides base GPS): ";
+    html += "<input id=\"ant-manlat\" type=\"number\" step=\"0.000001\" placeholder=\"lat\"><input id=\"ant-manlon\" type=\"number\" step=\"0.000001\" placeholder=\"lon\"><button id=\"ant-manual-use\" type=\"button\">Use</button><button id=\"ant-manual-clear\" type=\"button\">Base GPS</button></div>";
     html += "<div class=\"ant-chips\">";
-    html += "<span class=\"ant-chip\" id=\"ant-chip-compass\">compass: off</span>";
-    html += "<span class=\"ant-chip\" id=\"ant-chip-gps\">tablet GPS: off</span>";
+    html += "<span class=\"ant-chip\" id=\"ant-chip-compass\">compass: no data</span>";
+    html += "<span class=\"ant-chip\" id=\"ant-chip-gps\">base GPS: no fix</span>";
     html += "<span class=\"ant-chip\" id=\"ant-chip-balloon\">balloon GPS: —</span>";
     html += "</div>";
-    html += "<div class=\"ant-hint\" id=\"ant-hint\"></div>";
     html += "</div>";
     html += "</section>";
 
@@ -4588,6 +4884,11 @@ void handleApiState() {
     json += "\"ip\":\"" + wf.ip.toString() + "\",";
     json += "\"joining\":" + String(wf.joining ? "true" : "false") + ",";
     json += "\"errorSsid\":\"" + jsonEscape(wf.errorSsid) + "\"},";
+
+    // quick-260929: base-station GPS + compass block — the SAME shared
+    // serializer /api/base serves, so the antenna card converges on one
+    // payload shape whichever feed delivered it
+    appendBaseSensorsJson(json);
 
     // IMG-06 (D-36): persisted image count — the poll's ONLY gallery refresh
     // signal; the browser refetches /gallery just when this value changes,

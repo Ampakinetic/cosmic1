@@ -43,6 +43,31 @@
 #define SD_CMD_PIN          38
 #define SD_DATA_PIN         40
 
+// Base sensors (quick-260929) — the operator-wired base GPS + compass.
+// EDITABLE CONSTANTS: change these before flashing — no code change needed.
+// COMPASS_DECLINATION_DEG and COMPASS_MOUNT_FLIP are field-calibration
+// levers; the pin pair and staleness bounds are wiring/bench levers.
+#define BASE_GPS_RX_PIN     45   // GPS TX -> base RX (operator wiring)
+// PIN-45 CAVEAT (carried from include/sensor_pins.h balloon history): 45 is
+// the VDD_SPI strapping pad and "never received data" as a UART RX pin on
+// the balloon board. The operator wired the base the same way anyway — the
+// firmware makes the outcome VISIBLE, not silent: watch the [GPSBASE]
+// console line's nmea= counter and the dashboard "base GPS" chip. If the
+// bench shows zero NMEA bytes, move the GPS TX wire to a free pin (47 is
+// free on the base pin map — LoRa 14/48/19/20/21, SD 39/38/40, I2C 1/2,
+// LED 41) and change ONLY this constant.
+#define BASE_GPS_TX_PIN     42   // base TX -> GPS RX: NOT CONNECTED (the GPS
+// config RX line is unwired); an explicit pad avoids core-version default-pin
+// ambiguity on UART1. Rewire-targetable if 42 is ever needed.
+#define COMPASS_DECLINATION_DEG 23.0f  // magnetic-to-true correction ADDED to
+// the atan2 heading, east positive — set per field site (NZ approx +23 east).
+// The +/-5 deg boresight-offset stepper CANNOT absorb this (it trims the rig
+// mounting, not the magnetic reference).
+#define COMPASS_MOUNT_FLIP  false  // set true if the bench shows the heading
+// rotating mirror-wise versus the true direction (chip mounted flipped)
+#define BASE_GPS_STALE_MS   30000   // fix older than this -> gpsValid false
+#define BASE_HEADING_STALE_MS 2000  // reading older than this -> headingValid false
+
 // WiFi Configuration
 #define WIFI_MODE_AP         true    // Create Access Point for laptops
 #define WIFI_MODE_STA        false   // Optional: Connect to existing network
