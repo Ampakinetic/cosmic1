@@ -163,6 +163,13 @@ None — no external service configuration required.
 - The 4 plan requirements (CTRL-01, CTRL-03, CTRL-06, PRI-02) are blocked from marking by the shared-ID gate: 01-36 declares the same IDs — they flip at 01-36's close
 - WINDOWS ledger counts unchanged (2 open / 17 fixed / 19 total phase-01; front-matter 2/0/19/21 all-phase)
 
+## Self-Check: PASSED
+
+- 01-35-SUMMARY.md exists on disk
+- Fix commit 3d2dd84 present in git history (4 files: image_tx_manager.cpp, WINDOWS.md, 01-UAT.md, COVERAGE.md)
+- Docs commit 48208d9 present (exactly SUMMARY + STATE + ROADMAP; Co-Authored-By trailer verified in message body)
+- ROADMAP.md plan count line = 35/36 (matches 35 SUMMARY files on disk of 36 plans)
+
 ---
 *Phase: 01-command-protocol-control*
 *Completed: 2026-09-10*

@@ -1,0 +1,37 @@
+{
+  "planner_model": "opus",
+  "executor_model": "sonnet",
+  "checker_model": "haiku",
+  "verifier_model": "sonnet",
+  "researcher_model": "sonnet",
+  "reviewer_model": "sonnet",
+  "commit_docs": true,
+  "branch_name": null,
+  "quick_id": "260929-g7l",
+  "slug": "i-ve-wired-up-a-gps-and-compass-module-t",
+  "description": "I've wired up a GPS and compass module to the base station (using the same pins as the balloon, the GPS serial in line is on pin 45, and the QMC5883L compass module on I2C (pins 1,2)) - can you please adjust the antenna orienting display and map to use this GPS and compass instead of the browser?  The reason is the tablet that will be used to monitor the base station doesn't have a built in compass so adding the required hardware directly.",
+  "date": "2026-09-29",
+  "timestamp": "2026-09-28T22:40:18.656Z",
+  "quick_dir": "C:/Work/Prog/Cosmic1/.planning/quick",
+  "task_dir": "C:/Work/Prog/Cosmic1/.planning/quick/260929-g7l-i-ve-wired-up-a-gps-and-compass-module-t",
+  "roadmap_exists": true,
+  "planning_exists": true,
+  "section_manifest": {
+    "workflow": "quick",
+    "included": [],
+    "excluded": [
+      "discussion-phase",
+      "research-phase",
+      "plan-checker-loop",
+      "worktree-pre-dispatch-commit",
+      "quick-verification"
+    ],
+    "read": []
+  },
+  "project_root": "C:\\Work\\Prog\\Cosmic1",
+  "agents_installed": true,
+  "missing_agents": [],
+  "agents_dir": "C:\\Users\\Amp\\.claude\\agents",
+  "agent_runtime": "claude",
+  "project_title": "Cosmic1 Base Station Camera Control Extension"
+}
