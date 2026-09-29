@@ -3088,7 +3088,9 @@ const char HTML_FOOTER[] PROGMEM = R"rawliteral(
 // QMC5883L registers (datasheet layout, like the E32's SPED/CONF work)
 static constexpr uint8_t QMC_ADDR        = 0x0D;
 static constexpr uint8_t QMC_REG_DATA    = 0x00;  // six output bytes, LE signed 16-bit x,y,z
-static constexpr uint8_t QMC_REG_STATUS  = 0x08;  // bit0 DRDY
+static constexpr uint8_t QMC_REG_STATUS  = 0x06;  // bit0 DRDY — datasheet 0x06; the
+// first firmware read 0x08 (TOUT MSB, the temperature high byte) as status, so the
+// DRDY gate never fired and heading never latched (bench: compass=1, heading=-1)
 static constexpr uint8_t QMC_REG_CONTROL = 0x09;  // OSR/range/ODR/mode
 static constexpr uint8_t QMC_REG_PERIOD  = 0x0B;  // SET/RESET period
 
